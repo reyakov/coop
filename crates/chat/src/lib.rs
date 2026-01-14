@@ -15,7 +15,6 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task, WeakEntity,
 };
 use nostr_sdk::prelude::*;
-use settings::AppSettings;
 use smallvec::{smallvec, SmallVec};
 use state::{tracker, NostrRegistry, GIFTWRAP_SUBSCRIPTION};
 
@@ -426,7 +425,7 @@ impl ChatRegistry {
 
     /// Load all rooms from the database.
     pub fn get_rooms(&mut self, cx: &mut Context<Self>) {
-        let task = self.create_get_rooms_task(cx);
+        let task = self.get_rooms_from_database(cx);
 
         self.tasks.push(
             // Run and finished in the background
@@ -437,7 +436,7 @@ impl ChatRegistry {
                             this.extend_rooms(rooms, cx);
                             this.sort(cx);
                         })
-                        .expect("Entity has been released");
+                        .ok();
                     }
                     Err(e) => {
                         log::error!("Failed to load rooms: {e}")
@@ -448,12 +447,9 @@ impl ChatRegistry {
     }
 
     /// Create a task to load rooms from the database
-    fn create_get_rooms_task(&self, cx: &App) -> Task<Result<HashSet<Room>, Error>> {
+    fn get_rooms_from_database(&self, cx: &App) -> Task<Result<HashSet<Room>, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
-        // Get the contact bypass setting
-        let bypass_setting = AppSettings::get_contact_bypass(cx);
 
         cx.background_spawn(async move {
             let signer = client.signer().await?;
@@ -508,16 +504,11 @@ impl ChatRegistry {
                 // Check if the user has responded to the room
                 let user_sent = messages.iter().any(|m| m.pubkey == public_key);
 
-                // Determine if the room is ongoing or not
-                let mut bypassed = false;
-
                 // Check if public keys are from the user's contacts
-                if bypass_setting {
-                    bypassed = public_keys.iter().any(|k| contacts.contains(k));
-                }
+                let is_contact = public_keys.iter().any(|k| contacts.contains(k));
 
                 // Set the room's kind based on status
-                if user_sent || bypassed {
+                if user_sent || is_contact {
                     room = room.kind(RoomKind::Ongoing);
                 }
 

@@ -86,8 +86,8 @@ impl RoomListItem {
 
 impl RenderOnce for RoomListItem {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let hide_avatar = AppSettings::get_hide_user_avatars(cx);
-        let require_screening = AppSettings::get_screening(cx);
+        let hide_avatar = AppSettings::get_hide_avatar(cx);
+        let screening = AppSettings::get_screening(cx);
 
         let (
             Some(public_key),
@@ -173,7 +173,7 @@ impl RenderOnce for RoomListItem {
             .on_click(move |event, window, cx| {
                 handler(event, window, cx);
 
-                if kind != RoomKind::Ongoing && require_screening {
+                if kind != RoomKind::Ongoing && screening {
                     let screening = screening::init(public_key, window, cx);
 
                     window.open_modal(cx, move |this, _window, _cx| {

@@ -183,7 +183,7 @@ impl UserProfile {
         let client = nostr.read(cx).client();
 
         // Get the user's configured NIP96 server
-        let nip96_server = AppSettings::get_media_server(cx);
+        let nip96_server = AppSettings::get_file_server(cx);
 
         // Open native file dialog
         let paths = cx.prompt_for_paths(PathPromptOptions {

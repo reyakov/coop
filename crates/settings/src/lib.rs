@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{anyhow, Error};
 use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
 use nostr_sdk::prelude::*;
@@ -17,12 +19,12 @@ macro_rules! setting_accessors {
             $(
                 paste::paste! {
                     pub fn [<get_ $field>](cx: &App) -> $type {
-                        Self::global(cx).read(cx).setting_values.$field.clone()
+                        Self::global(cx).read(cx).values.$field.clone()
                     }
 
                     pub fn [<update_ $field>](value: $type, cx: &mut App) {
                         Self::global(cx).update(cx, |this, cx| {
-                            this.setting_values.$field = value;
+                            this.values.$field = value;
                             cx.notify();
                         });
                     }
@@ -33,41 +35,69 @@ macro_rules! setting_accessors {
 }
 
 setting_accessors! {
-    pub media_server: Url,
-    pub proxy_user_avatars: bool,
-    pub hide_user_avatars: bool,
-    pub backup_messages: bool,
+    pub hide_avatar: bool,
     pub screening: bool,
-    pub contact_bypass: bool,
-    pub auto_login: bool,
-    pub auto_auth: bool,
+    pub auth_mode: AuthMode,
+    pub trusted_relays: HashSet<RelayUrl>,
+    pub room_configs: HashMap<u64, RoomConfig>,
+    pub file_server: Url,
 }
 
+/// Authentication mode
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AuthMode {
+    #[default]
+    Manual,
+    Auto,
+}
+
+/// Signer kind
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SignerKind {
+    #[default]
+    Auto,
+    User,
+    Device,
+}
+
+/// Room configuration
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RoomConfig {
+    backup: bool,
+    signer_kind: SignerKind,
+}
+
+/// Settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    pub media_server: Url,
-    pub proxy_user_avatars: bool,
-    pub hide_user_avatars: bool,
-    pub backup_messages: bool,
+    /// Hide user avatars
+    pub hide_avatar: bool,
+
+    /// Enable screening for unknown chat requests
     pub screening: bool,
-    pub contact_bypass: bool,
-    pub auto_login: bool,
-    pub auto_auth: bool,
-    pub authenticated_relays: Vec<RelayUrl>,
+
+    /// Authentication mode
+    pub auth_mode: AuthMode,
+
+    /// Trusted relays; Coop will automatically authenticate with these relays
+    pub trusted_relays: HashSet<RelayUrl>,
+
+    /// Configuration for each chat room
+    pub room_configs: HashMap<u64, RoomConfig>,
+
+    /// File server for NIP-96 media attachments
+    pub file_server: Url,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            media_server: Url::parse("https://nostrmedia.com").unwrap(),
-            proxy_user_avatars: true,
-            hide_user_avatars: false,
-            backup_messages: true,
+            hide_avatar: false,
             screening: true,
-            contact_bypass: true,
-            auto_login: false,
-            auto_auth: true,
-            authenticated_relays: vec![],
+            auth_mode: AuthMode::default(),
+            trusted_relays: HashSet::default(),
+            room_configs: HashMap::default(),
+            file_server: Url::parse("https://nostrmedia.com").unwrap(),
         }
     }
 }
@@ -82,29 +112,31 @@ struct GlobalAppSettings(Entity<AppSettings>);
 
 impl Global for GlobalAppSettings {}
 
+/// Application settings
 pub struct AppSettings {
-    setting_values: Settings,
+    /// Settings
+    values: Settings,
 
-    // Event subscriptions
+    /// Event subscriptions
     _subscriptions: SmallVec<[Subscription; 1]>,
 
-    // Background tasks
+    /// Background tasks
     _tasks: SmallVec<[Task<()>; 1]>,
 }
 
 impl AppSettings {
-    /// Retrieve the Global Settings instance
+    /// Retrieve the global settings instance
     pub fn global(cx: &App) -> Entity<Self> {
         cx.global::<GlobalAppSettings>().0.clone()
     }
 
-    /// Set the Global Settings instance
-    pub(crate) fn set_global(state: Entity<Self>, cx: &mut App) {
+    /// Set the global settings instance
+    fn set_global(state: Entity<Self>, cx: &mut App) {
         cx.set_global(GlobalAppSettings(state));
     }
 
     fn new(cx: &mut Context<Self>) -> Self {
-        let load_settings = Self::_load_settings(false, cx);
+        let load_settings = Self::get_from_database(false, cx);
 
         let mut tasks = smallvec![];
         let mut subscriptions = smallvec![];
@@ -112,7 +144,7 @@ impl AppSettings {
         subscriptions.push(
             // Observe and automatically save settings on changes
             cx.observe_self(|this, cx| {
-                this.set_settings(cx);
+                this.save(cx);
             }),
         );
 
@@ -121,7 +153,7 @@ impl AppSettings {
             cx.spawn(async move |this, cx| {
                 if let Ok(settings) = load_settings.await {
                     this.update(cx, |this, cx| {
-                        this.setting_values = settings;
+                        this.values = settings;
                         cx.notify();
                     })
                     .ok();
@@ -130,42 +162,32 @@ impl AppSettings {
         );
 
         Self {
-            setting_values: Settings::default(),
+            values: Settings::default(),
             _subscriptions: subscriptions,
             _tasks: tasks,
         }
     }
 
-    pub fn load_settings(&mut self, cx: &mut Context<Self>) {
-        let task = Self::_load_settings(true, cx);
-
-        self._tasks.push(
-            // Run task in the background
-            cx.spawn(async move |this, cx| {
-                if let Ok(settings) = task.await {
-                    this.update(cx, |this, cx| {
-                        this.setting_values = settings;
-                        cx.notify();
-                    })
-                    .ok();
-                }
-            }),
-        );
-    }
-
-    fn _load_settings(user: bool, cx: &App) -> Task<Result<Settings, Error>> {
+    /// Get settings from the database
+    ///
+    /// If `current_user` is true, the settings will be retrieved for current user.
+    /// Otherwise, Coop will load the latest settings from the database.
+    fn get_from_database(current_user: bool, cx: &App) -> Task<Result<Settings, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
         cx.background_spawn(async move {
+            // Construct a filter to get the latest settings
             let mut filter = Filter::new()
                 .kind(Kind::ApplicationSpecificData)
                 .identifier(SETTINGS_IDENTIFIER)
                 .limit(1);
 
-            if user {
+            if current_user {
                 let signer = client.signer().await?;
                 let public_key = signer.get_public_key().await?;
+
+                // Push author to the filter
                 filter = filter.author(public_key);
             }
 
@@ -177,11 +199,30 @@ impl AppSettings {
         })
     }
 
-    pub fn set_settings(&mut self, cx: &mut Context<Self>) {
+    /// Load settings
+    pub fn load(&mut self, cx: &mut Context<Self>) {
+        let task = Self::get_from_database(true, cx);
+
+        self._tasks.push(
+            // Run task in the background
+            cx.spawn(async move |this, cx| {
+                if let Ok(settings) = task.await {
+                    this.update(cx, |this, cx| {
+                        this.values = settings;
+                        cx.notify();
+                    })
+                    .ok();
+                }
+            }),
+        );
+    }
+
+    /// Save settings
+    pub fn save(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
-        if let Ok(content) = serde_json::to_string(&self.setting_values) {
+        if let Ok(content) = serde_json::to_string(&self.values) {
             let task: Task<Result<(), Error>> = cx.background_spawn(async move {
                 let signer = client.signer().await?;
                 let public_key = signer.get_public_key().await?;
@@ -201,23 +242,24 @@ impl AppSettings {
         }
     }
 
-    /// Check if auto authentication is enabled
-    pub fn is_auto_auth(&self) -> bool {
-        !self.setting_values.authenticated_relays.is_empty() && self.setting_values.auto_auth
+    /// Check if the given relay is trusted
+    pub fn is_trusted_relay(&self, url: &RelayUrl, _cx: &App) -> bool {
+        self.values.trusted_relays.contains(url)
     }
 
-    /// Check if a relay is authenticated
-    pub fn is_authenticated(&self, url: &RelayUrl) -> bool {
-        self.setting_values.authenticated_relays.contains(url)
+    /// Add a relay to the trusted list
+    pub fn add_trusted_relay(&mut self, url: RelayUrl, cx: &mut Context<Self>) {
+        self.values.trusted_relays.insert(url);
+        cx.notify();
     }
 
-    /// Push a relay to the authenticated relays list
-    pub fn push_relay(&mut self, relay_url: &RelayUrl, cx: &mut Context<Self>) {
-        if !self.is_authenticated(relay_url) {
-            self.setting_values
-                .authenticated_relays
-                .push(relay_url.to_owned());
-            cx.notify();
-        }
+    /// Add a room configuration
+    pub fn add_room_config(&mut self, id: u64, config: RoomConfig, cx: &mut Context<Self>) {
+        self.values
+            .room_configs
+            .entry(id)
+            .and_modify(|this| *this = config)
+            .or_default();
+        cx.notify();
     }
 }

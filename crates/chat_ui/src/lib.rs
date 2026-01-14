@@ -426,7 +426,7 @@ impl ChatPanel {
         let client = nostr.read(cx).client();
 
         // Get the user's configured NIP96 server
-        let nip96_server = AppSettings::get_media_server(cx);
+        let nip96_server = AppSettings::get_file_server(cx);
 
         let path = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -594,8 +594,6 @@ impl ChatPanel {
         text: AnyElement,
         cx: &Context<Self>,
     ) -> AnyElement {
-        let hide_avatar = AppSettings::get_hide_user_avatars(cx);
-
         let id = message.id;
         let author = self.profile(&message.author, cx);
         let public_key = author.public_key();
@@ -608,6 +606,9 @@ impl ChatPanel {
 
         // Check if message is sent successfully
         let is_sent_success = self.is_sent_success(&id);
+
+        // Hide avatar setting
+        let hide_avatar = AppSettings::get_hide_avatar(cx);
 
         div()
             .id(ix)

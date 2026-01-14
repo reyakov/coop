@@ -10,7 +10,7 @@ use gpui::{
     Subscription, Task, Window,
 };
 use nostr_sdk::prelude::*;
-use settings::AppSettings;
+use settings::{AppSettings, AuthMode};
 use smallvec::{smallvec, SmallVec};
 use state::{tracker, NostrRegistry};
 use theme::ActiveTheme;
@@ -93,12 +93,12 @@ impl RelayAuth {
             // Observe the current state
             cx.observe_in(&entity, window, |this, _, window, cx| {
                 let settings = AppSettings::global(cx);
-                let auto_auth = AppSettings::get_auto_auth(cx);
+                let mode = AppSettings::get_auth_mode(cx);
 
                 for req in this.requests.clone().into_iter() {
-                    let is_authenticated = settings.read(cx).is_authenticated(&req.url);
+                    let is_trusted_relay = settings.read(cx).is_trusted_relay(&req.url, cx);
 
-                    if auto_auth && is_authenticated {
+                    if is_trusted_relay && mode == AuthMode::Auto {
                         // Automatically authenticate if the relay is authenticated before
                         this.response(req, window, cx);
                     } else {
@@ -250,7 +250,7 @@ impl RelayAuth {
 
                             // Save the authenticated relay to automatically authenticate future requests
                             settings.update(cx, |this, cx| {
-                                this.push_relay(&url, cx);
+                                this.add_trusted_relay(url, cx);
                             });
 
                             // Remove the challenge from the list of pending authentications

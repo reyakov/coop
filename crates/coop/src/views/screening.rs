@@ -207,7 +207,7 @@ impl Screening {
                                         .hover(|this| {
                                             this.bg(cx.theme().elevated_surface_background)
                                         })
-                                        .child(Avatar::new(contact.avatar(true)).size(rems(1.75)))
+                                        .child(Avatar::new(contact.avatar()).size(rems(1.75)))
                                         .child(contact.display_name()),
                                 );
                             }
