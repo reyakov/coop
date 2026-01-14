@@ -88,9 +88,8 @@ impl NostrRegistry {
             });
 
         // Construct the lmdb
-        let lmdb = cx.background_executor().block(async move {
-            let path = config_dir().join("nostr");
-            NostrLmdb::open(path)
+        let lmdb = cx.foreground_executor().block_on(async move {
+            NostrLmdb::open(config_dir().join("nostr"))
                 .await
                 .expect("Failed to initialize database")
         });
