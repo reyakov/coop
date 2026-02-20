@@ -4,6 +4,13 @@ use serde::Deserialize;
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = chat, no_json)]
+pub enum Command {
+    Insert(&'static str),
+    ChangeSubject(&'static str),
+}
+
+#[derive(Action, Clone, PartialEq, Eq, Deserialize)]
+#[action(namespace = chat, no_json)]
 pub struct SeenOn(pub EventId);
 
 /// Define a open public key action

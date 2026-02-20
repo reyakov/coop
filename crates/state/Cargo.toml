@@ -9,11 +9,19 @@ common = { path = "../common" }
 
 nostr-sdk.workspace = true
 nostr-lmdb.workspace = true
+nostr-connect.workspace = true
 
 gpui.workspace = true
+gpui_tokio.workspace = true
 smol.workspace = true
+reqwest.workspace = true
 flume.workspace = true
 log.workspace = true
 anyhow.workspace = true
+webbrowser.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 rustls = "0.23"
+petname = "2.0.2"
+whoami = "1.6.1"

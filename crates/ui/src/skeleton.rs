@@ -22,8 +22,8 @@ impl Skeleton {
         }
     }
 
-    pub fn secondary(mut self, secondary: bool) -> Self {
-        self.secondary = secondary;
+    pub fn secondary(mut self) -> Self {
+        self.secondary = true;
         self
     }
 }

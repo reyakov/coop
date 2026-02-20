@@ -9,15 +9,13 @@ use gpui::{
     WindowControlArea,
 };
 use smallvec::{smallvec, SmallVec};
-use theme::{ActiveTheme, CLIENT_SIDE_DECORATION_ROUNDING};
+use theme::{ActiveTheme, PlatformKind, CLIENT_SIDE_DECORATION_ROUNDING};
 use ui::h_flex;
 
-use crate::platform_kind::PlatformKind;
 #[cfg(target_os = "linux")]
 use crate::platforms::linux::LinuxWindowControls;
 use crate::platforms::windows::WindowsWindowControls;
 
-mod platform_kind;
 mod platforms;
 
 pub struct TitleBar {

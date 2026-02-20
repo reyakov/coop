@@ -1,9 +1,11 @@
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
+use device::Announcement;
 use gpui::SharedString;
 use nostr_sdk::prelude::*;
-use state::Announcement;
+
+const IMAGE_RESIZER: &str = "https://wsrv.nl";
 
 /// Person
 #[derive(Debug, Clone)]
@@ -16,6 +18,9 @@ pub struct Person {
 
     /// Dekey (NIP-4e) announcement
     announcement: Option<Announcement>,
+
+    /// Messaging relays
+    messaging_relays: Vec<RelayUrl>,
 }
 
 impl PartialEq for Person {
@@ -56,6 +61,7 @@ impl Person {
             public_key,
             metadata,
             announcement: None,
+            messaging_relays: vec![],
         }
     }
 
@@ -80,13 +86,37 @@ impl Person {
         log::info!("Updated announcement for: {}", self.public_key());
     }
 
+    /// Get profile messaging relays
+    pub fn messaging_relays(&self) -> &Vec<RelayUrl> {
+        &self.messaging_relays
+    }
+
+    /// Get relay hint for messaging relay list
+    pub fn messaging_relay_hint(&self) -> Option<RelayUrl> {
+        self.messaging_relays.first().cloned()
+    }
+
+    /// Set profile messaging relays
+    pub fn set_messaging_relays<I>(&mut self, relays: I)
+    where
+        I: IntoIterator<Item = RelayUrl>,
+    {
+        self.messaging_relays = relays.into_iter().collect();
+        log::info!("Updated messaging relays for: {}", self.public_key());
+    }
+
     /// Get profile avatar
     pub fn avatar(&self) -> SharedString {
         self.metadata()
             .picture
             .as_ref()
             .filter(|picture| !picture.is_empty())
-            .map(|picture| picture.into())
+            .map(|picture| {
+                let url = format!(
+                    "{IMAGE_RESIZER}/?url={picture}&w=100&h=100&fit=cover&mask=circle&n=-1"
+                );
+                url.into()
+            })
             .unwrap_or_else(|| "brand/avatar.png".into())
     }
 

@@ -1,44 +1,44 @@
-use std::collections::HashSet;
-use std::time::Duration;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::Arc;
 
 pub use actions::*;
-use chat::{Message, RenderedMessage, Room, RoomEvent, RoomKind, SendReport};
+use anyhow::{Context as AnyhowContext, Error};
+use chat::{Message, RenderedMessage, Room, RoomEvent, SendReport};
 use common::{nip96_upload, RenderedTimestamp};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, img, list, px, red, relative, rems, svg, white, AnyElement, App, AppContext,
+    deferred, div, img, list, px, red, relative, rems, svg, white, AnyElement, App, AppContext,
     ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ListAlignment, ListOffset, ListState, MouseButton, ObjectFit, ParentElement,
-    PathPromptOptions, Render, RetainAllImageCache, SharedString, StatefulInteractiveElement,
-    Styled, StyledImage, Subscription, Task, WeakEntity, Window,
+    PathPromptOptions, Render, SharedString, StatefulInteractiveElement, Styled, StyledImage,
+    Subscription, Task, WeakEntity, Window,
 };
 use gpui_tokio::Tokio;
-use indexset::{BTreeMap, BTreeSet};
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
 use settings::AppSettings;
 use smallvec::{smallvec, SmallVec};
 use smol::fs;
+use smol::lock::RwLock;
 use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
-use ui::context_menu::ContextMenuExt;
 use ui::dock_area::panel::{Panel, PanelEvent};
+use ui::indicator::Indicator;
 use ui::input::{InputEvent, InputState, TextInput};
+use ui::menu::{ContextMenuExt, DropdownMenu};
 use ui::notification::Notification;
-use ui::popup_menu::PopupMenuExt;
+use ui::scroll::Scrollbar;
 use ui::{
-    h_flex, v_flex, ContextModal, Disableable, Icon, IconName, InteractiveElementExt, Sizable,
-    StyledExt,
+    h_flex, v_flex, Disableable, Icon, IconName, InteractiveElementExt, Sizable, StyledExt,
+    WindowExtension,
 };
 
-use crate::emoji::EmojiPicker;
 use crate::text::RenderedText;
 
 mod actions;
-mod emoji;
 mod text;
 
 pub fn init(room: WeakEntity<Room>, window: &mut Window, cx: &mut App) -> Entity<ChatPanel> {
@@ -49,7 +49,6 @@ pub fn init(room: WeakEntity<Room>, window: &mut Window, cx: &mut App) -> Entity
 pub struct ChatPanel {
     id: SharedString,
     focus_handle: FocusHandle,
-    image_cache: Entity<RetainAllImageCache>,
 
     /// Chat Room
     room: WeakEntity<Room>,
@@ -63,11 +62,14 @@ pub struct ChatPanel {
     /// Mapping message ids to their rendered texts
     rendered_texts_by_id: BTreeMap<EventId, RenderedText>,
 
-    /// Mapping message ids to their reports
-    reports_by_id: BTreeMap<EventId, Vec<SendReport>>,
+    /// Mapping message (rumor event) ids to their reports
+    reports_by_id: Entity<BTreeMap<EventId, Vec<SendReport>>>,
 
     /// Input state
     input: Entity<InputState>,
+
+    /// Sent message ids
+    sent_ids: Arc<RwLock<Vec<EventId>>>,
 
     /// Replies to
     replies_to: Entity<HashSet<EventId>>,
@@ -79,97 +81,63 @@ pub struct ChatPanel {
     uploading: bool,
 
     /// Async operations
-    tasks: SmallVec<[Task<()>; 2]>,
+    tasks: Vec<Task<Result<(), Error>>>,
 
     /// Event subscriptions
-    _subscriptions: SmallVec<[Subscription; 2]>,
+    subscriptions: SmallVec<[Subscription; 2]>,
 }
 
 impl ChatPanel {
     pub fn new(room: WeakEntity<Room>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Define attachments and replies_to entities
+        let attachments = cx.new(|_| vec![]);
+        let replies_to = cx.new(|_| HashSet::new());
+        let reports_by_id = cx.new(|_| BTreeMap::new());
+
+        // Define list of messages
+        let messages = BTreeSet::from([Message::system()]);
+        let list_state = ListState::new(messages.len(), ListAlignment::Bottom, px(1024.));
+
+        // Get room id and name
+        let (id, name) = room
+            .read_with(cx, |this, _cx| {
+                let id = this.id.to_string().into();
+                let name = this.display_name(cx);
+
+                (id, name)
+            })
+            .unwrap_or(("Unknown".into(), "Message...".into()));
+
+        // Define input state
         let input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Message...")
+                .placeholder(format!("Message {}", name))
                 .auto_grow(1, 20)
                 .prevent_new_line_on_enter()
                 .clean_on_escape()
         });
 
-        let attachments = cx.new(|_| vec![]);
-        let replies_to = cx.new(|_| HashSet::new());
-
-        let messages = BTreeSet::from([Message::system()]);
-        let list_state = ListState::new(messages.len(), ListAlignment::Bottom, px(1024.));
-
-        let id: SharedString = room
-            .read_with(cx, |this, _cx| this.id.to_string().into())
-            .unwrap_or("Unknown".into());
-
-        let mut subscriptions = smallvec![];
-        let mut tasks = smallvec![];
-
-        if let Ok(connect) = room.read_with(cx, |this, cx| this.connect(cx)) {
-            tasks.push(
-                // Get messaging relays and encryption keys announcement for each member
-                cx.background_spawn(async move {
-                    if let Err(e) = connect.await {
-                        log::error!("Failed to initialize room: {}", e);
-                    }
-                }),
-            );
-        };
-
-        if let Ok(get_messages) = room.read_with(cx, |this, cx| this.get_messages(cx)) {
-            tasks.push(
-                // Load all messages belonging to this room
-                cx.spawn_in(window, async move |this, cx| {
-                    let result = get_messages.await;
-
-                    this.update_in(cx, |this, window, cx| {
-                        match result {
-                            Ok(events) => {
-                                this.insert_messages(&events, cx);
-                            }
-                            Err(e) => {
-                                window.push_notification(e.to_string(), cx);
-                            }
-                        };
-                    })
-                    .ok();
-                }),
-            );
-        }
-
-        if let Some(room) = room.upgrade() {
-            subscriptions.push(
-                // Subscribe to room events
-                cx.subscribe_in(&room, window, move |this, _room, event, window, cx| {
-                    match event {
-                        RoomEvent::Incoming(message) => {
-                            this.insert_message(message, false, cx);
-                        }
-                        RoomEvent::Reload => {
-                            this.load_messages(window, cx);
-                        }
-                    };
-                }),
-            );
-        }
-
-        subscriptions.push(
-            // Subscribe to input events
-            cx.subscribe_in(
-                &input,
-                window,
-                move |this: &mut Self, _input, event, window, cx| {
+        // Define subscriptions
+        let subscriptions =
+            smallvec![
+                cx.subscribe_in(&input, window, move |this, _input, event, window, cx| {
                     if let InputEvent::PressEnter { .. } = event {
-                        this.send_message(window, cx);
+                        this.send_text_message(window, cx);
                     };
-                },
-            ),
-        );
+                })
+            ];
+
+        // Define all functions that will run after the current cycle
+        cx.defer_in(window, |this, window, cx| {
+            this.connect(window, cx);
+            this.handle_notifications(cx);
+
+            this.subscribe_room_events(window, cx);
+            this.get_messages(window, cx);
+        });
 
         Self {
+            focus_handle: cx.focus_handle(),
             id,
             messages,
             room,
@@ -178,38 +146,113 @@ impl ChatPanel {
             replies_to,
             attachments,
             rendered_texts_by_id: BTreeMap::new(),
-            reports_by_id: BTreeMap::new(),
+            reports_by_id,
+            sent_ids: Arc::new(RwLock::new(Vec::new())),
             uploading: false,
-            image_cache: RetainAllImageCache::new(cx),
-            focus_handle: cx.focus_handle(),
-            _subscriptions: subscriptions,
-            tasks,
+            subscriptions,
+            tasks: vec![],
         }
+    }
+
+    /// Handle nostr notifications
+    fn handle_notifications(&mut self, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+        let sent_ids = self.sent_ids.clone();
+
+        let (tx, rx) = flume::bounded::<(EventId, RelayUrl)>(256);
+
+        self.tasks.push(cx.background_spawn(async move {
+            let mut notifications = client.notifications();
+
+            while let Some(notification) = notifications.next().await {
+                if let ClientNotification::Message {
+                    message: RelayMessage::Ok { event_id, .. },
+                    relay_url,
+                } = notification
+                {
+                    let sent_ids = sent_ids.read().await;
+
+                    if sent_ids.contains(&event_id) {
+                        tx.send_async((event_id, relay_url)).await.ok();
+                    }
+                }
+            }
+
+            Ok(())
+        }));
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            while let Ok((event_id, relay_url)) = rx.recv_async().await {
+                this.update(cx, |this, cx| {
+                    this.reports_by_id.update(cx, |this, cx| {
+                        for reports in this.values_mut() {
+                            for report in reports.iter_mut() {
+                                if let Some(output) = report.output.as_mut() {
+                                    if output.id() == &event_id {
+                                        output.success.insert(relay_url.clone());
+                                        cx.notify();
+                                    }
+                                }
+                            }
+                        }
+                    });
+                })?;
+            }
+
+            Ok(())
+        }));
+    }
+
+    fn subscribe_room_events(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(room) = self.room.upgrade() else {
+            return;
+        };
+
+        self.subscriptions.push(
+            // Subscribe to room events
+            cx.subscribe_in(&room, window, move |this, _room, event, window, cx| {
+                match event {
+                    RoomEvent::Incoming(message) => {
+                        this.insert_message(message, false, cx);
+                    }
+                    RoomEvent::Reload => {
+                        this.get_messages(window, cx);
+                    }
+                };
+            }),
+        );
+    }
+
+    /// Get all necessary data for each member
+    fn connect(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Ok(connect) = self.room.read_with(cx, |this, cx| this.early_connect(cx)) else {
+            return;
+        };
+
+        self.tasks.push(cx.background_spawn(connect));
     }
 
     /// Load all messages belonging to this room
-    fn load_messages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Ok(get_messages) = self.room.read_with(cx, |this, cx| this.get_messages(cx)) {
-            self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-                let result = get_messages.await;
+    fn get_messages(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Ok(get_messages) = self.room.read_with(cx, |this, cx| this.get_messages(cx)) else {
+            return;
+        };
 
-                this.update_in(cx, |this, window, cx| {
-                    match result {
-                        Ok(events) => {
-                            this.insert_messages(&events, cx);
-                        }
-                        Err(e) => {
-                            window.push_notification(Notification::error(e.to_string()), cx);
-                        }
-                    };
-                })
-                .ok();
-            }));
-        }
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let events = get_messages.await?;
+
+            // Update message list
+            this.update(cx, |this, cx| {
+                this.insert_messages(&events, cx);
+            })?;
+
+            Ok(())
+        }));
     }
 
-    /// Get user input content and merged all attachments
-    fn input_content(&self, cx: &Context<Self>) -> String {
+    /// Get user input content and merged all attachments if available
+    fn get_input_value(&self, cx: &Context<Self>) -> String {
         // Get input's value
         let mut content = self.input.read(cx).value().trim().to_string();
 
@@ -233,10 +276,9 @@ impl ChatPanel {
         content
     }
 
-    /// Send a message to all members of the chat
-    fn send_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn send_text_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Get the message which includes all attachments
-        let content = self.input_content(cx);
+        let content = self.get_input_value(cx);
 
         // Return if message is empty
         if content.trim().is_empty() {
@@ -244,79 +286,97 @@ impl ChatPanel {
             return;
         }
 
-        // Get the current room entity
-        let Some(room) = self.room.upgrade().map(|this| this.read(cx)) else {
+        self.send_message(&content, window, cx);
+    }
+
+    /// Send a message to all members of the chat
+    fn send_message(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if value.trim().is_empty() {
+            window.push_notification("Cannot send an empty message", cx);
+            return;
+        }
+
+        // Get room entity
+        let room = self.room.clone();
+
+        // Get content and replies
+        let replies: Vec<EventId> = self.replies_to.read(cx).iter().copied().collect();
+        let content = value.to_string();
+
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            let room = room.upgrade().context("Room is not available")?;
+
+            this.update_in(cx, |this, window, cx| {
+                match room.read(cx).rumor(content, replies, cx) {
+                    Some(rumor) => {
+                        this.insert_message(&rumor, true, cx);
+                        this.send_and_wait(rumor, window, cx);
+                        this.clear(window, cx);
+                    }
+                    None => {
+                        window.push_notification("Failed to create message", cx);
+                    }
+                }
+            })?;
+
+            Ok(())
+        }));
+    }
+
+    /// Send message in the background and wait for the response
+    fn send_and_wait(&mut self, rumor: UnsignedEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let sent_ids = self.sent_ids.clone();
+        // This can't fail, because we already ensured that the ID is set
+        let id = rumor.id.unwrap();
+
+        let Some(room) = self.room.upgrade() else {
             return;
         };
 
-        // Get replies_to if it's present
-        let replies: Vec<EventId> = self.replies_to.read(cx).iter().copied().collect();
-
-        // Create a temporary message for optimistic update
-        let rumor = room.create_message(&content, replies.as_ref(), cx);
-        let rumor_id = rumor.id.unwrap();
-
-        // Create a task for sending the message in the background
-        let send_message = room.send_message(&rumor, cx);
-
-        // Optimistically update message list
-        cx.spawn_in(window, async move |this, cx| {
-            // Wait for the delay
-            cx.background_executor()
-                .timer(Duration::from_millis(100))
-                .await;
-
-            // Update the message list and reset the states
-            this.update_in(cx, |this, window, cx| {
-                this.remove_all_replies(cx);
-                this.remove_all_attachments(cx);
-
-                // Reset the input to its default state
-                this.input.update(cx, |this, cx| {
-                    this.set_loading(false, cx);
-                    this.set_disabled(false, cx);
-                    this.set_value("", window, cx);
-                });
-
-                // Update the message list
-                this.insert_message(&rumor, true, cx);
-            })
-            .ok();
-        })
-        .detach();
+        let Some(task) = room.read(cx).send(rumor, cx) else {
+            window.push_notification("Failed to send message", cx);
+            return;
+        };
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            let result = send_message.await;
+            let outputs = task.await;
 
-            this.update_in(cx, |this, window, cx| {
-                match result {
-                    Ok(reports) => {
-                        // Update room's status
-                        this.room
-                            .update(cx, |this, cx| {
-                                if this.kind != RoomKind::Ongoing {
-                                    // Update the room kind to ongoing,
-                                    // but keep the room kind if send failed
-                                    if reports.iter().all(|r| !r.is_sent_success()) {
-                                        this.kind = RoomKind::Ongoing;
-                                        cx.notify();
-                                    }
-                                }
-                            })
-                            .ok();
+            // Add sent IDs to the list
+            let mut sent_ids = sent_ids.write().await;
+            sent_ids.extend(outputs.iter().filter_map(|output| output.gift_wrap_id));
 
-                        // Insert the sent reports
-                        this.reports_by_id.insert(rumor_id, reports);
+            // Update the state
+            this.update(cx, |this, cx| {
+                this.insert_reports(id, outputs, cx);
+            })?;
 
-                        cx.notify();
-                    }
-                    Err(e) => {
-                        window.push_notification(e.to_string(), cx);
-                    }
-                }
-            })
-            .ok();
-        }));
+            Ok(())
+        }))
+    }
+
+    /// Clear the input field, attachments, and replies
+    ///
+    /// Only run after sending a message
+    fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.input.update(cx, |this, cx| {
+            this.set_value("", window, cx);
+        });
+        self.attachments.update(cx, |this, cx| {
+            this.clear();
+            cx.notify();
+        });
+        self.replies_to.update(cx, |this, cx| {
+            this.clear();
+            cx.notify();
+        })
+    }
+
+    /// Insert reports
+    fn insert_reports(&mut self, id: EventId, reports: Vec<SendReport>, cx: &mut Context<Self>) {
+        self.reports_by_id.update(cx, |this, cx| {
+            this.insert(id, reports);
+            cx.notify();
+        });
     }
 
     /// Insert a message into the chat panel
@@ -349,23 +409,33 @@ impl ChatPanel {
         }
     }
 
-    /// Check if a message failed to send by its ID
-    fn is_sent_failed(&self, id: &EventId) -> bool {
+    /// Check if a message is pending
+    fn sent_pending(&self, id: &EventId, cx: &App) -> bool {
         self.reports_by_id
+            .read(cx)
             .get(id)
-            .is_some_and(|reports| reports.iter().all(|r| !r.is_sent_success()))
+            .is_some_and(|reports| reports.iter().any(|r| r.pending()))
     }
 
     /// Check if a message was sent successfully by its ID
-    fn is_sent_success(&self, id: &EventId) -> Option<bool> {
+    fn sent_success(&self, id: &EventId, cx: &App) -> bool {
         self.reports_by_id
+            .read(cx)
             .get(id)
-            .map(|reports| reports.iter().all(|r| r.is_sent_success()))
+            .is_some_and(|reports| reports.iter().any(|r| r.success()))
     }
 
-    /// Get the sent reports for a message by its ID
-    fn sent_reports(&self, id: &EventId) -> Option<&Vec<SendReport>> {
-        self.reports_by_id.get(id)
+    /// Check if a message failed to send by its ID
+    fn sent_failed(&self, id: &EventId, cx: &App) -> Option<bool> {
+        self.reports_by_id
+            .read(cx)
+            .get(id)
+            .map(|reports| reports.iter().all(|r| !r.success()))
+    }
+
+    /// Get all sent reports for a message by its ID
+    fn sent_reports(&self, id: &EventId, cx: &App) -> Option<Vec<SendReport>> {
+        self.reports_by_id.read(cx).get(id).cloned()
     }
 
     /// Get a message by its ID
@@ -414,13 +484,6 @@ impl ChatPanel {
         });
     }
 
-    fn remove_all_replies(&mut self, cx: &mut Context<Self>) {
-        self.replies_to.update(cx, |this, cx| {
-            this.clear();
-            cx.notify();
-        });
-    }
-
     fn upload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
@@ -435,9 +498,9 @@ impl ChatPanel {
             prompt: None,
         });
 
-        cx.spawn_in(window, async move |this, cx| {
-            let mut paths = path.await.ok()?.ok()??;
-            let path = paths.pop()?;
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            let mut paths = path.await??.context("Not found")?;
+            let path = paths.pop().context("No path")?;
 
             let upload = Tokio::spawn(cx, async move {
                 let file = fs::read(path).await.ok()?;
@@ -466,9 +529,8 @@ impl ChatPanel {
                 .ok();
             }
 
-            Some(())
-        })
-        .detach();
+            Ok(())
+        }));
     }
 
     fn set_uploading(&mut self, uploading: bool, cx: &mut Context<Self>) {
@@ -492,28 +554,21 @@ impl ChatPanel {
         });
     }
 
-    fn remove_all_attachments(&mut self, cx: &mut Context<Self>) {
-        self.attachments.update(cx, |this, cx| {
-            this.clear();
-            cx.notify();
-        });
-    }
-
     fn profile(&self, public_key: &PublicKey, cx: &Context<Self>) -> Person {
         let persons = PersonRegistry::global(cx);
         persons.read(cx).get(public_key, cx)
     }
 
     fn render_announcement(&self, ix: usize, cx: &Context<Self>) -> AnyElement {
+        const MSG: &str =
+            "This conversation is private. Only members can see each other's messages.";
+
         v_flex()
             .id(ix)
-            .group("")
-            .h_32()
+            .h_40()
             .w_full()
-            .relative()
             .gap_3()
-            .px_3()
-            .py_2()
+            .p_3()
             .items_center()
             .justify_center()
             .text_center()
@@ -523,12 +578,10 @@ impl ChatPanel {
             .child(
                 svg()
                     .path("brand/coop.svg")
-                    .size_10()
-                    .text_color(cx.theme().elevated_surface_background),
+                    .size_12()
+                    .text_color(cx.theme().ghost_element_active),
             )
-            .child(SharedString::from(
-                "This conversation is private. Only members can see each other's messages.",
-            ))
+            .child(SharedString::from(MSG))
             .into_any_element()
     }
 
@@ -566,7 +619,7 @@ impl ChatPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if let Some(message) = self.messages.get_index(ix) {
+        if let Some(message) = self.messages.iter().nth(ix) {
             match message {
                 Message::User(rendered) => {
                     let text = self
@@ -591,7 +644,7 @@ impl ChatPanel {
         &self,
         ix: usize,
         message: &RenderedMessage,
-        text: AnyElement,
+        rendered_text: AnyElement,
         cx: &Context<Self>,
     ) -> AnyElement {
         let id = message.id;
@@ -602,10 +655,13 @@ impl ChatPanel {
         let has_replies = !replies.is_empty();
 
         // Check if message is sent failed
-        let is_sent_failed = self.is_sent_failed(&id);
+        let sent_pending = self.sent_pending(&id, cx);
 
         // Check if message is sent successfully
-        let is_sent_success = self.is_sent_success(&id);
+        let sent_success = self.sent_success(&id, cx);
+
+        // Check if message is sent failed
+        let sent_failed = self.sent_failed(&id, cx);
 
         // Hide avatar setting
         let hide_avatar = AppSettings::get_hide_avatar(cx);
@@ -653,18 +709,21 @@ impl ChatPanel {
                                             .child(author.name()),
                                     )
                                     .child(message.created_at.to_human_time())
-                                    .when_some(is_sent_success, |this, status| {
-                                        this.when(status, |this| {
-                                            this.child(self.render_message_sent(&id, cx))
-                                        })
+                                    .when(sent_pending, |this| {
+                                        this.child(deferred(Indicator::new().small()))
+                                    })
+                                    .when(sent_success, |this| {
+                                        this.child(deferred(self.render_sent_indicator(&id, cx)))
                                     }),
                             )
                             .when(has_replies, |this| {
                                 this.children(self.render_message_replies(replies, cx))
                             })
-                            .child(text)
-                            .when(is_sent_failed, |this| {
-                                this.child(self.render_message_reports(&id, cx))
+                            .child(rendered_text)
+                            .when_some(sent_failed, |this, failed| {
+                                this.when(failed, |this| {
+                                    this.child(deferred(self.render_message_reports(&id, cx)))
+                                })
                             }),
                     ),
             )
@@ -729,11 +788,11 @@ impl ChatPanel {
         items
     }
 
-    fn render_message_sent(&self, id: &EventId, _cx: &Context<Self>) -> impl IntoElement {
+    fn render_sent_indicator(&self, id: &EventId, cx: &Context<Self>) -> impl IntoElement {
         div()
             .id(SharedString::from(id.to_hex()))
             .child(SharedString::from("• Sent"))
-            .when_some(self.sent_reports(id).cloned(), |this, reports| {
+            .when_some(self.sent_reports(id, cx), |this, reports| {
                 this.on_click(move |_e, window, cx| {
                     let reports = reports.clone();
 
@@ -765,7 +824,7 @@ impl ChatPanel {
             .child(SharedString::from(
                 "Failed to send message. Click to see details.",
             ))
-            .when_some(self.sent_reports(id).cloned(), |this, reports| {
+            .when_some(self.sent_reports(id, cx), |this, reports| {
                 this.on_click(move |_e, window, cx| {
                     let reports = reports.clone();
 
@@ -808,48 +867,6 @@ impl ChatPanel {
                             .child(name.clone()),
                     ),
             )
-            .when(report.relays_not_found, |this| {
-                this.child(
-                    h_flex()
-                        .flex_wrap()
-                        .justify_center()
-                        .p_2()
-                        .h_20()
-                        .w_full()
-                        .text_sm()
-                        .rounded(cx.theme().radius)
-                        .bg(cx.theme().danger_background)
-                        .text_color(cx.theme().danger_foreground)
-                        .child(
-                            div()
-                                .flex_1()
-                                .w_full()
-                                .text_center()
-                                .child(SharedString::from("Messaging Relays not found")),
-                        ),
-                )
-            })
-            .when(report.device_not_found, |this| {
-                this.child(
-                    h_flex()
-                        .flex_wrap()
-                        .justify_center()
-                        .p_2()
-                        .h_20()
-                        .w_full()
-                        .text_sm()
-                        .rounded(cx.theme().radius)
-                        .bg(cx.theme().danger_background)
-                        .text_color(cx.theme().danger_foreground)
-                        .child(
-                            div()
-                                .flex_1()
-                                .w_full()
-                                .text_center()
-                                .child(SharedString::from("Encryption Key not found")),
-                        ),
-                )
-            })
             .when_some(report.error.clone(), |this, error| {
                 this.child(
                     h_flex()
@@ -865,7 +882,7 @@ impl ChatPanel {
                         .child(div().flex_1().w_full().text_center().child(error)),
                 )
             })
-            .when_some(report.status.clone(), |this, output| {
+            .when_some(report.output.clone(), |this, output| {
                 this.child(
                     v_flex()
                         .gap_2()
@@ -992,9 +1009,9 @@ impl ChatPanel {
                     .icon(IconName::Ellipsis)
                     .small()
                     .ghost()
-                    .popup_menu({
+                    .dropdown_menu({
                         let id = id.to_owned();
-                        move |this, _, _| this.menu("Seen on", Box::new(SeenOn(id)))
+                        move |this, _window, _cx| this.menu("Seen on", Box::new(SeenOn(id)))
                     }),
             )
             .group_hover("", |this| this.visible())
@@ -1115,6 +1132,25 @@ impl ChatPanel {
 
         items
     }
+
+    fn on_command(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) {
+        match command {
+            Command::Insert(content) => {
+                self.send_message(content, window, cx);
+            }
+            Command::ChangeSubject(subject) => {
+                if self
+                    .room
+                    .update(cx, |this, cx| {
+                        this.set_subject(*subject, cx);
+                    })
+                    .is_err()
+                {
+                    window.push_notification(Notification::error("Failed to change subject"), cx);
+                }
+            }
+        }
+    }
 }
 
 impl Panel for ChatPanel {
@@ -1149,61 +1185,86 @@ impl Focusable for ChatPanel {
 impl Render for ChatPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
-            .image_cache(self.image_cache.clone())
+            .on_action(cx.listener(Self::on_command))
             .size_full()
             .child(
-                list(
-                    self.list_state.clone(),
-                    cx.processor(|this, ix, window, cx| {
-                        // Get and render message by index
-                        this.render_message(ix, window, cx)
-                    }),
-                )
-                .flex_1(),
+                div()
+                    .flex_1()
+                    .size_full()
+                    .child(
+                        list(
+                            self.list_state.clone(),
+                            cx.processor(move |this, ix, window, cx| {
+                                this.render_message(ix, window, cx)
+                            }),
+                        )
+                        .size_full(),
+                    )
+                    .child(Scrollbar::vertical(&self.list_state)),
             )
             .child(
-                div()
+                v_flex()
                     .flex_shrink_0()
+                    .p_2()
                     .w_full()
-                    .relative()
-                    .px_3()
-                    .py_2()
+                    .gap_1p5()
+                    .children(self.render_attachment_list(window, cx))
+                    .children(self.render_reply_list(window, cx))
                     .child(
-                        v_flex()
-                            .gap_1p5()
-                            .children(self.render_attachment_list(window, cx))
-                            .children(self.render_reply_list(window, cx))
+                        h_flex()
+                            .items_end()
                             .child(
-                                div()
-                                    .w_full()
-                                    .flex()
-                                    .items_end()
-                                    .gap_2p5()
+                                Button::new("upload")
+                                    .icon(IconName::Plus)
+                                    .tooltip("Upload media")
+                                    .loading(self.uploading)
+                                    .disabled(self.uploading)
+                                    .ghost()
+                                    .large()
+                                    .on_click(cx.listener(move |this, _ev, window, cx| {
+                                        this.upload(window, cx);
+                                    })),
+                            )
+                            .child(
+                                TextInput::new(&self.input)
+                                    .appearance(false)
+                                    .flex_1()
+                                    .text_sm(),
+                            )
+                            .child(
+                                h_flex()
+                                    .pl_1()
+                                    .gap_1()
                                     .child(
-                                        h_flex()
-                                            .gap_1()
-                                            .text_color(cx.theme().text_muted)
-                                            .child(
-                                                Button::new("upload")
-                                                    .icon(IconName::Upload)
-                                                    .loading(self.uploading)
-                                                    .disabled(self.uploading)
-                                                    .ghost()
-                                                    .large()
-                                                    .on_click(cx.listener(
-                                                        move |this, _, window, cx| {
-                                                            this.upload(window, cx);
-                                                        },
-                                                    )),
-                                            )
-                                            .child(
-                                                EmojiPicker::new()
-                                                    .target(self.input.downgrade())
-                                                    .icon(IconName::EmojiFill)
-                                                    .large(),
+                                        Button::new("emoji")
+                                            .icon(IconName::Emoji)
+                                            .ghost()
+                                            .large()
+                                            .dropdown_menu_with_anchor(
+                                                gpui::Corner::BottomLeft,
+                                                move |this, _window, _cx| {
+                                                    this.horizontal()
+                                                        .menu("👍", Box::new(Command::Insert("👍")))
+                                                        .menu("👎", Box::new(Command::Insert("👎")))
+                                                        .menu("😄", Box::new(Command::Insert("😄")))
+                                                        .menu("🎉", Box::new(Command::Insert("🎉")))
+                                                        .menu("😕", Box::new(Command::Insert("😕")))
+                                                        .menu("❤️", Box::new(Command::Insert("❤️")))
+                                                        .menu("🚀", Box::new(Command::Insert("🚀")))
+                                                        .menu("👀", Box::new(Command::Insert("👀")))
+                                                },
                                             ),
                                     )
-                                    .child(TextInput::new(&self.input)),
+                                    .child(
+                                        Button::new("send")
+                                            .icon(IconName::PaperPlaneFill)
+                                            .disabled(self.uploading)
+                                            .ghost()
+                                            .large()
+                                            .on_click(cx.listener(move |this, _ev, window, cx| {
+                                                this.send_text_message(window, cx);
+                                            })),
+                                    ),
                             ),
                     ),
             )

@@ -425,7 +425,7 @@ impl NotificationList {
         cx.notify();
     }
 
-    pub(crate) fn close<T>(&mut self, key: T, window: &mut Window, cx: &mut Context<Self>)
+    pub fn close<T>(&mut self, key: T, window: &mut Window, cx: &mut Context<Self>)
     where
         T: Into<ElementId>,
     {

@@ -1,10 +1,6 @@
-use std::fmt::{self, Display, Formatter};
-
-use gpui::{div, px, App, Axis, Div, Element, Pixels, Refineable, StyleRefinement, Styled};
+use gpui::{div, px, App, Div, Pixels, Refineable, StyleRefinement, Styled};
 use serde::{Deserialize, Serialize};
 use theme::ActiveTheme;
-
-use crate::scroll::{Scrollable, ScrollbarAxis};
 
 /// Returns a `Div` as horizontal flex layout.
 pub fn h_flex() -> Div {
@@ -18,7 +14,7 @@ pub fn v_flex() -> Div {
 
 /// Returns a `Div` as divider.
 pub fn divider(cx: &App) -> Div {
-    div().my_2().w_full().h_px().bg(cx.theme().border)
+    div().my_2().w_full().h_px().bg(cx.theme().border_variant)
 }
 
 macro_rules! font_weight {
@@ -48,17 +44,6 @@ pub trait StyledExt: Styled + Sized {
     #[inline]
     fn v_flex(self) -> Self {
         self.flex().flex_col()
-    }
-
-    /// Wraps the element in a ScrollView.
-    ///
-    /// Current this is only have a vertical scrollbar.
-    #[inline]
-    fn scrollable(self, axis: impl Into<ScrollbarAxis>) -> Scrollable<Self>
-    where
-        Self: Element,
-    {
-        Scrollable::new(axis, self)
     }
 
     font_weight!(font_thin, THIN);
@@ -183,39 +168,43 @@ impl<T: Styled> StyleSized<T> for T {
 
     fn input_pl(self, size: Size) -> Self {
         match size {
-            Size::Large => self.pl_5(),
+            Size::XSmall => self.pl_1(),
             Size::Medium => self.pl_3(),
+            Size::Large => self.pl_5(),
             _ => self.pl_2(),
         }
     }
 
     fn input_pr(self, size: Size) -> Self {
         match size {
-            Size::Large => self.pr_5(),
+            Size::XSmall => self.pr_1(),
             Size::Medium => self.pr_3(),
+            Size::Large => self.pr_5(),
             _ => self.pr_2(),
         }
     }
 
     fn input_px(self, size: Size) -> Self {
         match size {
-            Size::Large => self.px_5(),
+            Size::XSmall => self.px_1(),
             Size::Medium => self.px_3(),
+            Size::Large => self.px_5(),
             _ => self.px_2(),
         }
     }
 
     fn input_py(self, size: Size) -> Self {
         match size {
-            Size::Large => self.py_5(),
+            Size::XSmall => self.py_0p5(),
             Size::Medium => self.py_2(),
+            Size::Large => self.py_5(),
             _ => self.py_1(),
         }
     }
 
     fn input_h(self, size: Size) -> Self {
         match size {
-            Size::XSmall => self.h_7(),
+            Size::XSmall => self.h_6(),
             Size::Small => self.h_8(),
             Size::Medium => self.h_9(),
             Size::Large => self.h_12(),
@@ -252,74 +241,6 @@ impl<T: Styled> StyleSized<T> for T {
             Size::XSmall => self.size_4(),
             Size::Size(size) => self.size(size),
         }
-    }
-}
-
-pub trait AxisExt {
-    fn is_horizontal(&self) -> bool;
-    fn is_vertical(&self) -> bool;
-}
-
-impl AxisExt for Axis {
-    fn is_horizontal(&self) -> bool {
-        self == &Axis::Horizontal
-    }
-
-    fn is_vertical(&self) -> bool {
-        self == &Axis::Vertical
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Placement {
-    Top,
-    Bottom,
-    Left,
-    Right,
-}
-
-impl Display for Placement {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Placement::Top => write!(f, "Top"),
-            Placement::Bottom => write!(f, "Bottom"),
-            Placement::Left => write!(f, "Left"),
-            Placement::Right => write!(f, "Right"),
-        }
-    }
-}
-
-impl Placement {
-    pub fn is_horizontal(&self) -> bool {
-        matches!(self, Placement::Left | Placement::Right)
-    }
-
-    pub fn is_vertical(&self) -> bool {
-        matches!(self, Placement::Top | Placement::Bottom)
-    }
-
-    pub fn axis(&self) -> Axis {
-        match self {
-            Placement::Top | Placement::Bottom => Axis::Vertical,
-            Placement::Left | Placement::Right => Axis::Horizontal,
-        }
-    }
-}
-
-/// A enum for defining the side of the element.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Side {
-    Left,
-    Right,
-}
-
-impl Side {
-    pub(crate) fn is_left(&self) -> bool {
-        matches!(self, Self::Left)
-    }
-
-    pub(crate) fn is_right(&self) -> bool {
-        matches!(self, Self::Right)
     }
 }
 

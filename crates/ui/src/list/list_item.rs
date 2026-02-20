@@ -1,39 +1,57 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement, IntoElement, MouseButton,
-    MouseMoveEvent, ParentElement, RenderOnce, Stateful, StatefulInteractiveElement as _, Styled,
-    Window,
+    div, AnyElement, App, ClickEvent, Div, ElementId, InteractiveElement, IntoElement,
+    MouseMoveEvent, ParentElement, RenderOnce, Stateful, StatefulInteractiveElement as _,
+    StyleRefinement, Styled, Window,
 };
 use smallvec::SmallVec;
 use theme::ActiveTheme;
 
-use crate::{h_flex, Disableable, Icon, IconName, Selectable, Sizable as _};
+use crate::{h_flex, Disableable, Icon, Selectable, Sizable as _, StyledExt};
 
-type OnClick = Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>;
-type OnMouseEnter = Option<Box<dyn Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static>>;
-type Suffix = Option<Box<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ListItemMode {
+    #[default]
+    Entry,
+    Separator,
+}
+
+impl ListItemMode {
+    #[inline]
+    fn is_separator(&self) -> bool {
+        matches!(self, ListItemMode::Separator)
+    }
+}
 
 #[derive(IntoElement)]
 pub struct ListItem {
     base: Stateful<Div>,
+    mode: ListItemMode,
+    style: StyleRefinement,
     disabled: bool,
     selected: bool,
+    secondary_selected: bool,
     confirmed: bool,
     check_icon: Option<Icon>,
-    on_click: OnClick,
-    on_mouse_enter: OnMouseEnter,
-    suffix: Suffix,
+    #[allow(clippy::type_complexity)]
+    on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+    #[allow(clippy::type_complexity)]
+    on_mouse_enter: Option<Box<dyn Fn(&MouseMoveEvent, &mut Window, &mut App) + 'static>>,
+    #[allow(clippy::type_complexity)]
+    suffix: Option<Box<dyn Fn(&mut Window, &mut App) -> AnyElement + 'static>>,
     children: SmallVec<[AnyElement; 2]>,
 }
 
 impl ListItem {
     pub fn new(id: impl Into<ElementId>) -> Self {
         let id: ElementId = id.into();
-
         Self {
-            base: h_flex().id(id).gap_x_1().py_1().px_2().text_base(),
+            mode: ListItemMode::Entry,
+            base: h_flex().id(id),
+            style: StyleRefinement::default(),
             disabled: false,
             selected: false,
+            secondary_selected: false,
             confirmed: false,
             on_click: None,
             on_mouse_enter: None,
@@ -43,9 +61,15 @@ impl ListItem {
         }
     }
 
+    /// Set this list item to as a separator, it not able to be selected.
+    pub fn separator(mut self) -> Self {
+        self.mode = ListItemMode::Separator;
+        self
+    }
+
     /// Set to show check icon, default is None.
-    pub fn check_icon(mut self, icon: IconName) -> Self {
-        self.check_icon = Some(Icon::new(icon));
+    pub fn check_icon(mut self, icon: impl Into<Icon>) -> Self {
+        self.check_icon = Some(icon.into());
         self
     }
 
@@ -111,11 +135,16 @@ impl Selectable for ListItem {
     fn is_selected(&self) -> bool {
         self.selected
     }
+
+    fn secondary_selected(mut self, selected: bool) -> Self {
+        self.secondary_selected = selected;
+        self
+    }
 }
 
 impl Styled for ListItem {
     fn style(&mut self) -> &mut gpui::StyleRefinement {
-        self.base.style()
+        &mut self.style
     }
 }
 
@@ -127,35 +156,39 @@ impl ParentElement for ListItem {
 
 impl RenderOnce for ListItem {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let is_active = self.selected || self.confirmed;
+        let is_active = self.confirmed || self.selected;
+
+        let corner_radii = self.style.corner_radii.clone();
+
+        let _selected_style = StyleRefinement {
+            corner_radii,
+            ..Default::default()
+        };
+
+        let is_selectable = !(self.disabled || self.mode.is_separator());
 
         self.base
+            .relative()
+            .gap_x_1()
+            .py_1()
+            .px_3()
+            .text_base()
             .text_color(cx.theme().text)
             .relative()
             .items_center()
             .justify_between()
-            .when_some(self.on_click, |this, on_click| {
-                if !self.disabled {
-                    this.cursor_pointer()
-                        .on_mouse_down(MouseButton::Left, move |_, _window, cx| {
-                            cx.stop_propagation();
-                        })
-                        .on_click(on_click)
-                } else {
-                    this
-                }
+            .refine_style(&self.style)
+            .when(is_selectable, |this| {
+                this.when_some(self.on_click, |this, on_click| this.on_click(on_click))
+                    .when_some(self.on_mouse_enter, |this, on_mouse_enter| {
+                        this.on_mouse_move(move |ev, window, cx| (on_mouse_enter)(ev, window, cx))
+                    })
+                    .when(!is_active, |this| {
+                        this.hover(|this| this.bg(cx.theme().ghost_element_hover))
+                    })
             })
-            .when(is_active, |this| this.bg(cx.theme().element_active))
-            .when(!is_active && !self.disabled, |this| {
-                this.hover(|this| this.bg(cx.theme().elevated_surface_background))
-            })
-            // Mouse enter
-            .when_some(self.on_mouse_enter, |this, on_mouse_enter| {
-                if !self.disabled {
-                    this.on_mouse_move(move |ev, window, cx| (on_mouse_enter)(ev, window, cx))
-                } else {
-                    this
-                }
+            .when(!is_selectable, |this| {
+                this.text_color(cx.theme().text_muted)
             })
             .child(
                 h_flex()
@@ -177,5 +210,17 @@ impl RenderOnce for ListItem {
                     }),
             )
             .when_some(self.suffix, |this, suffix| this.child(suffix(window, cx)))
+            .map(|this| {
+                if is_selectable && (self.selected || self.secondary_selected) {
+                    let bg = if self.selected {
+                        cx.theme().ghost_element_active
+                    } else {
+                        cx.theme().ghost_element_background
+                    };
+                    this.bg(bg)
+                } else {
+                    this
+                }
+            })
     }
 }

@@ -1,13 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::{anyhow, Error};
+use common::config_dir;
 use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
-use state::NostrRegistry;
-
-const SETTINGS_IDENTIFIER: &str = "coop:settings";
 
 pub fn init(cx: &mut App) {
     AppSettings::set_global(cx.new(AppSettings::new), cx)
@@ -47,17 +45,31 @@ setting_accessors! {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum AuthMode {
     #[default]
-    Manual,
     Auto,
+    Manual,
 }
 
 /// Signer kind
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SignerKind {
-    #[default]
     Auto,
+    #[default]
     User,
-    Device,
+    Encryption,
+}
+
+impl SignerKind {
+    pub fn auto(&self) -> bool {
+        matches!(self, SignerKind::Auto)
+    }
+
+    pub fn user(&self) -> bool {
+        matches!(self, SignerKind::User)
+    }
+
+    pub fn encryption(&self) -> bool {
+        matches!(self, SignerKind::Encryption)
+    }
 }
 
 /// Room configuration
@@ -65,6 +77,16 @@ pub enum SignerKind {
 pub struct RoomConfig {
     backup: bool,
     signer_kind: SignerKind,
+}
+
+impl RoomConfig {
+    pub fn backup(&self) -> bool {
+        self.backup
+    }
+
+    pub fn signer_kind(&self) -> &SignerKind {
+        &self.signer_kind
+    }
 }
 
 /// Settings
@@ -118,10 +140,7 @@ pub struct AppSettings {
     values: Settings,
 
     /// Event subscriptions
-    _subscriptions: SmallVec<[Subscription; 1]>,
-
-    /// Background tasks
-    _tasks: SmallVec<[Task<()>; 1]>,
+    _subscriptions: SmallVec<[Subscription; 2]>,
 }
 
 impl AppSettings {
@@ -136,9 +155,6 @@ impl AppSettings {
     }
 
     fn new(cx: &mut Context<Self>) -> Self {
-        let load_settings = Self::get_from_database(false, cx);
-
-        let mut tasks = smallvec![];
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
@@ -148,108 +164,77 @@ impl AppSettings {
             }),
         );
 
-        tasks.push(
-            // Load the initial settings
-            cx.spawn(async move |this, cx| {
-                if let Ok(settings) = load_settings.await {
-                    this.update(cx, |this, cx| {
-                        this.values = settings;
-                        cx.notify();
-                    })
-                    .ok();
-                }
-            }),
-        );
+        cx.defer(|cx| {
+            let settings = AppSettings::global(cx);
+
+            settings.update(cx, |this, cx| {
+                this.load(cx);
+            });
+        });
 
         Self {
             values: Settings::default(),
             _subscriptions: subscriptions,
-            _tasks: tasks,
         }
     }
 
-    /// Get settings from the database
-    ///
-    /// If `current_user` is true, the settings will be retrieved for current user.
-    /// Otherwise, Coop will load the latest settings from the database.
-    fn get_from_database(current_user: bool, cx: &App) -> Task<Result<Settings, Error>> {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-
-        cx.background_spawn(async move {
-            // Construct a filter to get the latest settings
-            let mut filter = Filter::new()
-                .kind(Kind::ApplicationSpecificData)
-                .identifier(SETTINGS_IDENTIFIER)
-                .limit(1);
-
-            if current_user {
-                let signer = client.signer().await?;
-                let public_key = signer.get_public_key().await?;
-
-                // Push author to the filter
-                filter = filter.author(public_key);
-            }
-
-            if let Some(event) = client.database().query(filter).await?.first_owned() {
-                Ok(serde_json::from_str(&event.content).unwrap_or(Settings::default()))
-            } else {
-                Err(anyhow!("Not found"))
-            }
-        })
+    /// Update settings
+    fn set_settings(&mut self, settings: Settings, cx: &mut Context<Self>) {
+        self.values = settings;
+        cx.notify();
     }
 
     /// Load settings
-    pub fn load(&mut self, cx: &mut Context<Self>) {
-        let task = Self::get_from_database(true, cx);
+    fn load(&mut self, cx: &mut Context<Self>) {
+        let task: Task<Result<Settings, Error>> = cx.background_spawn(async move {
+            let path = config_dir().join(".settings");
 
-        self._tasks.push(
-            // Run task in the background
-            cx.spawn(async move |this, cx| {
-                if let Ok(settings) = task.await {
-                    this.update(cx, |this, cx| {
-                        this.values = settings;
-                        cx.notify();
-                    })
-                    .ok();
-                }
-            }),
-        );
+            if let Ok(content) = smol::fs::read_to_string(&path).await {
+                Ok(serde_json::from_str(&content)?)
+            } else {
+                Err(anyhow!("Not found"))
+            }
+        });
+
+        cx.spawn(async move |this, cx| {
+            let settings = task.await.unwrap_or(Settings::default());
+
+            // Update settings
+            this.update(cx, |this, cx| {
+                this.set_settings(settings, cx);
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Save settings
     pub fn save(&mut self, cx: &mut Context<Self>) {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
+        let settings = self.values.clone();
 
-        if let Ok(content) = serde_json::to_string(&self.values) {
-            let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-                let signer = client.signer().await?;
-                let public_key = signer.get_public_key().await?;
+        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
+            let path = config_dir().join(".settings");
+            let content = serde_json::to_string(&settings)?;
 
-                let event = EventBuilder::new(Kind::ApplicationSpecificData, content)
-                    .tag(Tag::identifier(SETTINGS_IDENTIFIER))
-                    .build(public_key)
-                    .sign(&Keys::generate())
-                    .await?;
+            // Write settings to file
+            smol::fs::write(&path, content).await?;
 
-                client.database().save_event(&event).await?;
+            Ok(())
+        });
 
-                Ok(())
-            });
-
-            task.detach();
-        }
+        task.detach();
     }
 
-    /// Check if the given relay is trusted
-    pub fn is_trusted_relay(&self, url: &RelayUrl, _cx: &App) -> bool {
-        self.values.trusted_relays.contains(url)
+    /// Check if the given relay is already authenticated
+    pub fn trusted_relay(&self, url: &RelayUrl, _cx: &App) -> bool {
+        self.values.trusted_relays.iter().any(|relay| {
+            relay.as_str_without_trailing_slash() == url.as_str_without_trailing_slash()
+        })
     }
 
     /// Add a relay to the trusted list
-    pub fn add_trusted_relay(&mut self, url: RelayUrl, cx: &mut Context<Self>) {
-        self.values.trusted_relays.insert(url);
+    pub fn add_trusted_relay(&mut self, url: &RelayUrl, cx: &mut Context<Self>) {
+        self.values.trusted_relays.insert(url.clone());
         cx.notify();
     }
 

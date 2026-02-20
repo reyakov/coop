@@ -145,6 +145,7 @@ impl Styled for TextInput {
 impl RenderOnce for TextInput {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         const LINE_HEIGHT: Rems = Rems(1.25);
+
         let font = window.text_style().font();
         let font_size = window.text_style().font_size.to_pixels(window.rem_size());
 
@@ -155,6 +156,7 @@ impl RenderOnce for TextInput {
         });
 
         let state = self.state.read(cx);
+        let focused = state.focus_handle.is_focused(window) && !state.disabled;
 
         let gap_x = match self.size {
             Size::Small => px(4.),
@@ -266,7 +268,16 @@ impl RenderOnce for TextInput {
                     .when_some(self.height, |this, height| this.h(height))
             })
             .when(self.appearance, |this| {
-                this.bg(bg).rounded(cx.theme().radius)
+                this.bg(bg)
+                    .rounded(cx.theme().radius)
+                    .when(self.bordered, |this| {
+                        this.border_color(cx.theme().border)
+                            .border_1()
+                            .when(cx.theme().shadow, |this| this.shadow_xs())
+                            .when(focused && self.focus_bordered, |this| {
+                                this.border_color(cx.theme().border_focused)
+                            })
+                    })
             })
             .items_center()
             .gap(gap_x)

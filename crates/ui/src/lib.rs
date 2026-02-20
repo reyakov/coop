@@ -1,11 +1,14 @@
+pub use anchored::*;
+pub use element_ext::ElementExt;
 pub use event::InteractiveElementExt;
 pub use focusable::FocusableCycle;
+pub use geometry::*;
 pub use icon::*;
+pub use index_path::IndexPath;
 pub use kbd::*;
-pub use menu::{context_menu, popup_menu};
-pub use root::{ContextModal, Root};
+pub use root::{window_paddings, Root};
 pub use styled::*;
-pub use window_border::{window_border, WindowBorder};
+pub use window_ext::*;
 
 pub use crate::Disableable;
 
@@ -16,7 +19,6 @@ pub mod button;
 pub mod checkbox;
 pub mod divider;
 pub mod dock_area;
-pub mod dropdown;
 pub mod history;
 pub mod indicator;
 pub mod input;
@@ -32,20 +34,23 @@ pub mod switch;
 pub mod tab;
 pub mod tooltip;
 
+mod anchored;
+mod element_ext;
 mod event;
 mod focusable;
+mod geometry;
 mod icon;
+mod index_path;
 mod kbd;
 mod root;
 mod styled;
-mod window_border;
+mod window_ext;
 
 /// Initialize the UI module.
 ///
 /// This must be called before using any of the UI components.
 /// You can initialize the UI module at your application's entry point.
 pub fn init(cx: &mut gpui::App) {
-    dropdown::init(cx);
     input::init(cx);
     list::init(cx);
     modal::init(cx);

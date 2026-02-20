@@ -10,20 +10,22 @@ use theme::ActiveTheme;
 use crate::{h_flex, Disableable, StyledExt};
 
 #[derive(IntoElement)]
-#[allow(clippy::type_complexity)]
 pub(crate) struct MenuItemElement {
     id: ElementId,
     group_name: SharedString,
     style: StyleRefinement,
     disabled: bool,
     selected: bool,
+    #[allow(clippy::type_complexity)]
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
+    #[allow(clippy::type_complexity)]
     on_hover: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
     children: SmallVec<[AnyElement; 2]>,
 }
 
 impl MenuItemElement {
-    pub fn new(id: impl Into<ElementId>, group_name: impl Into<SharedString>) -> Self {
+    /// Create a new MenuItem with the given ID and group name.
+    pub(crate) fn new(id: impl Into<ElementId>, group_name: impl Into<SharedString>) -> Self {
         let id: ElementId = id.into();
         Self {
             id: id.clone(),
@@ -38,17 +40,19 @@ impl MenuItemElement {
     }
 
     /// Set ListItem as the selected item style.
-    pub fn selected(mut self, selected: bool) -> Self {
+    pub(crate) fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
     }
 
-    pub fn disabled(mut self, disabled: bool) -> Self {
+    /// Set the disabled state of the MenuItem.
+    pub(crate) fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
     }
 
-    pub fn on_click(
+    /// Set a handler for when the MenuItem is clicked.
+    pub(crate) fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
@@ -88,7 +92,7 @@ impl RenderOnce for MenuItemElement {
         h_flex()
             .id(self.id)
             .group(&self.group_name)
-            .gap_x_2()
+            .gap_x_1()
             .py_1()
             .px_2()
             .text_base()
@@ -102,12 +106,12 @@ impl RenderOnce for MenuItemElement {
             })
             .when(!self.disabled, |this| {
                 this.group_hover(self.group_name, |this| {
-                    this.bg(cx.theme().elevated_surface_background)
-                        .text_color(cx.theme().text)
+                    this.bg(cx.theme().secondary_background)
+                        .text_color(cx.theme().secondary_foreground)
                 })
                 .when(self.selected, |this| {
-                    this.bg(cx.theme().elevated_surface_background)
-                        .text_color(cx.theme().text)
+                    this.bg(cx.theme().secondary_background)
+                        .text_color(cx.theme().secondary_foreground)
                 })
                 .when_some(self.on_click, |this, on_click| {
                     this.on_mouse_down(MouseButton::Left, move |_, _, cx| {

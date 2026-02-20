@@ -14,7 +14,7 @@ use super::stack_panel::StackPanel;
 use super::{ClosePanel, DockArea, PanelEvent, PanelStyle, ToggleZoom};
 use crate::button::{Button, ButtonVariants as _};
 use crate::dock_area::panel::Panel;
-use crate::popup_menu::{PopupMenu, PopupMenuExt};
+use crate::menu::{DropdownMenu, PopupMenu};
 use crate::tab::tab_bar::TabBar;
 use crate::tab::Tab;
 use crate::{h_flex, v_flex, AxisExt, IconName, Placement, Selectable, Sizable, StyledExt};
@@ -423,7 +423,7 @@ impl TabPanel {
             .when(self.is_zoomed, |this| {
                 this.child(
                     Button::new("zoom")
-                        .icon(IconName::ArrowIn)
+                        .icon(IconName::Zoom)
                         .small()
                         .ghost()
                         .tooltip("Zoom Out")
@@ -442,7 +442,7 @@ impl TabPanel {
                     .small()
                     .ghost()
                     .rounded()
-                    .popup_menu({
+                    .dropdown_menu({
                         let zoomable = state.zoomable;
                         let closable = state.closable;
 

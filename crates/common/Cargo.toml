@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 gpui.workspace = true
+nostr.workspace = true
 nostr-sdk.workspace = true
 
 anyhow.workspace = true
@@ -19,5 +20,3 @@ log.workspace = true
 
 dirs = "5.0"
 qrcode = "0.14.1"
-whoami = "1.6.1"
-nostr = { git = "https://github.com/rust-nostr/nostr" }

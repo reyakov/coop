@@ -1,33 +1,38 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::os::unix::fs::PermissionsExt;
+use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Error;
-use common::{config_dir, BOOTSTRAP_RELAYS, SEARCH_RELAYS};
-use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
-use nostr_lmdb::NostrLmdb;
+use anyhow::{anyhow, Context as AnyhowContext, Error};
+use common::config_dir;
+use gpui::{App, AppContext, Context, Entity, Global, Task, Window};
+use nostr_connect::prelude::*;
+use nostr_lmdb::prelude::*;
 use nostr_sdk::prelude::*;
 
-mod device;
-mod event;
+mod constants;
 mod gossip;
-mod identity;
+mod nip05;
+mod signer;
 
-pub use device::*;
-pub use event::*;
+pub use constants::*;
 pub use gossip::*;
-pub use identity::*;
+pub use nip05::*;
+pub use signer::*;
 
-use crate::identity::Identity;
+pub fn init(window: &mut Window, cx: &mut App) {
+    // rustls uses the `aws_lc_rs` provider by default
+    // This only errors if the default provider has already
+    // been installed. We can ignore this `Result`.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .ok();
 
-pub fn init(cx: &mut App) {
-    NostrRegistry::set_global(cx.new(NostrRegistry::new), cx);
+    // Initialize the tokio runtime
+    gpui_tokio::init(cx);
+
+    NostrRegistry::set_global(cx.new(|cx| NostrRegistry::new(window, cx)), cx);
 }
-
-/// Default timeout for subscription
-pub const TIMEOUT: u64 = 3;
-
-/// Default subscription id for gift wrap events
-pub const GIFTWRAP_SUBSCRIPTION: &str = "giftwrap-events";
 
 struct GlobalNostrRegistry(Entity<NostrRegistry>);
 
@@ -39,24 +44,28 @@ pub struct NostrRegistry {
     /// Nostr client
     client: Client,
 
+    /// Nostr signer
+    signer: Arc<CoopSigner>,
+
     /// App keys
     ///
     /// Used for Nostr Connect and NIP-4e operations
     app_keys: Keys,
 
-    /// Current identity (user's public key)
-    ///
-    /// Set by the current Nostr signer
-    identity: Entity<Identity>,
-
-    /// Gossip implementation
+    /// Custom gossip implementation
     gossip: Entity<Gossip>,
+
+    /// Relay list state
+    relay_list_state: RelayState,
+
+    /// Whether Coop is connected to all bootstrap relays
+    connected: bool,
+
+    /// Whether Coop is creating a new signer
+    creating: bool,
 
     /// Tasks for asynchronous operations
     tasks: Vec<Task<Result<(), Error>>>,
-
-    /// Subscriptions
-    _subscriptions: Vec<Subscription>,
 }
 
 impl NostrRegistry {
@@ -71,23 +80,15 @@ impl NostrRegistry {
     }
 
     /// Create a new nostr instance
-    fn new(cx: &mut Context<Self>) -> Self {
-        // rustls uses the `aws_lc_rs` provider by default
-        // This only errors if the default provider has already
-        // been installed. We can ignore this `Result`.
-        rustls::crypto::aws_lc_rs::default_provider()
-            .install_default()
-            .ok();
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // Construct the nostr signer
+        let app_keys = get_or_init_app_keys().unwrap_or(Keys::generate());
+        let signer = Arc::new(CoopSigner::new(app_keys.clone()));
 
-        // Construct the nostr client options
-        let opts = ClientOptions::new()
-            .automatic_authentication(false)
-            .verify_subscriptions(false)
-            .sleep_when_idle(SleepWhenIdle::Enabled {
-                timeout: Duration::from_secs(600),
-            });
+        // Construct the gossip entity
+        let gossip = cx.new(|_| Gossip::default());
 
-        // Construct the lmdb
+        // Construct the nostr lmdb instance
         let lmdb = cx.foreground_executor().block_on(async move {
             NostrLmdb::open(config_dir().join("nostr"))
                 .await
@@ -95,221 +96,141 @@ impl NostrRegistry {
         });
 
         // Construct the nostr client
-        let client = ClientBuilder::default().database(lmdb).opts(opts).build();
-        let _ = tracker();
+        let client = ClientBuilder::default()
+            .signer(signer.clone())
+            .database(lmdb)
+            .automatic_authentication(false)
+            .verify_subscriptions(false)
+            .connect_timeout(Duration::from_secs(TIMEOUT))
+            .sleep_when_idle(SleepWhenIdle::Enabled {
+                timeout: Duration::from_secs(600),
+            })
+            .build();
 
-        // Get the app keys
-        let app_keys = Self::create_or_init_app_keys().unwrap();
+        // Run at the end of current cycle
+        cx.defer_in(window, |this, _window, cx| {
+            this.connect(cx);
+            this.handle_notifications(cx);
+        });
 
-        // Construct the gossip entity
-        let gossip = cx.new(|_| Gossip::default());
-        let async_gossip = gossip.downgrade();
+        Self {
+            client,
+            signer,
+            app_keys,
+            gossip,
+            relay_list_state: RelayState::Idle,
+            connected: false,
+            creating: false,
+            tasks: vec![],
+        }
+    }
 
-        // Construct the identity entity
-        let identity = cx.new(|_| Identity::default());
+    fn connect(&mut self, cx: &mut Context<Self>) {
+        let client = self.client();
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .await_on_background(async move {
+                    // Add search relay to the relay pool
+                    for url in SEARCH_RELAYS.into_iter() {
+                        client.add_relay(url).await.ok();
+                    }
+
+                    // Add bootstrap relay to the relay pool
+                    for url in BOOTSTRAP_RELAYS.into_iter() {
+                        client.add_relay(url).await.ok();
+                    }
+
+                    // Connect to all added relays
+                    client
+                        .connect()
+                        .and_wait(Duration::from_secs(TIMEOUT))
+                        .await;
+                })
+                .await;
+
+            // Update the state
+            this.update(cx, |this, cx| {
+                this.set_connected(cx);
+                this.get_signer(cx);
+            })?;
+
+            Ok(())
+        }));
+    }
+
+    /// Handle nostr notifications
+    fn handle_notifications(&mut self, cx: &mut Context<Self>) {
+        let client = self.client();
+        let gossip = self.gossip.downgrade();
 
         // Channel for communication between nostr and gpui
         let (tx, rx) = flume::bounded::<Event>(2048);
 
-        let mut subscriptions = vec![];
-        let mut tasks = vec![];
-
-        subscriptions.push(
-            // Observe the identity entity
-            cx.observe(&identity, |this, state, cx| {
-                if state.read(cx).has_public_key() {
-                    match state.read(cx).relay_list_state() {
-                        RelayState::Initial => {
-                            this.get_relay_list(cx);
-                        }
-                        RelayState::Set => {
-                            if state.read(cx).messaging_relays_state() == RelayState::Initial {
-                                this.get_profile(cx);
-                                this.get_messaging_relays(cx);
-                            };
-                        }
-                        _ => {}
-                    }
-                }
-            }),
-        );
-
-        tasks.push(
+        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             // Handle nostr notifications
-            cx.background_spawn({
-                let client = client.clone();
+            let mut notifications = client.notifications();
+            let mut processed_events = HashSet::new();
 
-                async move { Self::handle_notifications(&client, &tx).await }
-            }),
-        );
+            while let Some(notification) = notifications.next().await {
+                if let ClientNotification::Message {
+                    message:
+                        RelayMessage::Event {
+                            event,
+                            subscription_id,
+                        },
+                    ..
+                } = notification
+                {
+                    // Skip if the event has already been processed
+                    if !processed_events.insert(event.id) {
+                        continue;
+                    }
 
-        tasks.push(
-            // Update GPUI states
-            cx.spawn(async move |_this, cx| {
-                while let Ok(event) = rx.recv_async().await {
                     match event.kind {
                         Kind::RelayList => {
-                            async_gossip.update(cx, |this, cx| {
-                                this.insert_relays(&event);
-                                cx.notify();
-                            })?;
+                            // Automatically get messaging relays for each member when the user opens a room
+                            if subscription_id.as_str().starts_with("room-") {
+                                get_adv_events_by(&client, event.as_ref()).await?;
+                            }
+
+                            tx.send_async(event.into_owned()).await?;
                         }
                         Kind::InboxRelays => {
-                            async_gossip.update(cx, |this, cx| {
-                                this.insert_messaging_relays(&event);
-                                cx.notify();
-                            })?;
+                            tx.send_async(event.into_owned()).await?;
                         }
                         _ => {}
                     }
                 }
+            }
 
-                Ok(())
-            }),
-        );
+            Ok(())
+        });
 
-        Self {
-            client,
-            app_keys,
-            identity,
-            gossip,
-            _subscriptions: subscriptions,
-            tasks,
-        }
-    }
+        // Run task in the background
+        task.detach();
 
-    /// Handle nostr notifications
-    async fn handle_notifications(client: &Client, tx: &flume::Sender<Event>) -> Result<(), Error> {
-        // Add bootstrap relay to the relay pool
-        for url in BOOTSTRAP_RELAYS.into_iter() {
-            client.add_relay(url).await?;
-        }
-
-        // Add search relay to the relay pool
-        for url in SEARCH_RELAYS.into_iter() {
-            client.add_relay(url).await?;
-        }
-
-        // Connect to all added relays
-        client.connect().await;
-
-        // Handle nostr notifications
-        let mut notifications = client.notifications();
-        let mut processed_events = HashSet::new();
-
-        while let Ok(notification) = notifications.recv().await {
-            if let RelayPoolNotification::Message { message, relay_url } = notification {
-                match message {
-                    RelayMessage::Event {
-                        event,
-                        subscription_id,
-                    } => {
-                        if !processed_events.insert(event.id) {
-                            // Skip if the event has already been processed
-                            continue;
-                        }
-
-                        match event.kind {
-                            Kind::RelayList => {
-                                // Automatically get messaging relays for each member when the user opens a room
-                                if subscription_id.as_str().starts_with("room-") {
-                                    Self::get_adv_events_by(client, event.as_ref()).await?;
-                                }
-
-                                tx.send_async(event.into_owned()).await?;
-                            }
-                            Kind::InboxRelays => {
-                                tx.send_async(event.into_owned()).await?;
-                            }
-                            _ => {}
-                        }
+        self.tasks.push(cx.spawn(async move |_this, cx| {
+            while let Ok(event) = rx.recv_async().await {
+                match event.kind {
+                    Kind::RelayList => {
+                        gossip.update(cx, |this, cx| {
+                            this.insert_relays(&event);
+                            cx.notify();
+                        })?;
                     }
-                    RelayMessage::Ok {
-                        event_id, message, ..
-                    } => {
-                        let msg = MachineReadablePrefix::parse(&message);
-                        let mut tracker = tracker().write().await;
-
-                        // Handle authentication messages
-                        if let Some(MachineReadablePrefix::AuthRequired) = msg {
-                            // Keep track of events that need to be resent after authentication
-                            tracker.add_to_pending(event_id, relay_url);
-                        } else {
-                            // Keep track of events sent by Coop
-                            tracker.sent(event_id)
-                        }
+                    Kind::InboxRelays => {
+                        gossip.update(cx, |this, cx| {
+                            this.insert_messaging_relays(&event);
+                            cx.notify();
+                        })?;
                     }
                     _ => {}
                 }
             }
-        }
 
-        Ok(())
-    }
-
-    /// Automatically get messaging relays and encryption announcement from a received relay list
-    async fn get_adv_events_by(client: &Client, event: &Event) -> Result<(), Error> {
-        // Subscription options
-        let opts = SubscribeAutoCloseOptions::default()
-            .timeout(Some(Duration::from_secs(TIMEOUT)))
-            .exit_policy(ReqExitPolicy::ExitOnEOSE);
-
-        // Extract write relays from event
-        let write_relays: Vec<&RelayUrl> = nip65::extract_relay_list(event)
-            .filter_map(|(url, metadata)| {
-                if metadata.is_none() || metadata == &Some(RelayMetadata::Write) {
-                    Some(url)
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        // Ensure relay connections
-        for relay in write_relays.iter() {
-            client.add_relay(*relay).await?;
-            client.connect_relay(*relay).await?;
-        }
-
-        // Construct filter for inbox relays
-        let inbox = Filter::new()
-            .kind(Kind::InboxRelays)
-            .author(event.pubkey)
-            .limit(1);
-
-        // Construct filter for encryption announcement
-        let announcement = Filter::new()
-            .kind(Kind::Custom(10044))
-            .author(event.pubkey)
-            .limit(1);
-
-        client
-            .subscribe_to(write_relays, vec![inbox, announcement], Some(opts))
-            .await?;
-
-        Ok(())
-    }
-
-    /// Get or create a new app keys
-    fn create_or_init_app_keys() -> Result<Keys, Error> {
-        let dir = config_dir().join(".app_keys");
-        let content = match std::fs::read(&dir) {
-            Ok(content) => content,
-            Err(_) => {
-                // Generate new keys if file doesn't exist
-                let keys = Keys::generate();
-                let secret_key = keys.secret_key();
-
-                std::fs::create_dir_all(dir.parent().unwrap())?;
-                std::fs::write(&dir, secret_key.to_secret_bytes())?;
-
-                return Ok(keys);
-            }
-        };
-        let secret_key = SecretKey::from_slice(&content)?;
-        let keys = Keys::new(secret_key);
-
-        Ok(keys)
+            Ok(())
+        }));
     }
 
     /// Get the nostr client
@@ -317,14 +238,29 @@ impl NostrRegistry {
         self.client.clone()
     }
 
+    /// Get the nostr signer
+    pub fn signer(&self) -> Arc<CoopSigner> {
+        self.signer.clone()
+    }
+
     /// Get the app keys
     pub fn app_keys(&self) -> &Keys {
         &self.app_keys
     }
 
-    /// Get current identity
-    pub fn identity(&self) -> Entity<Identity> {
-        self.identity.clone()
+    /// Get the connected status of the client
+    pub fn connected(&self) -> bool {
+        self.connected
+    }
+
+    /// Get the creating status
+    pub fn creating(&self) -> bool {
+        self.creating
+    }
+
+    /// Get the relay list state
+    pub fn relay_list_state(&self) -> RelayState {
+        self.relay_list_state.clone()
     }
 
     /// Get a relay hint (messaging relay) for a given public key
@@ -344,8 +280,7 @@ impl NostrRegistry {
         cx.background_spawn(async move {
             // Ensure relay connections
             for url in relays.iter() {
-                client.add_relay(url).await.ok();
-                client.connect_relay(url).await.ok();
+                client.add_relay(url).and_connect().await.ok();
             }
 
             relays
@@ -360,8 +295,7 @@ impl NostrRegistry {
         cx.background_spawn(async move {
             // Ensure relay connections
             for url in relays.iter() {
-                client.add_relay(url).await.ok();
-                client.connect_relay(url).await.ok();
+                client.add_relay(url).and_connect().await.ok();
             }
 
             relays
@@ -376,97 +310,259 @@ impl NostrRegistry {
         cx.background_spawn(async move {
             // Ensure relay connections
             for url in relays.iter() {
-                client.add_relay(url).await.ok();
-                client.connect_relay(url).await.ok();
+                client.add_relay(url).and_connect().await.ok();
             }
 
             relays
         })
     }
 
+    /// Set the connected status of the client
+    fn set_connected(&mut self, cx: &mut Context<Self>) {
+        self.connected = true;
+        cx.notify();
+    }
+
+    /// Get local stored signer
+    fn get_signer(&mut self, cx: &mut Context<Self>) {
+        let read_credential = cx.read_credentials(KEYRING);
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            match read_credential.await {
+                Ok(Some((_user, secret))) => {
+                    let secret = SecretKey::from_slice(&secret)?;
+                    let keys = Keys::new(secret);
+
+                    this.update(cx, |this, cx| {
+                        this.set_signer(keys, false, cx);
+                    })?;
+                }
+                _ => {
+                    this.update(cx, |this, cx| {
+                        this.get_bunker(cx);
+                    })?;
+                }
+            }
+
+            Ok(())
+        }));
+    }
+
+    /// Get local stored bunker connection
+    fn get_bunker(&mut self, cx: &mut Context<Self>) {
+        let client = self.client();
+        let app_keys = self.app_keys().clone();
+        let timeout = Duration::from_secs(NOSTR_CONNECT_TIMEOUT);
+
+        let task: Task<Result<NostrConnect, Error>> = cx.background_spawn(async move {
+            log::info!("Getting bunker connection");
+
+            let filter = Filter::new()
+                .kind(Kind::ApplicationSpecificData)
+                .identifier("coop:account")
+                .limit(1);
+
+            if let Some(event) = client.database().query(filter).await?.first_owned() {
+                let uri = NostrConnectUri::parse(event.content)?;
+                let signer = NostrConnect::new(uri.clone(), app_keys.clone(), timeout, None)?;
+
+                Ok(signer)
+            } else {
+                Err(anyhow!("No account found"))
+            }
+        });
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            match task.await {
+                Ok(signer) => {
+                    this.update(cx, |this, cx| {
+                        this.set_signer(signer, true, cx);
+                    })
+                    .ok();
+                }
+                Err(e) => {
+                    log::warn!("Failed to get bunker: {e}");
+                    // Create a new identity if no stored bunker exists
+                    this.update(cx, |this, cx| {
+                        this.set_default_signer(cx);
+                    })
+                    .ok();
+                }
+            }
+
+            Ok(())
+        }));
+    }
+
     /// Set the signer for the nostr client and verify the public key
-    pub fn set_signer<T>(&mut self, signer: T, cx: &mut Context<Self>)
+    pub fn set_signer<T>(&mut self, new: T, owned: bool, cx: &mut Context<Self>)
     where
         T: NostrSigner + 'static,
     {
         let client = self.client();
-        let identity = self.identity.downgrade();
+        let signer = self.signer();
 
         // Create a task to update the signer and verify the public key
-        let task: Task<Result<PublicKey, Error>> = cx.background_spawn(async move {
+        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             // Update signer
-            client.set_signer(signer).await;
+            signer.switch(new, owned).await;
+
+            // Unsubscribe from all subscriptions
+            client.unsubscribe_all().await?;
 
             // Verify signer
-            let signer = client.signer().await?;
+            let signer = client.signer().context("Signer not found")?;
             let public_key = signer.get_public_key().await?;
+            log::info!("Signer's public key: {}", public_key);
 
-            Ok(public_key)
+            Ok(())
         });
 
-        self.tasks.push(cx.spawn(async move |_this, cx| {
-            match task.await {
-                Ok(public_key) => {
-                    identity.update(cx, |this, cx| {
-                        this.set_public_key(public_key);
-                        cx.notify();
-                    })?;
-                }
-                Err(e) => {
-                    log::error!("Failed to set signer: {e}");
-                }
-            };
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            // set signer
+            task.await?;
+
+            // Update states
+            this.update(cx, |this, cx| {
+                this.ensure_relay_list(cx);
+            })?;
 
             Ok(())
         }));
     }
 
-    /// Unset the current signer
-    pub fn unset_signer(&mut self, cx: &mut Context<Self>) {
+    /// Create a new identity
+    fn set_default_signer(&mut self, cx: &mut Context<Self>) {
         let client = self.client();
-        let async_identity = self.identity.downgrade();
+        let keys = Keys::generate();
+        let async_keys = keys.clone();
 
-        self.tasks.push(cx.spawn(async move |_this, cx| {
-            // Unset the signer from nostr client
-            cx.background_executor()
-                .await_on_background(async move {
-                    client.unset_signer().await;
-                })
-                .await;
+        // Create a write credential task
+        let write_credential = cx.write_credentials(
+            KEYRING,
+            &keys.public_key().to_hex(),
+            &keys.secret_key().to_secret_bytes(),
+        );
 
-            // Unset the current identity
-            async_identity
-                .update(cx, |this, cx| {
-                    this.unset_public_key();
-                    cx.notify();
-                })
-                .ok();
+        // Set the creating signer status
+        self.set_creating_signer(true, cx);
+
+        // Run async tasks in background
+        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
+            let signer = async_keys.into_nostr_signer();
+
+            // Get default relay list
+            let relay_list = default_relay_list();
+
+            // Publish relay list event
+            let event = EventBuilder::relay_list(relay_list).sign(&signer).await?;
+            client
+                .send_event(&event)
+                .broadcast()
+                .ok_timeout(Duration::from_secs(TIMEOUT))
+                .await?;
+
+            // Construct the default metadata
+            let name = petname::petname(2, "-").unwrap_or("Cooper".to_string());
+            let avatar = Url::parse(&format!("https://avatar.vercel.sh/{name}")).unwrap();
+            let metadata = Metadata::new().display_name(&name).picture(avatar);
+
+            // Publish metadata event
+            let event = EventBuilder::metadata(&metadata).sign(&signer).await?;
+            client
+                .send_event(&event)
+                .ok_timeout(Duration::from_secs(TIMEOUT))
+                .ack_policy(AckPolicy::none())
+                .await?;
+
+            // Construct the default contact list
+            let contacts = vec![Contact::new(PublicKey::parse(COOP_PUBKEY).unwrap())];
+
+            // Publish contact list event
+            let event = EventBuilder::contact_list(contacts).sign(&signer).await?;
+            client
+                .send_event(&event)
+                .broadcast()
+                .ok_timeout(Duration::from_secs(TIMEOUT))
+                .ack_policy(AckPolicy::none())
+                .await?;
+
+            // Construct the default messaging relay list
+            let relays = default_messaging_relays();
+
+            // Publish messaging relay list event
+            let event = EventBuilder::nip17_relay_list(relays).sign(&signer).await?;
+            client
+                .send_event(&event)
+                .ok_timeout(Duration::from_secs(TIMEOUT))
+                .ack_policy(AckPolicy::none())
+                .await?;
+
+            // Write user's credentials to the system keyring
+            write_credential.await?;
+
+            Ok(())
+        });
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            // Wait for the task to complete
+            task.await?;
+
+            this.update(cx, |this, cx| {
+                this.set_creating_signer(false, cx);
+                this.set_signer(keys, false, cx);
+            })?;
 
             Ok(())
         }));
     }
 
-    // Get relay list for current user
-    fn get_relay_list(&mut self, cx: &mut Context<Self>) {
-        let client = self.client();
-        let async_identity = self.identity.downgrade();
-        let public_key = self.identity().read(cx).public_key();
+    /// Set whether Coop is creating a new signer
+    fn set_creating_signer(&mut self, creating: bool, cx: &mut Context<Self>) {
+        self.creating = creating;
+        cx.notify();
+    }
 
-        let task: Task<Result<RelayState, Error>> = cx.background_spawn(async move {
+    fn ensure_relay_list(&mut self, cx: &mut Context<Self>) {
+        let task = self.verify_relay_list(cx);
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let result = task.await?;
+
+            // Update state
+            this.update(cx, |this, cx| {
+                this.relay_list_state = result;
+                cx.notify();
+            })?;
+
+            Ok(())
+        }));
+    }
+
+    // Verify relay list for current user
+    fn verify_relay_list(&mut self, cx: &mut Context<Self>) -> Task<Result<RelayState, Error>> {
+        let client = self.client();
+
+        cx.background_spawn(async move {
+            let signer = client.signer().context("Signer not found")?;
+            let public_key = signer.get_public_key().await?;
+
             let filter = Filter::new()
                 .kind(Kind::RelayList)
                 .author(public_key)
                 .limit(1);
 
+            // Stream events from the bootstrap relays
             let mut stream = client
-                .stream_events_from(BOOTSTRAP_RELAYS, vec![filter], Duration::from_secs(TIMEOUT))
+                .stream_events(filter)
+                .timeout(Duration::from_secs(TIMEOUT))
                 .await?;
 
             while let Some((_url, res)) = stream.next().await {
                 match res {
                     Ok(event) => {
                         log::info!("Received relay list event: {event:?}");
-                        return Ok(RelayState::Set);
+                        return Ok(RelayState::Configured);
                     }
                     Err(e) => {
                         log::error!("Failed to receive relay list event: {e}");
@@ -474,122 +570,348 @@ impl NostrRegistry {
                 }
             }
 
-            Ok(RelayState::NotSet)
-        });
+            Ok(RelayState::NotConfigured)
+        })
+    }
 
-        self.tasks.push(cx.spawn(async move |_this, cx| {
-            match task.await {
-                Ok(state) => {
-                    async_identity
-                        .update(cx, |this, cx| {
-                            this.set_relay_list_state(state);
-                            cx.notify();
-                        })
-                        .ok();
-                }
-                Err(e) => {
-                    log::error!("Failed to get relay list: {e}");
-                }
-            }
+    /// Generate a direct nostr connection initiated by the client
+    pub fn client_connect(&self, relay: Option<RelayUrl>) -> (NostrConnect, NostrConnectUri) {
+        let app_keys = self.app_keys();
+        let timeout = Duration::from_secs(NOSTR_CONNECT_TIMEOUT);
+
+        // Determine the relay will be used for Nostr Connect
+        let relay = match relay {
+            Some(relay) => relay,
+            None => RelayUrl::parse(NOSTR_CONNECT_RELAY).unwrap(),
+        };
+
+        // Generate the nostr connect uri
+        let uri = NostrConnectUri::client(app_keys.public_key(), vec![relay], CLIENT_NAME);
+
+        // Generate the nostr connect
+        let mut signer = NostrConnect::new(uri.clone(), app_keys.clone(), timeout, None).unwrap();
+
+        // Handle the auth request
+        signer.auth_url_handler(CoopAuthUrlHandler);
+
+        (signer, uri)
+    }
+
+    /// Store the bunker connection for the next login
+    pub fn persist_bunker(&mut self, uri: NostrConnectUri, cx: &mut App) {
+        let client = self.client();
+        let rng_keys = Keys::generate();
+
+        self.tasks.push(cx.background_spawn(async move {
+            // Construct the event for application-specific data
+            let event = EventBuilder::new(Kind::ApplicationSpecificData, uri.to_string())
+                .tag(Tag::identifier("coop:account"))
+                .sign(&rng_keys)
+                .await?;
+
+            // Store the event in the database
+            client.database().save_event(&event).await?;
 
             Ok(())
         }));
     }
 
-    /// Get profile and contact list for current user
-    fn get_profile(&mut self, cx: &mut Context<Self>) {
+    /// Get the public key of a NIP-05 address
+    pub fn get_address(&self, addr: Nip05Address, cx: &App) -> Task<Result<PublicKey, Error>> {
         let client = self.client();
-        let public_key = self.identity().read(cx).public_key();
-        let write_relays = self.write_relays(&public_key, cx);
+        let http_client = cx.http_client();
 
-        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let mut urls = vec![];
-            urls.extend(write_relays.await);
-            urls.extend(
-                BOOTSTRAP_RELAYS
-                    .iter()
-                    .filter_map(|url| RelayUrl::parse(url).ok()),
-            );
+        cx.background_spawn(async move {
+            let profile = addr.profile(&http_client).await?;
+            let public_key = profile.public_key;
 
-            // Construct subscription options
             let opts = SubscribeAutoCloseOptions::default()
                 .exit_policy(ReqExitPolicy::ExitOnEOSE)
-                .timeout(Some(Duration::from_secs(TIMEOUT)));
+                .timeout(Some(Duration::from_secs(3)));
 
-            // Filter for metadata
-            let metadata = Filter::new()
-                .kind(Kind::Metadata)
-                .limit(1)
-                .author(public_key);
-
-            // Filter for contact list
-            let contact_list = Filter::new()
-                .kind(Kind::ContactList)
-                .limit(1)
-                .author(public_key);
-
-            client
-                .subscribe_to(urls, vec![metadata, contact_list], Some(opts))
-                .await?;
-
-            Ok(())
-        });
-
-        task.detach();
-    }
-
-    /// Get messaging relays for current user
-    fn get_messaging_relays(&mut self, cx: &mut Context<Self>) {
-        let client = self.client();
-        let async_identity = self.identity.downgrade();
-        let public_key = self.identity().read(cx).public_key();
-        let write_relays = self.write_relays(&public_key, cx);
-
-        let task: Task<Result<RelayState, Error>> = cx.background_spawn(async move {
-            let urls = write_relays.await;
-
-            // Construct the filter for inbox relays
+            // Construct the filter for the metadata event
             let filter = Filter::new()
-                .kind(Kind::InboxRelays)
+                .kind(Kind::Metadata)
                 .author(public_key)
                 .limit(1);
 
-            // Stream events from the write relays
+            // Construct target for subscription
+            let target = BOOTSTRAP_RELAYS
+                .into_iter()
+                .map(|relay| (relay, vec![filter.clone()]))
+                .collect::<HashMap<_, _>>();
+
+            client.subscribe(target).close_on(opts).await?;
+
+            Ok(public_key)
+        })
+    }
+
+    /// Perform a NIP-50 global search for user profiles based on a given query
+    pub fn search(&self, query: &str, cx: &App) -> Task<Result<Vec<PublicKey>, Error>> {
+        let client = self.client();
+        let query = query.to_string();
+
+        // Get the address task if the query is a valid NIP-05 address
+        let address_task = if let Ok(addr) = Nip05Address::parse(&query) {
+            Some(self.get_address(addr, cx))
+        } else {
+            None
+        };
+
+        cx.background_spawn(async move {
+            let mut results: Vec<PublicKey> = Vec::with_capacity(FIND_LIMIT);
+
+            // Return early if the query is a valid NIP-05 address
+            if let Some(task) = address_task {
+                if let Ok(public_key) = task.await {
+                    results.push(public_key);
+                    return Ok(results);
+                }
+            }
+
+            // Return early if the query is a valid public key
+            if let Ok(public_key) = PublicKey::parse(&query) {
+                results.push(public_key);
+                return Ok(results);
+            }
+
+            // Construct the filter for the search query
+            let filter = Filter::new()
+                .search(query.to_lowercase())
+                .kind(Kind::Metadata)
+                .limit(FIND_LIMIT);
+
+            // Construct target for subscription
+            let target = SEARCH_RELAYS
+                .into_iter()
+                .map(|relay| (relay, vec![filter.clone()]))
+                .collect::<HashMap<_, _>>();
+
+            // Stream events from the search relays
             let mut stream = client
-                .stream_events_from(urls, vec![filter], Duration::from_secs(TIMEOUT))
+                .stream_events(target)
+                .timeout(Duration::from_secs(TIMEOUT))
+                .await?;
+
+            // Collect the results
+            while let Some((_url, res)) = stream.next().await {
+                if let Ok(event) = res {
+                    results.push(event.pubkey);
+                }
+            }
+
+            if results.is_empty() {
+                return Err(anyhow!("No results for query {query}"));
+            }
+
+            Ok(results)
+        })
+    }
+
+    /// Perform a WoT (via Vertex) search for a given query.
+    pub fn wot_search(&self, query: &str, cx: &App) -> Task<Result<Vec<PublicKey>, Error>> {
+        let client = self.client();
+        let query = query.to_string();
+
+        cx.background_spawn(async move {
+            // Construct a vertex request event
+            let builder = EventBuilder::new(Kind::Custom(5315), "").tags(vec![
+                Tag::custom(TagKind::custom("param"), vec!["search", &query]),
+                Tag::custom(TagKind::custom("param"), vec!["limit", "10"]),
+            ]);
+            let event = client.sign_event_builder(builder).await?;
+
+            // Send the event to vertex relays
+            let output = client.send_event(&event).to(WOT_RELAYS).await?;
+
+            // Construct a filter to get the response or error from vertex
+            let filter = Filter::new()
+                .kinds(vec![Kind::Custom(6315), Kind::Custom(7000)])
+                .event(output.id().to_owned());
+
+            // Construct target for subscription
+            let target = WOT_RELAYS
+                .into_iter()
+                .map(|relay| (relay, vec![filter.clone()]))
+                .collect::<HashMap<_, _>>();
+
+            // Stream events from the wot relays
+            let mut stream = client
+                .stream_events(target)
+                .timeout(Duration::from_secs(TIMEOUT))
                 .await?;
 
             while let Some((_url, res)) = stream.next().await {
-                match res {
-                    Ok(event) => {
-                        log::info!("Received messaging relays event: {event:?}");
-                        return Ok(RelayState::Set);
-                    }
-                    Err(e) => {
-                        log::error!("Failed to get messaging relays: {e}");
+                if let Ok(event) = res {
+                    match event.kind {
+                        Kind::Custom(6315) => {
+                            let content: serde_json::Value = serde_json::from_str(&event.content)?;
+                            let pubkeys: Vec<PublicKey> = content
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .filter_map(|item| item.as_object())
+                                .filter_map(|obj| obj.get("pubkey").and_then(|v| v.as_str()))
+                                .filter_map(|pubkey_str| PublicKey::parse(pubkey_str).ok())
+                                .collect();
+
+                            return Ok(pubkeys);
+                        }
+                        Kind::Custom(7000) => {
+                            return Err(anyhow!("Search error"));
+                        }
+                        _ => {}
                     }
                 }
             }
 
-            Ok(RelayState::NotSet)
-        });
+            Err(anyhow!("No results for query: {query}"))
+        })
+    }
+}
 
-        self.tasks.push(cx.spawn(async move |_this, cx| {
-            match task.await {
-                Ok(state) => {
-                    async_identity
-                        .update(cx, |this, cx| {
-                            this.set_messaging_relays_state(state);
-                            cx.notify();
-                        })
-                        .ok();
-                }
-                Err(e) => {
-                    log::error!("Failed to get messaging relays: {e}");
-                }
+/// Automatically get messaging relays and encryption announcement from a received relay list
+async fn get_adv_events_by(client: &Client, event: &Event) -> Result<(), Error> {
+    // Subscription options
+    let opts = SubscribeAutoCloseOptions::default()
+        .timeout(Some(Duration::from_secs(TIMEOUT)))
+        .exit_policy(ReqExitPolicy::ExitOnEOSE);
+
+    // Extract write relays from event
+    let write_relays: Vec<&RelayUrl> = nip65::extract_relay_list(event)
+        .filter_map(|(url, metadata)| {
+            if metadata.is_none() || metadata == &Some(RelayMetadata::Write) {
+                Some(url)
+            } else {
+                None
             }
+        })
+        .collect();
 
+    // Ensure relay connections
+    for relay in write_relays.iter() {
+        client.add_relay(*relay).await?;
+        client.connect_relay(*relay).await?;
+    }
+
+    // Construct filter for inbox relays
+    let inbox = Filter::new()
+        .kind(Kind::InboxRelays)
+        .author(event.pubkey)
+        .limit(1);
+
+    // Construct filter for encryption announcement
+    let announcement = Filter::new()
+        .kind(Kind::Custom(10044))
+        .author(event.pubkey)
+        .limit(1);
+
+    // Construct target for subscription
+    let target = write_relays
+        .into_iter()
+        .map(|relay| (relay, vec![inbox.clone(), announcement.clone()]))
+        .collect::<HashMap<_, _>>();
+
+    client.subscribe(target).close_on(opts).await?;
+
+    Ok(())
+}
+
+/// Get or create a new app keys
+fn get_or_init_app_keys() -> Result<Keys, Error> {
+    let dir = config_dir().join(".app_keys");
+
+    let content = match std::fs::read(&dir) {
+        Ok(content) => content,
+        Err(_) => {
+            // Generate new keys if file doesn't exist
+            let keys = Keys::generate();
+            let secret_key = keys.secret_key();
+
+            // Create directory and write secret key
+            std::fs::create_dir_all(dir.parent().unwrap())?;
+            std::fs::write(&dir, secret_key.to_secret_bytes())?;
+
+            // Set permissions to readonly
+            let mut perms = std::fs::metadata(&dir)?.permissions();
+            perms.set_mode(0o400);
+            std::fs::set_permissions(&dir, perms)?;
+
+            return Ok(keys);
+        }
+    };
+
+    let secret_key = SecretKey::from_slice(&content)?;
+    let keys = Keys::new(secret_key);
+
+    Ok(keys)
+}
+
+fn default_relay_list() -> Vec<(RelayUrl, Option<RelayMetadata>)> {
+    vec![
+        (
+            RelayUrl::parse("wss://relay.gulugulu.moe").unwrap(),
+            Some(RelayMetadata::Write),
+        ),
+        (
+            RelayUrl::parse("wss://relay.primal.net/").unwrap(),
+            Some(RelayMetadata::Write),
+        ),
+        (
+            RelayUrl::parse("wss://relay.damus.io/").unwrap(),
+            Some(RelayMetadata::Read),
+        ),
+        (
+            RelayUrl::parse("wss://nos.lol/").unwrap(),
+            Some(RelayMetadata::Read),
+        ),
+    ]
+}
+
+fn default_messaging_relays() -> Vec<RelayUrl> {
+    vec![
+        //RelayUrl::parse("wss://auth.nostr1.com/").unwrap(),
+        RelayUrl::parse("wss://nip17.com/").unwrap(),
+    ]
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum RelayState {
+    #[default]
+    Idle,
+    Checking,
+    NotConfigured,
+    Configured,
+}
+
+impl RelayState {
+    pub fn idle(&self) -> bool {
+        matches!(self, RelayState::Idle)
+    }
+
+    pub fn checking(&self) -> bool {
+        matches!(self, RelayState::Checking)
+    }
+
+    pub fn not_configured(&self) -> bool {
+        matches!(self, RelayState::NotConfigured)
+    }
+
+    pub fn configured(&self) -> bool {
+        matches!(self, RelayState::Configured)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CoopAuthUrlHandler;
+
+impl AuthUrlHandler for CoopAuthUrlHandler {
+    #[allow(mismatched_lifetime_syntaxes)]
+    fn on_auth_url(&self, auth_url: Url) -> BoxedFuture<Result<()>> {
+        Box::pin(async move {
+            webbrowser::open(auth_url.as_str())?;
             Ok(())
-        }));
+        })
     }
 }

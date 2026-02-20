@@ -1,33 +1,36 @@
+use std::collections::HashSet;
 use std::ops::Range;
 use std::time::Duration;
 
-use anyhow::{anyhow, Error};
+use anyhow::{Context as AnyhowContext, Error};
 use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
-use common::{DebouncedDelay, RenderedTimestamp, TextUtils, BOOTSTRAP_RELAYS, SEARCH_RELAYS};
+use common::{DebouncedDelay, RenderedTimestamp};
+use entry::RoomEntry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    deferred, div, relative, uniform_list, App, AppContext, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render,
-    RetainAllImageCache, SharedString, Styled, Subscription, Task, Window,
+    div, uniform_list, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    IntoElement, ParentElement, Render, RetainAllImageCache, SharedString, Styled, Subscription,
+    Task, UniformListScrollHandle, Window,
 };
-use gpui_tokio::Tokio;
-use list_item::RoomListItem;
 use nostr_sdk::prelude::*;
+use person::PersonRegistry;
 use smallvec::{smallvec, SmallVec};
-use state::{NostrRegistry, GIFTWRAP_SUBSCRIPTION};
-use theme::ActiveTheme;
+use state::{NostrRegistry, FIND_DELAY};
+use theme::{ActiveTheme, TITLEBAR_HEIGHT};
 use ui::button::{Button, ButtonVariants};
+use ui::divider::Divider;
 use ui::dock_area::panel::{Panel, PanelEvent};
+use ui::indicator::Indicator;
 use ui::input::{InputEvent, InputState, TextInput};
-use ui::popup_menu::PopupMenuExt;
-use ui::{h_flex, v_flex, ContextModal, Icon, IconName, Selectable, Sizable, StyledExt};
+use ui::notification::Notification;
+use ui::scroll::Scrollbar;
+use ui::{
+    h_flex, v_flex, Disableable, Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension,
+};
 
-use crate::actions::{RelayStatus, Reload};
+mod entry;
 
-mod list_item;
-
-const FIND_DELAY: u64 = 600;
-const FIND_LIMIT: usize = 20;
+const INPUT_PLACEHOLDER: &str = "Find or start a conversation";
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Sidebar> {
     cx.new(|cx| Sidebar::new(window, cx))
@@ -36,67 +39,69 @@ pub fn init(window: &mut Window, cx: &mut App) -> Entity<Sidebar> {
 /// Sidebar.
 pub struct Sidebar {
     name: SharedString,
-
-    /// Focus handle for the sidebar
     focus_handle: FocusHandle,
+    scroll_handle: UniformListScrollHandle,
 
     /// Image cache
     image_cache: Entity<RetainAllImageCache>,
 
-    /// Search results
-    search_results: Entity<Option<Vec<Entity<Room>>>>,
-
-    /// Async search operation
-    search_task: Option<Task<()>>,
-
-    /// Search input state
+    /// Find input state
     find_input: Entity<InputState>,
 
-    /// Debounced delay for search input
+    /// Debounced delay for find input
     find_debouncer: DebouncedDelay<Self>,
 
-    /// Whether searching is in progress
+    /// Whether a search is in progress
     finding: bool,
 
-    /// New request flag
-    new_request: bool,
+    /// Whether the find input is focused
+    find_focused: bool,
 
-    /// Current chat room filter
-    active_filter: Entity<RoomKind>,
+    /// Find results
+    find_results: Entity<Option<Vec<PublicKey>>>,
+
+    /// Async find operation
+    find_task: Option<Task<Result<(), Error>>>,
+
+    /// Whether there are search results
+    has_search: bool,
+
+    /// Whether there are new chat requests
+    new_requests: bool,
+
+    /// Selected public keys
+    selected_pkeys: Entity<HashSet<PublicKey>>,
+
+    /// Chatroom filter
+    filter: Entity<RoomKind>,
+
+    /// User's contacts
+    contact_list: Entity<Option<Vec<PublicKey>>>,
+
+    /// Async tasks
+    tasks: SmallVec<[Task<Result<(), Error>>; 1]>,
 
     /// Event subscriptions
-    _subscriptions: SmallVec<[Subscription; 2]>,
+    _subscriptions: SmallVec<[Subscription; 1]>,
 }
 
 impl Sidebar {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let active_filter = cx.new(|_| RoomKind::Ongoing);
-        let search_results = cx.new(|_| None);
-
-        // Define the find input state
+        let chat = ChatRegistry::global(cx);
+        let filter = cx.new(|_| RoomKind::Ongoing);
+        let contact_list = cx.new(|_| None);
+        let selected_pkeys = cx.new(|_| HashSet::new());
+        let find_results = cx.new(|_| None);
         let find_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Find or start a conversation")
+                .placeholder(INPUT_PLACEHOLDER)
                 .clean_on_escape()
         });
-
-        // Get the chat registry
-        let chat = ChatRegistry::global(cx);
 
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
-            // Subscribe for registry new events
-            cx.subscribe_in(&chat, window, move |this, _s, event, _window, cx| {
-                if event == &ChatEvent::Ping {
-                    this.new_request = true;
-                    cx.notify();
-                };
-            }),
-        );
-
-        subscriptions.push(
-            // Subscribe for find input events
+            // Subscribe to find input events
             cx.subscribe_in(&find_input, window, |this, state, event, window, cx| {
                 let delay = Duration::from_millis(FIND_DELAY);
 
@@ -106,8 +111,8 @@ impl Sidebar {
                     }
                     InputEvent::Change => {
                         if state.read(cx).value().is_empty() {
-                            // Clear the result when input is empty
-                            this.clear(window, cx);
+                            // Clear results when input is empty
+                            this.reset(window, cx);
                         } else {
                             // Run debounced search
                             this.find_debouncer
@@ -116,7 +121,23 @@ impl Sidebar {
                                 });
                         }
                     }
-                    _ => {}
+                    InputEvent::Focus => {
+                        this.set_input_focus(window, cx);
+                        this.get_contact_list(window, cx);
+                    }
+                    InputEvent::Blur => {
+                        this.set_input_focus(window, cx);
+                    }
+                };
+            }),
+        );
+
+        subscriptions.push(
+            // Subscribe for registry new events
+            cx.subscribe_in(&chat, window, move |this, _s, event, _window, cx| {
+                if event == &ChatEvent::Ping {
+                    this.new_requests = true;
+                    cx.notify();
                 };
             }),
         );
@@ -124,72 +145,67 @@ impl Sidebar {
         Self {
             name: "Sidebar".into(),
             focus_handle: cx.focus_handle(),
+            scroll_handle: UniformListScrollHandle::new(),
             image_cache: RetainAllImageCache::new(cx),
-            find_debouncer: DebouncedDelay::new(),
-            finding: false,
-            new_request: false,
-            active_filter,
             find_input,
-            search_results,
-            search_task: None,
+            find_debouncer: DebouncedDelay::new(),
+            find_results,
+            find_task: None,
+            find_focused: false,
+            finding: false,
+            has_search: false,
+            new_requests: false,
+            contact_list,
+            selected_pkeys,
+            filter,
+            tasks: smallvec![],
             _subscriptions: subscriptions,
         }
     }
 
-    async fn nip50(client: &Client, query: &str) -> Result<Vec<Event>, Error> {
-        let signer = client.signer().await?;
-        let public_key = signer.get_public_key().await?;
+    /// Get the contact list.
+    fn get_contact_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
 
-        let filter = Filter::new()
-            .kind(Kind::Metadata)
-            .search(query.to_lowercase())
-            .limit(FIND_LIMIT);
+        let task: Task<Result<HashSet<PublicKey>, Error>> = cx.background_spawn(async move {
+            let signer = client.signer().context("Signer not found")?;
+            let public_key = signer.get_public_key().await?;
+            let contacts = client.database().contacts_public_keys(public_key).await?;
 
-        let mut stream = client
-            .stream_events_from(SEARCH_RELAYS, filter, Duration::from_secs(3))
-            .await?;
+            Ok(contacts)
+        });
 
-        let mut results: Vec<Event> = Vec::with_capacity(FIND_LIMIT);
-
-        while let Some((_url, event)) = stream.next().await {
-            if let Ok(event) = event {
-                // Skip if author is match current user
-                if event.pubkey == public_key {
-                    continue;
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            match task.await {
+                Ok(contacts) => {
+                    this.update(cx, |this, cx| {
+                        this.set_contact_list(contacts, cx);
+                    })?;
                 }
-
-                // Skip if the event has already been added
-                if results.iter().any(|this| this.pubkey == event.pubkey) {
-                    continue;
+                Err(e) => {
+                    cx.update(|window, cx| {
+                        window.push_notification(Notification::error(e.to_string()), cx);
+                    })?;
                 }
+            };
 
-                results.push(event);
-            }
-        }
-
-        if results.is_empty() {
-            return Err(anyhow!("No results for query {query}"));
-        }
-
-        // Get all public keys
-        let public_keys: Vec<PublicKey> = results.iter().map(|event| event.pubkey).collect();
-
-        // Fetch metadata and contact lists if public keys is not empty
-        if !public_keys.is_empty() {
-            let opts = SubscribeAutoCloseOptions::default().exit_policy(ReqExitPolicy::ExitOnEOSE);
-            let filter = Filter::new()
-                .kinds(vec![Kind::Metadata, Kind::ContactList])
-                .limit(public_keys.len() * 2)
-                .authors(public_keys);
-
-            client
-                .subscribe_to(BOOTSTRAP_RELAYS, filter, Some(opts))
-                .await?;
-        }
-
-        Ok(results)
+            Ok(())
+        }));
     }
 
+    /// Set the contact list with new contacts.
+    fn set_contact_list<I>(&mut self, contacts: I, cx: &mut Context<Self>)
+    where
+        I: IntoIterator<Item = PublicKey>,
+    {
+        self.contact_list.update(cx, |this, cx| {
+            *this = Some(contacts.into_iter().collect());
+            cx.notify();
+        });
+    }
+
+    /// Trigger the debounced search
     fn debounced_search(&self, window: &mut Window, cx: &mut Context<Self>) -> Task<()> {
         cx.spawn_in(window, async move |this, cx| {
             this.update_in(cx, |this, window, cx| {
@@ -199,188 +215,40 @@ impl Sidebar {
         })
     }
 
-    fn search_by_nip50(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-        let public_key = nostr.read(cx).identity().read(cx).public_key();
-
-        let query = query.to_owned();
-
-        self.search_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = Self::nip50(&client, &query).await;
-
-            this.update_in(cx, |this, window, cx| {
-                match result {
-                    Ok(results) => {
-                        let rooms = results
-                            .into_iter()
-                            .map(|event| {
-                                cx.new(|_| Room::new(None, public_key, vec![event.pubkey]))
-                            })
-                            .collect();
-
-                        this.set_results(rooms, cx);
-                    }
-                    Err(e) => {
-                        window.push_notification(e.to_string(), cx);
-                    }
-                };
-                this.set_finding(false, window, cx);
-            })
-            .ok();
-        }));
-    }
-
-    fn search_by_nip05(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-        let address = query.to_owned();
-
-        let task = Tokio::spawn(cx, async move {
-            match common::nip05_profile(&address).await {
-                Ok(profile) => {
-                    let signer = client.signer().await?;
-                    let public_key = signer.get_public_key().await?;
-                    let receivers = vec![profile.public_key];
-                    let room = Room::new(None, public_key, receivers);
-
-                    Ok(room)
-                }
-                Err(e) => Err(anyhow!(e)),
-            }
-        });
-
-        self.search_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
-
-            this.update_in(cx, |this, window, cx| {
-                match result {
-                    Ok(Ok(room)) => {
-                        this.set_results(vec![cx.new(|_| room)], cx);
-                    }
-                    Ok(Err(e)) => {
-                        window.push_notification(e.to_string(), cx);
-                    }
-                    Err(e) => {
-                        window.push_notification(e.to_string(), cx);
-                    }
-                }
-                this.set_finding(false, window, cx);
-            })
-            .ok();
-        }));
-    }
-
-    fn search_by_pubkey(&mut self, query: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-
-        let Ok(public_key) = query.to_public_key() else {
-            window.push_notification("Public Key is invalid", cx);
-            self.set_finding(false, window, cx);
-            return;
-        };
-
-        let task: Task<Result<Room, Error>> = cx.background_spawn(async move {
-            let signer = client.signer().await?;
-            let author = signer.get_public_key().await?;
-
-            let opts = SubscribeAutoCloseOptions::default().exit_policy(ReqExitPolicy::ExitOnEOSE);
-            let receivers = vec![public_key];
-            let room = Room::new(None, author, receivers);
-
-            let filter = Filter::new()
-                .kinds(vec![Kind::Metadata, Kind::ContactList])
-                .author(public_key)
-                .limit(2);
-
-            client
-                .subscribe_to(BOOTSTRAP_RELAYS, filter, Some(opts))
-                .await?;
-
-            Ok(room)
-        });
-
-        self.search_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
-
-            this.update_in(cx, |this, window, cx| {
-                match result {
-                    Ok(room) => {
-                        let chat = ChatRegistry::global(cx);
-                        let local_results = chat.read(cx).search_by_public_key(public_key, cx);
-
-                        if !local_results.is_empty() {
-                            this.set_results(local_results, cx);
-                        } else {
-                            this.set_results(vec![cx.new(|_| room)], cx);
-                        }
-                    }
-                    Err(e) => {
-                        window.push_notification(e.to_string(), cx);
-                    }
-                };
-                this.set_finding(false, window, cx);
-            })
-            .ok();
-        }));
-    }
-
+    /// Search
     fn search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Get query
+        let query = self.find_input.read(cx).value();
+
         // Return if the query is empty
-        if self.find_input.read(cx).value().is_empty() {
+        if query.is_empty() {
             return;
         }
 
-        // Return if search is in progress
-        if self.finding {
-            if self.search_task.is_none() {
-                window.push_notification("There is another search in progress", cx);
-                return;
-            } else {
-                // Cancel ongoing search request
-                self.search_task = None;
-            }
-        }
-
-        let input = self.find_input.read(cx).value();
-        let query = input.to_string();
-
-        // Block the input until the search process completes
+        // Block the input until the search completes
         self.set_finding(true, window, cx);
 
-        // Process to search by pubkey if query starts with npub or nprofile
-        if query.starts_with("npub1") || query.starts_with("nprofile1") {
-            self.search_by_pubkey(&query, window, cx);
-            return;
-        };
+        // Create the search task
+        let nostr = NostrRegistry::global(cx);
+        let find_users = nostr.read(cx).search(&query, cx);
 
-        // Process to search by NIP05 if query is a valid NIP-05 identifier (name@domain.tld)
-        if query.split('@').count() == 2 {
-            let parts: Vec<&str> = query.split('@').collect();
-            if !parts[0].is_empty() && !parts[1].is_empty() && parts[1].contains('.') {
-                self.search_by_nip05(&query, window, cx);
-                return;
-            }
-        }
+        // Run task in the main thread
+        self.find_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let rooms = find_users.await?;
 
-        // Get all local results with current query
-        let chat = ChatRegistry::global(cx);
-        let local_results = chat.read(cx).search(&query, cx);
+            // Update the UI with the search results
+            this.update_in(cx, |this, window, cx| {
+                this.set_results(rooms, cx);
+                this.set_finding(false, window, cx);
+            })?;
 
-        // Try to update with local results first
-        if !local_results.is_empty() {
-            self.set_results(local_results, cx);
-            return;
-        };
-
-        // If no local results, try global search via NIP-50
-        self.search_by_nip50(&query, window, cx);
+            Ok(())
+        }));
     }
 
-    fn set_results(&mut self, rooms: Vec<Entity<Room>>, cx: &mut Context<Self>) {
-        self.search_results.update(cx, |this, cx| {
-            *this = Some(rooms);
+    fn set_results(&mut self, results: Vec<PublicKey>, cx: &mut Context<Self>) {
+        self.find_results.update(cx, |this, cx| {
+            *this = Some(results);
             cx.notify();
         });
     }
@@ -391,185 +259,206 @@ impl Sidebar {
             this.set_disabled(status, cx);
             this.set_loading(status, cx);
         });
-        // Set the finding status
+        // Set the search status
         self.finding = status;
         cx.notify();
     }
 
-    fn clear(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Reset the input state
-        if self.finding {
-            self.set_finding(false, window, cx);
-        }
+    fn set_input_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find_focused = !self.find_focused;
+        cx.notify();
 
-        // Clear all local results
-        self.search_results.update(cx, |this, cx| {
+        // Reset the find panel
+        if !self.find_focused {
+            self.reset(window, cx);
+        }
+    }
+
+    fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // Clear all search results
+        self.find_results.update(cx, |this, cx| {
             *this = None;
             cx.notify();
         });
-    }
 
-    fn filter(&self, kind: &RoomKind, cx: &Context<Self>) -> bool {
-        self.active_filter.read(cx) == kind
-    }
-
-    fn set_filter(&mut self, kind: RoomKind, cx: &mut Context<Self>) {
-        self.active_filter.update(cx, |this, cx| {
-            *this = kind;
+        // Clear all selected public keys
+        self.selected_pkeys.update(cx, |this, cx| {
+            this.clear();
             cx.notify();
         });
-        self.new_request = false;
+
+        // Reset the search status
+        self.set_finding(false, window, cx);
+
+        // Cancel the current search task
+        self.find_task = None;
         cx.notify();
     }
 
-    fn open(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
+    /// Select a public key in the sidebar.
+    fn select(&mut self, public_key: &PublicKey, cx: &mut Context<Self>) {
+        self.selected_pkeys.update(cx, |this, cx| {
+            if this.contains(public_key) {
+                this.remove(public_key);
+            } else {
+                this.insert(public_key.to_owned());
+            }
+            cx.notify();
+        });
+    }
+
+    /// Check if a public key is selected in the sidebar.
+    fn is_selected(&self, public_key: &PublicKey, cx: &App) -> bool {
+        self.selected_pkeys.read(cx).contains(public_key)
+    }
+
+    /// Get all selected public keys in the sidebar.
+    fn get_selected(&self, cx: &Context<Self>) -> HashSet<PublicKey> {
+        self.selected_pkeys.read(cx).clone()
+    }
+
+    /// Create a new room
+    fn create_room(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let chat = ChatRegistry::global(cx);
+        let async_chat = chat.downgrade();
 
-        match chat.read(cx).room(&id, cx) {
-            Some(room) => {
-                chat.update(cx, |this, cx| {
-                    this.emit_room(room, cx);
-                });
-            }
-            None => {
-                if let Some(room) = self
-                    .search_results
-                    .read(cx)
-                    .as_ref()
-                    .and_then(|results| results.iter().find(|this| this.read(cx).id == id))
-                    .map(|this| this.downgrade())
-                {
-                    chat.update(cx, |this, cx| {
-                        this.emit_room(room, cx);
-                    });
-                    // Clear all search results
-                    self.clear(window, cx);
-                }
-            }
-        }
-    }
-
-    fn on_reload(&mut self, _ev: &Reload, window: &mut Window, cx: &mut Context<Self>) {
-        ChatRegistry::global(cx).update(cx, |this, cx| {
-            this.get_rooms(cx);
-        });
-        window.push_notification("Reload", cx);
-    }
-
-    fn on_manage(&mut self, _ev: &RelayStatus, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
 
-        let task: Task<Result<Vec<Relay>, Error>> = cx.background_spawn(async move {
-            let id = SubscriptionId::new(GIFTWRAP_SUBSCRIPTION);
-            let subscription = client.subscription(&id).await;
+        // Get all selected public keys
+        let receivers = self.get_selected(cx);
 
-            let mut relays: Vec<Relay> = vec![];
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            let public_key = signer.get_public_key().await?;
 
-            for (url, _filter) in subscription.into_iter() {
-                relays.push(client.pool().relay(url).await?);
-            }
+            // Create a new room and emit it
+            async_chat.update_in(cx, |this, _window, cx| {
+                let room = cx.new(|_| {
+                    Room::new(public_key, receivers)
+                        .organize(&public_key)
+                        .kind(RoomKind::Ongoing)
+                });
+                this.emit_room(&room, cx);
+            })?;
 
-            Ok(relays)
-        });
+            // Reset the find panel
+            this.update_in(cx, |this, window, cx| {
+                this.reset(window, cx);
+            })?;
 
-        cx.spawn_in(window, async move |this, cx| {
-            if let Ok(relays) = task.await {
-                this.update_in(cx, |this, window, cx| {
-                    this.manage_relays(relays, window, cx);
-                })
-                .ok();
-            }
-        })
-        .detach();
+            Ok(())
+        }));
     }
 
-    fn manage_relays(&mut self, relays: Vec<Relay>, window: &mut Window, cx: &mut Context<Self>) {
-        window.open_modal(cx, move |this, _window, cx| {
-            this.show_close(true)
-                .overlay_closable(true)
-                .keyboard(true)
-                .title(SharedString::from("Messaging Relay Status"))
-                .child(v_flex().pb_4().gap_2().children({
-                    let mut items = Vec::with_capacity(relays.len());
-
-                    for relay in relays.clone().into_iter() {
-                        let url = relay.url().to_string();
-                        let time = relay.stats().connected_at().to_ago();
-                        let connected = relay.is_connected();
-
-                        items.push(
-                            h_flex()
-                                .h_8()
-                                .px_2()
-                                .justify_between()
-                                .text_xs()
-                                .bg(cx.theme().elevated_surface_background)
-                                .rounded(cx.theme().radius)
-                                .child(
-                                    h_flex()
-                                        .gap_1()
-                                        .font_semibold()
-                                        .child(
-                                            Icon::new(IconName::Signal)
-                                                .small()
-                                                .text_color(cx.theme().danger_active)
-                                                .when(connected, |this| {
-                                                    this.text_color(gpui::green().alpha(0.75))
-                                                }),
-                                        )
-                                        .child(url),
-                                )
-                                .child(
-                                    div().text_right().text_color(cx.theme().text_muted).child(
-                                        SharedString::from(format!("Last activity: {}", time)),
-                                    ),
-                                ),
-                        );
-                    }
-
-                    items
-                }))
-        });
+    /// Get the active filter.
+    fn current_filter(&self, kind: &RoomKind, cx: &Context<Self>) -> bool {
+        self.filter.read(cx) == kind
     }
 
-    fn list_items(
-        &self,
-        rooms: &[Entity<Room>],
-        range: Range<usize>,
-        cx: &Context<Self>,
-    ) -> Vec<impl IntoElement> {
-        let mut items = Vec::with_capacity(range.end - range.start);
+    /// Set the active filter for the sidebar.
+    fn set_filter(&mut self, kind: RoomKind, cx: &mut Context<Self>) {
+        self.filter.update(cx, |this, cx| {
+            *this = kind;
+            cx.notify();
+        });
+        self.new_requests = false;
+    }
 
-        for ix in range {
-            let Some(room) = rooms.get(ix) else {
-                items.push(RoomListItem::new(ix));
-                continue;
-            };
+    fn render_list_items(&self, range: Range<usize>, cx: &Context<Self>) -> Vec<impl IntoElement> {
+        let chat = ChatRegistry::global(cx);
+        let rooms = chat.read(cx).rooms(self.filter.read(cx), cx);
 
-            let this = room.read(cx);
-            let room_id = this.id;
-            let member = this.display_member(cx);
+        rooms
+            .get(range.clone())
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .map(|(ix, item)| {
+                let room = item.read(cx);
+                let room_clone = item.clone();
+                let public_key = room.display_member(cx).public_key();
+                let handler = cx.listener(move |_this, _ev, _window, cx| {
+                    ChatRegistry::global(cx).update(cx, |s, cx| {
+                        s.emit_room(&room_clone, cx);
+                    });
+                });
 
-            let handler = cx.listener({
-                move |this, _, window, cx| {
-                    this.open(room_id, window, cx);
-                }
-            });
+                RoomEntry::new(range.start + ix)
+                    .name(room.display_name(cx))
+                    .avatar(room.display_image(cx))
+                    .public_key(public_key)
+                    .kind(room.kind)
+                    .created_at(room.created_at.to_ago())
+                    .on_click(handler)
+                    .into_any_element()
+            })
+            .collect()
+    }
 
-            items.push(
-                RoomListItem::new(ix)
-                    .room_id(room_id)
-                    .name(this.display_name(cx))
-                    .avatar(this.display_image(cx))
-                    .public_key(member.public_key())
-                    .kind(this.kind)
-                    .created_at(this.created_at.to_ago())
-                    .on_click(handler),
-            )
-        }
+    /// Render the contact list
+    fn render_results(&self, range: Range<usize>, cx: &Context<Self>) -> Vec<impl IntoElement> {
+        let persons = PersonRegistry::global(cx);
 
-        items
+        // Get the contact list
+        let Some(results) = self.find_results.read(cx) else {
+            return vec![];
+        };
+
+        // Map the contact list to a list of elements
+        results
+            .get(range.clone())
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .map(|(ix, public_key)| {
+                let selected = self.is_selected(public_key, cx);
+                let profile = persons.read(cx).get(public_key, cx);
+                let pkey_clone = public_key.to_owned();
+                let handler = cx.listener(move |this, _ev, _window, cx| {
+                    this.select(&pkey_clone, cx);
+                });
+
+                RoomEntry::new(range.start + ix)
+                    .name(profile.name())
+                    .avatar(profile.avatar())
+                    .on_click(handler)
+                    .selected(selected)
+                    .into_any_element()
+            })
+            .collect()
+    }
+
+    /// Render the contact list
+    fn render_contacts(&self, range: Range<usize>, cx: &Context<Self>) -> Vec<impl IntoElement> {
+        let persons = PersonRegistry::global(cx);
+
+        // Get the contact list
+        let Some(contacts) = self.contact_list.read(cx) else {
+            return vec![];
+        };
+
+        // Map the contact list to a list of elements
+        contacts
+            .get(range.clone())
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .map(|(ix, public_key)| {
+                let selected = self.is_selected(public_key, cx);
+                let profile = persons.read(cx).get(public_key, cx);
+                let pkey_clone = public_key.to_owned();
+                let handler = cx.listener(move |this, _ev, _window, cx| {
+                    this.select(&pkey_clone, cx);
+                });
+
+                RoomEntry::new(range.start + ix)
+                    .name(profile.name())
+                    .avatar(profile.avatar())
+                    .on_click(handler)
+                    .selected(selected)
+                    .into_any_element()
+            })
+            .collect()
     }
 }
 
@@ -591,201 +480,282 @@ impl Render for Sidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let chat = ChatRegistry::global(cx);
         let loading = chat.read(cx).loading();
+        let total_rooms = chat.read(cx).count(self.filter.read(cx), cx);
 
-        // Get rooms from either search results or the chat registry
-        let rooms = if let Some(results) = self.search_results.read(cx).as_ref() {
-            results.to_owned()
+        // Whether the find panel should be shown
+        let show_find_panel = self.has_search || self.find_focused;
+
+        // Set button label based on total selected users
+        let button_label = if self.selected_pkeys.read(cx).len() > 1 {
+            "Create Group DM"
         } else {
-            // Filter rooms based on the active filter
-            if self.active_filter.read(cx) == &RoomKind::Ongoing {
-                chat.read(cx).ongoing_rooms(cx)
-            } else {
-                chat.read(cx).request_rooms(cx)
-            }
+            "Create DM"
         };
 
-        // Get total rooms count
-        let mut total_rooms = rooms.len();
-
-        // Add 3 dummy rooms to display as skeletons
-        if loading {
-            total_rooms += 3
-        }
-
         v_flex()
-            .on_action(cx.listener(Self::on_reload))
-            .on_action(cx.listener(Self::on_manage))
             .image_cache(self.image_cache.clone())
             .size_full()
             .relative()
-            .gap_3()
-            // Search Input
             .child(
-                div()
-                    .relative()
-                    .mt_3()
-                    .px_2p5()
-                    .w_full()
-                    .h_7()
-                    .flex_none()
-                    .flex()
+                h_flex()
+                    .h(TITLEBAR_HEIGHT)
+                    .border_b_1()
+                    .border_color(cx.theme().border)
                     .child(
                         TextInput::new(&self.find_input)
+                            .appearance(false)
+                            .bordered(false)
                             .small()
-                            .cleanable()
-                            .appearance(true)
                             .text_xs()
-                            .map(|this| {
-                                if !self.find_input.read(cx).loading {
-                                    this.suffix(
-                                        Button::new("find")
-                                            .icon(IconName::Search)
-                                            .tooltip("Press Enter to search")
-                                            .transparent()
-                                            .small(),
-                                    )
-                                } else {
-                                    this
-                                }
+                            .when(!self.find_input.read(cx).loading, |this| {
+                                this.suffix(
+                                    Button::new("find-icon")
+                                        .icon(IconName::Search)
+                                        .tooltip("Press Enter to search")
+                                        .transparent()
+                                        .small(),
+                                )
                             }),
                     ),
             )
-            // Chat Rooms
             .child(
-                v_flex()
-                    .gap_1()
-                    .flex_1()
-                    .px_1p5()
-                    .w_full()
-                    .overflow_y_hidden()
-                    .child(
-                        div()
-                            .px_1()
-                            .h_flex()
-                            .gap_2()
-                            .flex_none()
-                            .child(
-                                Button::new("all")
-                                    .label("All")
-                                    .tooltip("All ongoing conversations")
-                                    .small()
-                                    .cta()
-                                    .bold()
-                                    .secondary()
-                                    .rounded()
-                                    .selected(self.filter(&RoomKind::Ongoing, cx))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.set_filter(RoomKind::Ongoing, cx);
-                                    })),
-                            )
-                            .child(
-                                Button::new("requests")
-                                    .label("Requests")
-                                    .tooltip("Incoming new conversations")
-                                    .when(self.new_request, |this| {
-                                        this.child(
-                                            div().size_1().rounded_full().bg(cx.theme().cursor),
-                                        )
-                                    })
-                                    .small()
-                                    .cta()
-                                    .bold()
-                                    .secondary()
-                                    .rounded()
-                                    .selected(!self.filter(&RoomKind::Ongoing, cx))
-                                    .on_click(cx.listener(|this, _, _, cx| {
-                                        this.set_filter(RoomKind::default(), cx);
-                                    })),
-                            )
-                            .child(
-                                h_flex()
-                                    .flex_1()
-                                    .w_full()
-                                    .justify_end()
-                                    .items_center()
-                                    .text_xs()
-                                    .child(
-                                        Button::new("option")
-                                            .icon(IconName::Ellipsis)
-                                            .xsmall()
-                                            .ghost()
-                                            .rounded()
-                                            .popup_menu(move |this, _window, _cx| {
-                                                this.menu(
-                                                    "Reload",
-                                                    Box::new(Reload),
-                                                )
-                                                .menu(
-                                                    "Relay Status",
-                                                    Box::new(RelayStatus),
-                                                )
-                                            }),
-                                    ),
-                            ),
-                    )
-                    .when(!loading && total_rooms == 0, |this| {
-                        this.map(|this| {
-                            if self.filter(&RoomKind::Ongoing, cx) {
-                                this.child(deferred(
-                                    v_flex()
-                                        .py_2()
-                                        .px_1p5()
-                                        .gap_1p5()
-                                        .items_center()
-                                        .justify_center()
-                                        .text_center()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .font_semibold()
-                                                .line_height(relative(1.25))
-                                                .child(SharedString::from("No conversations")),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().text_muted)
-                                                .line_height(relative(1.25))
-                                                .child(SharedString::from("Start a conversation with someone to get started.")),
-                                        ),
-                                ))
-                            } else {
-                                this.child(deferred(
-                                    v_flex()
-                                        .py_2()
-                                        .px_1p5()
-                                        .gap_1p5()
-                                        .items_center()
-                                        .justify_center()
-                                        .text_center()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .font_semibold()
-                                                .line_height(relative(1.25))
-                                                .child(SharedString::from("No message requests")),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().text_muted)
-                                                .line_height(relative(1.25))
-                                                .child(SharedString::from("New message requests from people you don't know will appear here.")),
-                                        ),
-                                ))
-                            }
-                        })
+                h_flex()
+                    .h(TITLEBAR_HEIGHT)
+                    .justify_center()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .when(show_find_panel, |this| {
+                        this.child(
+                            Button::new("search-results")
+                                .icon(IconName::Search)
+                                .label("Search")
+                                .tooltip("All search results")
+                                .small()
+                                .underline()
+                                .ghost()
+                                .font_semibold()
+                                .rounded_none()
+                                .h_full()
+                                .flex_1()
+                                .selected(true),
+                        )
                     })
                     .child(
-                        uniform_list(
-                            "rooms",
-                            total_rooms,
-                            cx.processor(move |this, range, _window, cx| {
-                                this.list_items(&rooms, range, cx)
-                            }),
-                        )
-                        .h_full(),
+                        Button::new("all")
+                            .map(|this| {
+                                if self.current_filter(&RoomKind::Ongoing, cx) {
+                                    this.icon(IconName::InboxFill)
+                                } else {
+                                    this.icon(IconName::Inbox)
+                                }
+                            })
+                            .when(!show_find_panel, |this| this.label("Inbox"))
+                            .tooltip("All ongoing conversations")
+                            .small()
+                            .underline()
+                            .ghost()
+                            .font_semibold()
+                            .rounded_none()
+                            .h_full()
+                            .flex_1()
+                            .disabled(show_find_panel)
+                            .selected(
+                                !show_find_panel && self.current_filter(&RoomKind::Ongoing, cx),
+                            )
+                            .on_click(cx.listener(|this, _ev, _window, cx| {
+                                this.set_filter(RoomKind::Ongoing, cx);
+                            })),
+                    )
+                    .child(Divider::vertical())
+                    .child(
+                        Button::new("requests")
+                            .map(|this| {
+                                if self.current_filter(&RoomKind::Request, cx) {
+                                    this.icon(IconName::FistbumpFill)
+                                } else {
+                                    this.icon(IconName::Fistbump)
+                                }
+                            })
+                            .when(!show_find_panel, |this| this.label("Requests"))
+                            .tooltip("Incoming new conversations")
+                            .small()
+                            .ghost()
+                            .underline()
+                            .font_semibold()
+                            .rounded_none()
+                            .h_full()
+                            .flex_1()
+                            .disabled(show_find_panel)
+                            .selected(
+                                !show_find_panel && !self.current_filter(&RoomKind::Ongoing, cx),
+                            )
+                            .when(self.new_requests, |this| {
+                                this.child(div().size_1().rounded_full().bg(cx.theme().cursor))
+                            })
+                            .on_click(cx.listener(|this, _ev, _window, cx| {
+                                this.set_filter(RoomKind::default(), cx);
+                            })),
                     ),
             )
+            .when(!show_find_panel && !loading && total_rooms == 0, |this| {
+                this.child(
+                    div().mt_2().px_2().child(
+                        v_flex()
+                            .p_3()
+                            .h_24()
+                            .w_full()
+                            .border_2()
+                            .border_dashed()
+                            .border_color(cx.theme().border_variant)
+                            .rounded(cx.theme().radius_lg)
+                            .items_center()
+                            .justify_center()
+                            .text_center()
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .font_semibold()
+                                    .child(SharedString::from("No conversations")),
+                            )
+                            .child(div().text_xs().text_color(cx.theme().text_muted).child(
+                                SharedString::from(
+                                    "Start a conversation with someone to get started.",
+                                ),
+                            )),
+                    ),
+                )
+            })
+            .child(
+                v_flex()
+                    .h_full()
+                    .px_1p5()
+                    .mt_2()
+                    .flex_1()
+                    .gap_1()
+                    .overflow_y_hidden()
+                    .when(show_find_panel, |this| {
+                        this.gap_3()
+                            .when_some(self.find_results.read(cx).as_ref(), |this, results| {
+                                this.child(
+                                    v_flex()
+                                        .gap_1()
+                                        .flex_1()
+                                        .border_b_1()
+                                        .border_color(cx.theme().border_variant)
+                                        .child(
+                                            h_flex()
+                                                .gap_0p5()
+                                                .text_xs()
+                                                .font_semibold()
+                                                .text_color(cx.theme().text_muted)
+                                                .child(Icon::new(IconName::ChevronDown))
+                                                .child(SharedString::from("Results")),
+                                        )
+                                        .child(
+                                            uniform_list(
+                                                "rooms",
+                                                results.len(),
+                                                cx.processor(|this, range, _window, cx| {
+                                                    this.render_results(range, cx)
+                                                }),
+                                            )
+                                            .flex_1()
+                                            .h_full(),
+                                        ),
+                                )
+                            })
+                            .when_some(self.contact_list.read(cx).as_ref(), |this, contacts| {
+                                this.child(
+                                    v_flex()
+                                        .gap_1()
+                                        .flex_1()
+                                        .child(
+                                            h_flex()
+                                                .gap_0p5()
+                                                .text_xs()
+                                                .font_semibold()
+                                                .text_color(cx.theme().text_muted)
+                                                .child(Icon::new(IconName::ChevronDown))
+                                                .child(SharedString::from("Suggestions")),
+                                        )
+                                        .child(
+                                            uniform_list(
+                                                "contacts",
+                                                contacts.len(),
+                                                cx.processor(move |this, range, _window, cx| {
+                                                    this.render_contacts(range, cx)
+                                                }),
+                                            )
+                                            .flex_1()
+                                            .h_full(),
+                                        ),
+                                )
+                            })
+                    })
+                    .when(!show_find_panel, |this| {
+                        this.child(
+                            uniform_list(
+                                "rooms",
+                                total_rooms,
+                                cx.processor(|this, range, _window, cx| {
+                                    this.render_list_items(range, cx)
+                                }),
+                            )
+                            .track_scroll(&self.scroll_handle)
+                            .flex_1()
+                            .h_full(),
+                        )
+                        .child(Scrollbar::vertical(&self.scroll_handle))
+                    }),
+            )
+            .when(!self.selected_pkeys.read(cx).is_empty(), |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .h_9()
+                        .w_full()
+                        .px_2()
+                        .child(
+                            Button::new("create")
+                                .label(button_label)
+                                .primary()
+                                .small()
+                                .shadow_lg()
+                                .on_click(cx.listener(move |this, _ev, window, cx| {
+                                    this.create_room(window, cx);
+                                })),
+                        ),
+                )
+            })
+            .when(loading, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .bottom_2()
+                        .left_0()
+                        .h_9()
+                        .w_full()
+                        .px_8()
+                        .child(
+                            h_flex()
+                                .gap_2()
+                                .w_full()
+                                .h_9()
+                                .justify_center()
+                                .bg(cx.theme().background.opacity(0.85))
+                                .border_color(cx.theme().border_disabled)
+                                .border_1()
+                                .when(cx.theme().shadow, |this| this.shadow_sm())
+                                .rounded_full()
+                                .text_xs()
+                                .font_semibold()
+                                .text_color(cx.theme().text_muted)
+                                .child(Indicator::new().small().color(cx.theme().icon_accent))
+                                .child(SharedString::from("Getting messages...")),
+                        ),
+                )
+            })
     }
 }

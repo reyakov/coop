@@ -4,12 +4,14 @@ use std::rc::Rc;
 use gpui::{px, App, Global, Pixels, SharedString, Window};
 
 mod colors;
+mod platform_kind;
 mod registry;
 mod scale;
 mod scrollbar_mode;
 mod theme;
 
 pub use colors::*;
+pub use platform_kind::PlatformKind;
 pub use registry::*;
 pub use scale::*;
 pub use scrollbar_mode::*;
@@ -20,6 +22,15 @@ pub const CLIENT_SIDE_DECORATION_ROUNDING: Pixels = px(10.0);
 
 /// Defines window shadow size for platforms that use client side decorations.
 pub const CLIENT_SIDE_DECORATION_SHADOW: Pixels = px(10.0);
+
+/// Defines window border size for platforms that use client side decorations.
+pub const CLIENT_SIDE_DECORATION_BORDER: Pixels = px(1.0);
+
+/// Defines window titlebar height
+pub const TITLEBAR_HEIGHT: Pixels = px(36.0);
+
+/// Defines default sidebar width
+pub const SIDEBAR_WIDTH: Pixels = px(240.);
 
 pub fn init(cx: &mut App) {
     registry::init(cx);
@@ -164,7 +175,16 @@ impl Theme {
 
 impl From<ThemeFamily> for Theme {
     fn from(family: ThemeFamily) -> Self {
+        let platform = PlatformKind::platform();
         let mode = ThemeMode::default();
+
+        // Define the font family based on the platform.
+        // TODO: Use native fonts on Linux too.
+        let font_family = match platform {
+            PlatformKind::Linux => "Inter",
+            _ => ".SystemUIFont",
+        };
+
         // Define the theme colors based on the appearance
         let colors = match mode {
             ThemeMode::Light => family.light(),
@@ -173,7 +193,7 @@ impl From<ThemeFamily> for Theme {
 
         Theme {
             font_size: px(15.),
-            font_family: ".SystemUIFont".into(),
+            font_family: font_family.into(),
             radius: px(5.),
             radius_lg: px(10.),
             shadow: true,

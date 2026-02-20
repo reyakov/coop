@@ -1,22 +1,23 @@
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::rc::Rc;
+use std::sync::Arc;
 
-use anyhow::{anyhow, Error};
+use anyhow::{anyhow, Context as AnyhowContext, Error};
 use gpui::{
     App, AppContext, Context, Entity, Global, IntoElement, ParentElement, SharedString, Styled,
-    Subscription, Task, Window,
+    Task, Window,
 };
 use nostr_sdk::prelude::*;
 use settings::{AppSettings, AuthMode};
 use smallvec::{smallvec, SmallVec};
-use state::{tracker, NostrRegistry};
+use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::notification::Notification;
-use ui::{v_flex, ContextModal, Disableable, IconName, Sizable};
+use ui::{v_flex, Disableable, IconName, Sizable, WindowExtension};
 
 const AUTH_MESSAGE: &str =
     "Approve the authentication request to allow Coop to continue sending or receiving events.";
@@ -26,16 +27,10 @@ pub fn init(window: &mut Window, cx: &mut App) {
 }
 
 /// Authentication request
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct AuthRequest {
-    pub url: RelayUrl,
-    pub challenge: String,
-}
-
-impl Hash for AuthRequest {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.challenge.hash(state);
-    }
+#[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord)]
+struct AuthRequest {
+    url: RelayUrl,
+    challenge: String,
 }
 
 impl AuthRequest {
@@ -45,6 +40,20 @@ impl AuthRequest {
             url,
         }
     }
+
+    pub fn url(&self) -> &RelayUrl {
+        &self.url
+    }
+
+    pub fn challenge(&self) -> &str {
+        &self.challenge
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum Signal {
+    Auth(Arc<AuthRequest>),
+    Pending((EventId, RelayUrl)),
 }
 
 struct GlobalRelayAuth(Entity<RelayAuth>);
@@ -54,14 +63,11 @@ impl Global for GlobalRelayAuth {}
 // Relay authentication
 #[derive(Debug)]
 pub struct RelayAuth {
-    /// Entity for managing auth requests
-    requests: HashSet<AuthRequest>,
-
-    /// Event subscriptions
-    _subscriptions: SmallVec<[Subscription; 1]>,
+    /// Pending events waiting for resend after authentication
+    pending_events: HashSet<(EventId, RelayUrl)>,
 
     /// Tasks for asynchronous operations
-    _tasks: SmallVec<[Task<()>; 1]>,
+    tasks: SmallVec<[Task<()>; 2]>,
 }
 
 impl RelayAuth {
@@ -77,206 +83,242 @@ impl RelayAuth {
 
     /// Create a new relay auth instance
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.defer_in(window, |this, window, cx| {
+            this.handle_notifications(window, cx);
+        });
+
+        Self {
+            pending_events: HashSet::default(),
+            tasks: smallvec![],
+        }
+    }
+
+    /// Handle nostr notifications
+    fn handle_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
-        // Get the current entity
-        let entity = cx.entity();
-
         // Channel for communication between nostr and gpui
-        let (tx, rx) = flume::bounded::<AuthRequest>(100);
+        let (tx, rx) = flume::bounded::<Signal>(256);
 
-        let mut subscriptions = smallvec![];
-        let mut tasks = smallvec![];
+        self.tasks.push(cx.background_spawn(async move {
+            log::info!("Started handling nostr notifications");
+            let mut notifications = client.notifications();
+            let mut challenges: HashSet<Cow<'_, str>> = HashSet::default();
 
-        subscriptions.push(
-            // Observe the current state
-            cx.observe_in(&entity, window, |this, _, window, cx| {
-                let settings = AppSettings::global(cx);
-                let mode = AppSettings::get_auth_mode(cx);
+            while let Some(notification) = notifications.next().await {
+                if let ClientNotification::Message { relay_url, message } = notification {
+                    match message {
+                        RelayMessage::Auth { challenge } => {
+                            if challenges.insert(challenge.clone()) {
+                                let request = Arc::new(AuthRequest::new(challenge, relay_url));
+                                let signal = Signal::Auth(request);
 
-                for req in this.requests.clone().into_iter() {
-                    let is_trusted_relay = settings.read(cx).is_trusted_relay(&req.url, cx);
+                                tx.send_async(signal).await.ok();
+                            }
+                        }
+                        RelayMessage::Ok {
+                            event_id, message, ..
+                        } => {
+                            let msg = MachineReadablePrefix::parse(&message);
 
-                    if is_trusted_relay && mode == AuthMode::Auto {
-                        // Automatically authenticate if the relay is authenticated before
-                        this.response(req, window, cx);
-                    } else {
-                        // Otherwise open the auth request popup
-                        this.ask_for_approval(req, window, cx);
+                            // Handle authentication messages
+                            if let Some(MachineReadablePrefix::AuthRequired) = msg {
+                                let signal = Signal::Pending((event_id, relay_url));
+                                tx.send_async(signal).await.ok();
+                            }
+                        }
+                        _ => {}
                     }
                 }
-            }),
-        );
+            }
+        }));
 
-        tasks.push(
-            // Handle nostr notifications
-            cx.background_spawn(async move { Self::handle_notifications(&client, &tx).await }),
-        );
-
-        tasks.push(
-            // Update GPUI states
-            cx.spawn(async move |this, cx| {
-                while let Ok(request) = rx.recv_async().await {
-                    this.update(cx, |this, cx| {
-                        this.add_request(request, cx);
-                    })
-                    .ok();
-                }
-            }),
-        );
-
-        Self {
-            requests: HashSet::new(),
-            _subscriptions: subscriptions,
-            _tasks: tasks,
-        }
-    }
-
-    // Handle nostr notifications
-    async fn handle_notifications(client: &Client, tx: &flume::Sender<AuthRequest>) {
-        let mut notifications = client.notifications();
-
-        while let Ok(notification) = notifications.recv().await {
-            if let RelayPoolNotification::Message {
-                message: RelayMessage::Auth { challenge },
-                relay_url,
-            } = notification
-            {
-                let request = AuthRequest::new(challenge, relay_url);
-
-                if let Err(e) = tx.send_async(request).await {
-                    log::error!("Failed to send auth request: {}", e);
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            while let Ok(signal) = rx.recv_async().await {
+                match signal {
+                    Signal::Auth(req) => {
+                        this.update_in(cx, |this, window, cx| {
+                            this.handle_auth(&req, window, cx);
+                        })
+                        .ok();
+                    }
+                    Signal::Pending((event_id, relay_url)) => {
+                        this.update_in(cx, |this, _window, cx| {
+                            this.insert_pending_event(event_id, relay_url, cx);
+                        })
+                        .ok();
+                    }
                 }
             }
-        }
+        }));
     }
 
-    /// Add a new authentication request.
-    fn add_request(&mut self, request: AuthRequest, cx: &mut Context<Self>) {
-        self.requests.insert(request);
+    /// Insert a pending event waiting for resend after authentication
+    fn insert_pending_event(&mut self, id: EventId, relay: RelayUrl, cx: &mut Context<Self>) {
+        self.pending_events.insert((id, relay));
         cx.notify();
     }
 
-    /// Get the number of pending requests.
-    pub fn pending_requests(&self, _cx: &App) -> usize {
-        self.requests.len()
+    /// Get all pending events for a specific relay,
+    fn get_pending_events(&self, relay: &RelayUrl, _cx: &App) -> Vec<EventId> {
+        let pending_events: Vec<EventId> = self
+            .pending_events
+            .iter()
+            .filter(|(_, pending_relay)| pending_relay == relay)
+            .map(|(id, _relay)| id)
+            .cloned()
+            .collect();
+
+        pending_events
     }
 
-    /// Reask for approval for all pending requests.
-    pub fn re_ask(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for request in self.requests.clone().into_iter() {
-            self.ask_for_approval(request, window, cx);
+    /// Clear all pending events for a specific relay,
+    fn clear_pending_events(&mut self, relay: &RelayUrl, cx: &mut Context<Self>) {
+        self.pending_events
+            .retain(|(_, pending_relay)| pending_relay != relay);
+        cx.notify();
+    }
+
+    /// Handle authentication request
+    fn handle_auth(&mut self, req: &Arc<AuthRequest>, window: &mut Window, cx: &mut Context<Self>) {
+        let settings = AppSettings::global(cx);
+        let trusted_relay = settings.read(cx).trusted_relay(req.url(), cx);
+        let mode = AppSettings::get_auth_mode(cx);
+
+        if trusted_relay && mode == AuthMode::Auto {
+            // Automatically authenticate if the relay is authenticated before
+            self.response(req, window, cx);
+        } else {
+            // Otherwise open the auth request popup
+            self.ask_for_approval(req, window, cx);
         }
     }
 
-    /// Respond to an authentication request.
-    fn response(&mut self, req: AuthRequest, window: &mut Window, cx: &mut Context<Self>) {
-        let settings = AppSettings::global(cx);
-
+    /// Send auth response and wait for confirmation
+    fn auth(&self, req: &Arc<AuthRequest>, cx: &App) -> Task<Result<(), Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
+        let req = req.clone();
 
-        let challenge = req.challenge.to_owned();
-        let url = req.url.to_owned();
+        // Get all pending events for the relay
+        let pending_events = self.get_pending_events(req.url(), cx);
 
-        let challenge_clone = challenge.clone();
-        let url_clone = url.clone();
-
-        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let signer = client.signer().await?;
-
+        cx.background_spawn(async move {
             // Construct event
-            let event: Event = EventBuilder::auth(challenge_clone, url_clone.clone())
-                .sign(&signer)
-                .await?;
+            let builder = EventBuilder::auth(req.challenge(), req.url().clone());
+            let event = client.sign_event_builder(builder).await?;
 
             // Get the event ID
             let id = event.id;
 
             // Get the relay
-            let relay = client.pool().relay(url_clone).await?;
-            let relay_url = relay.url();
+            let relay = client.relay(req.url()).await?.context("Relay not found")?;
 
             // Subscribe to notifications
             let mut notifications = relay.notifications();
 
             // Send the AUTH message
-            relay.send_msg(ClientMessage::Auth(Cow::Borrowed(&event)))?;
+            relay
+                .send_msg(ClientMessage::Auth(Cow::Borrowed(&event)))
+                .await?;
 
-            while let Ok(notification) = notifications.recv().await {
+            log::info!("Sending AUTH event");
+
+            while let Some(notification) = notifications.next().await {
                 match notification {
                     RelayNotification::Message {
                         message: RelayMessage::Ok { event_id, .. },
                     } => {
-                        if id == event_id {
-                            // Re-subscribe to previous subscription
-                            relay.resubscribe().await?;
-
-                            // Get all pending events that need to be resent
-                            let mut tracker = tracker().write().await;
-                            let ids: Vec<EventId> = tracker.pending_resend(relay_url);
-
-                            for id in ids.into_iter() {
-                                if let Some(event) = client.database().event_by_id(&id).await? {
-                                    let event_id = relay.send_event(&event).await?;
-                                    tracker.sent(event_id);
-                                }
-                            }
-
-                            return Ok(());
+                        if id != event_id {
+                            continue;
                         }
+
+                        // Get all subscriptions
+                        let subscriptions = relay.subscriptions().await;
+
+                        // Re-subscribe to previous subscriptions
+                        for (id, filters) in subscriptions.into_iter() {
+                            if !filters.is_empty() {
+                                relay.send_msg(ClientMessage::req(id, filters)).await?;
+                            }
+                        }
+
+                        // Re-send pending events
+                        for id in pending_events {
+                            if let Some(event) = client.database().event_by_id(&id).await? {
+                                relay.send_event(&event).await?;
+                            }
+                        }
+
+                        return Ok(());
                     }
                     RelayNotification::AuthenticationFailed => break,
-                    RelayNotification::Shutdown => break,
                     _ => {}
                 }
             }
 
             Err(anyhow!("Authentication failed"))
-        });
+        })
+    }
 
-        self._tasks.push(
-            // Handle response in the background
-            cx.spawn_in(window, async move |this, cx| {
-                match task.await {
+    /// Respond to an authentication request.
+    fn response(&self, req: &Arc<AuthRequest>, window: &Window, cx: &Context<Self>) {
+        let settings = AppSettings::global(cx);
+        let req = req.clone();
+        let challenge = req.challenge().to_string();
+
+        // Create a task for authentication
+        let task = self.auth(&req, cx);
+
+        cx.spawn_in(window, async move |this, cx| {
+            let result = task.await;
+            let url = req.url();
+
+            this.update_in(cx, |this, window, cx| {
+                window.clear_notification(challenge, cx);
+
+                match result {
                     Ok(_) => {
-                        this.update_in(cx, |this, window, cx| {
-                            // Clear the current notification
-                            window.clear_notification_by_id(SharedString::from(&challenge), cx);
-
-                            // Push a new notification
-                            window.push_notification(format!("{url} has been authenticated"), cx);
-
-                            // Save the authenticated relay to automatically authenticate future requests
-                            settings.update(cx, |this, cx| {
-                                this.add_trusted_relay(url, cx);
-                            });
-
-                            // Remove the challenge from the list of pending authentications
-                            this.requests.remove(&req);
-                            cx.notify();
-                        })
-                        .expect("Entity has been released");
+                        // Clear pending events for the authenticated relay
+                        this.clear_pending_events(url, cx);
+                        // Save the authenticated relay to automatically authenticate future requests
+                        settings.update(cx, |this, cx| {
+                            this.add_trusted_relay(url, cx);
+                        });
+                        window.push_notification(format!("{} has been authenticated", url), cx);
                     }
                     Err(e) => {
-                        this.update_in(cx, |_, window, cx| {
-                            window.push_notification(Notification::error(e.to_string()), cx);
-                        })
-                        .expect("Entity has been released");
+                        window.push_notification(Notification::error(e.to_string()), cx);
                     }
-                };
-            }),
-        );
+                }
+            })
+            .ok();
+        })
+        .detach();
     }
 
     /// Push a popup to approve the authentication request.
-    fn ask_for_approval(&mut self, req: AuthRequest, window: &mut Window, cx: &mut Context<Self>) {
-        let url = SharedString::from(req.url.clone().to_string());
+    fn ask_for_approval(&self, req: &Arc<AuthRequest>, window: &Window, cx: &Context<Self>) {
+        let notification = self.notification(req, cx);
+
+        cx.spawn_in(window, async move |_this, cx| {
+            cx.update(|window, cx| {
+                window.push_notification(notification, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Build a notification for the authentication request.
+    fn notification(&self, req: &Arc<AuthRequest>, cx: &Context<Self>) -> Notification {
+        let req = req.clone();
+        let url = SharedString::from(req.url().to_string());
         let entity = cx.entity().downgrade();
         let loading = Rc::new(Cell::new(false));
 
-        let note = Notification::new()
+        Notification::new()
             .custom_id(SharedString::from(&req.challenge))
             .autohide(false)
             .icon(IconName::Info)
@@ -299,7 +341,7 @@ impl RelayAuth {
                     .into_any_element()
             })
             .action(move |_window, _cx| {
-                let entity = entity.clone();
+                let view = entity.clone();
                 let req = req.clone();
 
                 Button::new("approve")
@@ -310,24 +352,18 @@ impl RelayAuth {
                     .disabled(loading.get())
                     .on_click({
                         let loading = Rc::clone(&loading);
+
                         move |_ev, window, cx| {
                             // Set loading state to true
                             loading.set(true);
 
                             // Process to approve the request
-                            entity
-                                .update(cx, |this, cx| {
-                                    this.response(req.clone(), window, cx);
-                                })
-                                .ok();
+                            view.update(cx, |this, cx| {
+                                this.response(&req, window, cx);
+                            })
+                            .ok();
                         }
                     })
-            });
-
-        // Push the notification to the current window
-        window.push_notification(note, cx);
-
-        // Bring the window to the front
-        cx.activate(true);
+            })
     }
 }

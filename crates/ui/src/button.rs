@@ -10,7 +10,7 @@ use theme::ActiveTheme;
 
 use crate::indicator::Indicator;
 use crate::tooltip::Tooltip;
-use crate::{h_flex, Disableable, Icon, Selectable, Sizable, Size, StyledExt};
+use crate::{h_flex, Disableable, Icon, IconName, Selectable, Sizable, Size, StyledExt};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ButtonCustomVariant {
@@ -18,50 +18,6 @@ pub struct ButtonCustomVariant {
     foreground: Hsla,
     hover: Hsla,
     active: Hsla,
-}
-
-pub trait ButtonVariants: Sized {
-    fn with_variant(self, variant: ButtonVariant) -> Self;
-
-    /// With the primary style for the Button.
-    fn primary(self) -> Self {
-        self.with_variant(ButtonVariant::Primary)
-    }
-
-    /// With the secondary style for the Button.
-    fn secondary(self) -> Self {
-        self.with_variant(ButtonVariant::Secondary)
-    }
-
-    /// With the danger style for the Button.
-    fn danger(self) -> Self {
-        self.with_variant(ButtonVariant::Danger)
-    }
-
-    /// With the warning style for the Button.
-    fn warning(self) -> Self {
-        self.with_variant(ButtonVariant::Warning)
-    }
-
-    /// With the ghost style for the Button.
-    fn ghost(self) -> Self {
-        self.with_variant(ButtonVariant::Ghost { alt: false })
-    }
-
-    /// With the ghost style for the Button.
-    fn ghost_alt(self) -> Self {
-        self.with_variant(ButtonVariant::Ghost { alt: true })
-    }
-
-    /// With the transparent style for the Button.
-    fn transparent(self) -> Self {
-        self.with_variant(ButtonVariant::Transparent)
-    }
-
-    /// With the custom style for the Button.
-    fn custom(self, style: ButtonCustomVariant) -> Self {
-        self.with_variant(ButtonVariant::Custom(style))
-    }
 }
 
 impl ButtonCustomVariant {
@@ -110,6 +66,50 @@ pub enum ButtonVariant {
     Custom(ButtonCustomVariant),
 }
 
+pub trait ButtonVariants: Sized {
+    fn with_variant(self, variant: ButtonVariant) -> Self;
+
+    /// With the primary style for the Button.
+    fn primary(self) -> Self {
+        self.with_variant(ButtonVariant::Primary)
+    }
+
+    /// With the secondary style for the Button.
+    fn secondary(self) -> Self {
+        self.with_variant(ButtonVariant::Secondary)
+    }
+
+    /// With the danger style for the Button.
+    fn danger(self) -> Self {
+        self.with_variant(ButtonVariant::Danger)
+    }
+
+    /// With the warning style for the Button.
+    fn warning(self) -> Self {
+        self.with_variant(ButtonVariant::Warning)
+    }
+
+    /// With the ghost style for the Button.
+    fn ghost(self) -> Self {
+        self.with_variant(ButtonVariant::Ghost { alt: false })
+    }
+
+    /// With the ghost style for the Button.
+    fn ghost_alt(self) -> Self {
+        self.with_variant(ButtonVariant::Ghost { alt: true })
+    }
+
+    /// With the transparent style for the Button.
+    fn transparent(self) -> Self {
+        self.with_variant(ButtonVariant::Transparent)
+    }
+
+    /// With the custom style for the Button.
+    fn custom(self, style: ButtonCustomVariant) -> Self {
+        self.with_variant(ButtonVariant::Custom(style))
+    }
+}
+
 /// A Button element.
 #[derive(IntoElement)]
 #[allow(clippy::type_complexity)]
@@ -124,16 +124,15 @@ pub struct Button {
     children: Vec<AnyElement>,
 
     variant: ButtonVariant,
-    rounded: bool,
     size: Size,
 
     disabled: bool,
-    reverse: bool,
-    bold: bool,
-    cta: bool,
-
     loading: bool,
-    loading_icon: Option<Icon>,
+
+    rounded: bool,
+    compact: bool,
+    underline: bool,
+    caret: bool,
 
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_hover: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
@@ -160,20 +159,19 @@ impl Button {
             style: StyleRefinement::default(),
             icon: None,
             label: None,
+            variant: ButtonVariant::default(),
             disabled: false,
             selected: false,
-            variant: ButtonVariant::default(),
+            underline: false,
+            compact: false,
+            caret: false,
             rounded: false,
             size: Size::Medium,
             tooltip: None,
             on_click: None,
             on_hover: None,
             loading: false,
-            reverse: false,
-            bold: false,
-            cta: false,
             children: Vec::new(),
-            loading_icon: None,
             tab_index: 0,
             tab_stop: true,
         }
@@ -209,27 +207,21 @@ impl Button {
         self
     }
 
-    /// Set reverse the position between icon and label.
-    pub fn reverse(mut self) -> Self {
-        self.reverse = true;
+    /// Set true to make the button compact (no padding).
+    pub fn compact(mut self) -> Self {
+        self.compact = true;
         self
     }
 
-    /// Set bold the button (label will be use the semi-bold font).
-    pub fn bold(mut self) -> Self {
-        self.bold = true;
+    /// Set true to show the caret indicator.
+    pub fn caret(mut self) -> Self {
+        self.caret = true;
         self
     }
 
-    /// Set the cta style of the button.
-    pub fn cta(mut self) -> Self {
-        self.cta = true;
-        self
-    }
-
-    /// Set the loading icon of the button.
-    pub fn loading_icon(mut self, icon: impl Into<Icon>) -> Self {
-        self.loading_icon = Some(icon.into());
+    /// Set true to show the underline indicator.
+    pub fn underline(mut self) -> Self {
+        self.underline = true;
         self
     }
 
@@ -338,7 +330,7 @@ impl RenderOnce for Button {
         };
 
         let focus_handle = window
-            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+            .use_keyed_state(self.id.clone(), cx, |_window, cx| cx.focus_handle())
             .read(cx)
             .clone();
 
@@ -350,6 +342,7 @@ impl RenderOnce for Button {
                         .tab_stop(self.tab_stop),
                 )
             })
+            .relative()
             .flex_shrink_0()
             .flex()
             .items_center()
@@ -361,39 +354,15 @@ impl RenderOnce for Button {
                 false => this.rounded(cx.theme().radius),
                 true => this.rounded_full(),
             })
-            .map(|this| {
+            .when(!self.compact, |this| {
                 if self.label.is_none() && self.children.is_empty() {
                     // Icon Button
                     match self.size {
                         Size::Size(px) => this.size(px),
-                        Size::XSmall => {
-                            if self.cta {
-                                this.w_10().h_5()
-                            } else {
-                                this.size_5()
-                            }
-                        }
-                        Size::Small => {
-                            if self.cta {
-                                this.w_12().h_6()
-                            } else {
-                                this.size_6()
-                            }
-                        }
-                        Size::Medium => {
-                            if self.cta {
-                                this.w_12().h_7()
-                            } else {
-                                this.size_7()
-                            }
-                        }
-                        _ => {
-                            if self.cta {
-                                this.w_16().h_9()
-                            } else {
-                                this.size_9()
-                            }
-                        }
+                        Size::XSmall => this.size_5(),
+                        Size::Small => this.size_6(),
+                        Size::Medium => this.size_7(),
+                        _ => this.size_9(),
                     }
                 } else {
                     // Normal Button
@@ -402,8 +371,6 @@ impl RenderOnce for Button {
                         Size::XSmall => {
                             if self.icon.is_some() {
                                 this.h_6().pl_2().pr_2p5()
-                            } else if self.cta {
-                                this.h_6().px_4()
                             } else {
                                 this.h_6().px_2()
                             }
@@ -411,8 +378,6 @@ impl RenderOnce for Button {
                         Size::Small => {
                             if self.icon.is_some() {
                                 this.h_7().pl_2().pr_2p5()
-                            } else if self.cta {
-                                this.h_7().px_4()
                             } else {
                                 this.h_7().px_2()
                             }
@@ -434,13 +399,27 @@ impl RenderOnce for Button {
                     }
                 }
             })
-            .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+            .refine_style(&self.style)
+            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+                // Stop handle any click event when disabled.
+                // To avoid handle dropdown menu open when button is disabled.
+                if self.disabled {
+                    cx.stop_propagation();
+                    return;
+                }
                 // Avoid focus on mouse down.
                 window.prevent_default();
             })
-            .when_some(self.on_click.filter(|_| clickable), |this, on_click| {
+            .when_some(self.on_click, |this, on_click| {
                 this.on_click(move |event, window, cx| {
-                    (on_click)(event, window, cx);
+                    // Stop handle any click event when disabled.
+                    // To avoid handle dropdown menu open when button is disabled.
+                    if !clickable {
+                        cx.stop_propagation();
+                        return;
+                    }
+
+                    on_click(event, window, cx);
                 })
             })
             .when_some(self.on_hover.filter(|_| hoverable), |this, on_hover| {
@@ -451,7 +430,6 @@ impl RenderOnce for Button {
             .child({
                 h_flex()
                     .id("label")
-                    .when(self.reverse, |this| this.flex_row_reverse())
                     .justify_center()
                     .map(|this| match self.size {
                         Size::XSmall => this.text_xs().gap_1(),
@@ -463,22 +441,18 @@ impl RenderOnce for Button {
                             this.child(icon.with_size(icon_size))
                         })
                     })
-                    .when(self.loading, |this| {
-                        this.child(
-                            Indicator::new()
-                                .when_some(self.loading_icon, |this, icon| this.icon(icon)),
-                        )
-                    })
+                    .when(self.loading, |this| this.child(Indicator::new()))
                     .when_some(self.label, |this, label| {
-                        this.child(
-                            div()
-                                .flex_none()
-                                .line_height(relative(1.))
-                                .child(label)
-                                .when(self.bold, |this| this.font_semibold()),
-                        )
+                        this.child(div().flex_none().line_height(relative(1.)).child(label))
                     })
                     .children(self.children)
+                    .when(self.caret, |this| {
+                        this.justify_between().gap_0p5().child(
+                            Icon::new(IconName::ChevronDown)
+                                .small()
+                                .text_color(cx.theme().text_muted),
+                        )
+                    })
             })
             .text_color(normal_style.fg)
             .when(!self.disabled && !self.selected, |this| {
@@ -495,6 +469,17 @@ impl RenderOnce for Button {
             .when(self.selected, |this| {
                 let selected_style = style.selected(cx);
                 this.bg(selected_style.bg).text_color(selected_style.fg)
+            })
+            .when(self.selected && self.underline, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .h_px()
+                        .w_full()
+                        .bg(cx.theme().element_background),
+                )
             })
             .when(self.disabled, |this| {
                 let disabled_style = style.disabled(cx);

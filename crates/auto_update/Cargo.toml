@@ -6,16 +6,17 @@ publish.workspace = true
 
 [dependencies]
 common = { path = "../common" }
-state = { path = "../state" }
 
 gpui.workspace = true
 gpui_tokio.workspace = true
 reqwest.workspace = true
-nostr-sdk.workspace = true
 anyhow.workspace = true
 smol.workspace = true
 log.workspace = true
 smallvec.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 
 semver = "1.0.27"
 tempfile = "3.23.0"
+futures.workspace = true

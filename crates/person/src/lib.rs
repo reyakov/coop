@@ -4,14 +4,16 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Error};
-use common::{EventUtils, BOOTSTRAP_RELAYS};
+use common::EventUtils;
+use device::Announcement;
 use gpui::{App, AppContext, Context, Entity, Global, Task};
 use nostr_sdk::prelude::*;
-pub use person::*;
 use smallvec::{smallvec, SmallVec};
-use state::{Announcement, NostrRegistry, TIMEOUT};
+use state::{NostrRegistry, BOOTSTRAP_RELAYS, TIMEOUT};
 
 mod person;
+
+pub use person::*;
 
 pub fn init(cx: &mut App) {
     PersonRegistry::set_global(cx.new(PersonRegistry::new), cx);
@@ -25,6 +27,7 @@ impl Global for GlobalPersonRegistry {}
 enum Dispatch {
     Person(Box<Person>),
     Announcement(Box<Event>),
+    Relays(Box<Event>),
 }
 
 /// Person Registry
@@ -99,6 +102,9 @@ impl PersonRegistry {
                             Dispatch::Announcement(event) => {
                                 this.set_announcement(&event, cx);
                             }
+                            Dispatch::Relays(event) => {
+                                this.set_messaging_relays(&event, cx);
+                            }
                         };
                     })
                     .ok();
@@ -111,7 +117,7 @@ impl PersonRegistry {
             cx.spawn(async move |this, cx| {
                 let result = cx
                     .background_executor()
-                    .await_on_background(async move { Self::load_persons(&client).await })
+                    .await_on_background(async move { load_persons(&client).await })
                     .await;
 
                 match result {
@@ -139,17 +145,17 @@ impl PersonRegistry {
     /// Handle nostr notifications
     async fn handle_notifications(client: &Client, tx: &flume::Sender<Dispatch>) {
         let mut notifications = client.notifications();
-        let mut processed_events = HashSet::new();
+        let mut processed: HashSet<EventId> = HashSet::new();
 
-        while let Ok(notification) = notifications.recv().await {
-            let RelayPoolNotification::Message { message, .. } = notification else {
+        while let Some(notification) = notifications.next().await {
+            let ClientNotification::Message { message, .. } = notification else {
                 // Skip if the notification is not a message
                 continue;
             };
 
             if let RelayMessage::Event { event, .. } = message {
-                if !processed_events.insert(event.id) {
-                    // Skip if the event has already been processed
+                // Skip if the event has already been processed
+                if !processed.insert(event.id) {
                     continue;
                 }
 
@@ -162,17 +168,23 @@ impl PersonRegistry {
                         // Send
                         tx.send_async(Dispatch::Person(val)).await.ok();
                     }
+                    Kind::ContactList => {
+                        let public_keys = event.extract_public_keys();
+
+                        // Get metadata for all public keys
+                        get_metadata(client, public_keys).await.ok();
+                    }
+                    Kind::InboxRelays => {
+                        let val = Box::new(event.into_owned());
+
+                        // Send
+                        tx.send_async(Dispatch::Relays(val)).await.ok();
+                    }
                     Kind::Custom(10044) => {
                         let val = Box::new(event.into_owned());
 
                         // Send
                         tx.send_async(Dispatch::Announcement(val)).await.ok();
-                    }
-                    Kind::ContactList => {
-                        let public_keys = event.extract_public_keys();
-
-                        // Get metadata for all public keys
-                        Self::get_metadata(client, public_keys).await.ok();
                     }
                     _ => {}
                 }
@@ -190,68 +202,17 @@ impl PersonRegistry {
                 .wait_timeout(Duration::from_secs(2))
             {
                 Ok(Some(public_key)) => {
-                    log::info!("Received public key: {}", public_key);
                     batch.insert(public_key);
                     // Process the batch if it's full
                     if batch.len() >= 20 {
-                        Self::get_metadata(client, std::mem::take(&mut batch))
-                            .await
-                            .ok();
+                        get_metadata(client, std::mem::take(&mut batch)).await.ok();
                     }
                 }
                 _ => {
-                    Self::get_metadata(client, std::mem::take(&mut batch))
-                        .await
-                        .ok();
+                    get_metadata(client, std::mem::take(&mut batch)).await.ok();
                 }
             }
         }
-    }
-
-    /// Get metadata for all public keys in a event
-    async fn get_metadata<I>(client: &Client, public_keys: I) -> Result<(), Error>
-    where
-        I: IntoIterator<Item = PublicKey>,
-    {
-        let authors: Vec<PublicKey> = public_keys.into_iter().collect();
-        let limit = authors.len();
-
-        if authors.is_empty() {
-            return Err(anyhow!("You need at least one public key"));
-        }
-
-        // Construct the subscription option
-        let opts = SubscribeAutoCloseOptions::default()
-            .exit_policy(ReqExitPolicy::ExitOnEOSE)
-            .timeout(Some(Duration::from_secs(TIMEOUT)));
-
-        // Construct the filter for metadata
-        let filter = Filter::new()
-            .kind(Kind::Metadata)
-            .authors(authors)
-            .limit(limit);
-
-        client
-            .subscribe_to(BOOTSTRAP_RELAYS, filter, Some(opts))
-            .await?;
-
-        Ok(())
-    }
-
-    /// Load all user profiles from the database
-    async fn load_persons(client: &Client) -> Result<Vec<Person>, Error> {
-        let filter = Filter::new().kind(Kind::Metadata).limit(200);
-        let events = client.database().query(filter).await?;
-
-        let mut persons = vec![];
-
-        for event in events.into_iter() {
-            let metadata = Metadata::from_json(event.content).unwrap_or_default();
-            let person = Person::new(event.pubkey, metadata);
-            persons.push(person);
-        }
-
-        Ok(persons)
     }
 
     /// Set profile encryption keys announcement
@@ -261,6 +222,18 @@ impl PersonRegistry {
 
             person.update(cx, |person, cx| {
                 person.set_announcement(announcement);
+                cx.notify();
+            });
+        }
+    }
+
+    /// Set messaging relays for a person
+    fn set_messaging_relays(&mut self, event: &Event, cx: &mut App) {
+        if let Some(person) = self.persons.get(&event.pubkey) {
+            let urls: Vec<RelayUrl> = nip17::extract_relay_list(event).cloned().collect();
+
+            person.update(cx, |person, cx| {
+                person.set_messaging_relays(urls);
                 cx.notify();
             });
         }
@@ -315,4 +288,54 @@ impl PersonRegistry {
         // Return a temporary profile with default metadata
         Person::new(public_key, Metadata::default())
     }
+}
+
+/// Get metadata for all public keys in a event
+async fn get_metadata<I>(client: &Client, public_keys: I) -> Result<(), Error>
+where
+    I: IntoIterator<Item = PublicKey>,
+{
+    let authors: Vec<PublicKey> = public_keys.into_iter().collect();
+    let limit = authors.len();
+
+    if authors.is_empty() {
+        return Err(anyhow!("You need at least one public key"));
+    }
+
+    // Construct the subscription option
+    let opts = SubscribeAutoCloseOptions::default()
+        .exit_policy(ReqExitPolicy::ExitOnEOSE)
+        .timeout(Some(Duration::from_secs(TIMEOUT)));
+
+    // Construct the filter for metadata
+    let filter = Filter::new()
+        .kind(Kind::Metadata)
+        .authors(authors)
+        .limit(limit);
+
+    // Construct target for subscription
+    let target = BOOTSTRAP_RELAYS
+        .into_iter()
+        .map(|relay| (relay, vec![filter.clone()]))
+        .collect::<HashMap<_, _>>();
+
+    client.subscribe(target).close_on(opts).await?;
+
+    Ok(())
+}
+
+/// Load all user profiles from the database
+async fn load_persons(client: &Client) -> Result<Vec<Person>, Error> {
+    let filter = Filter::new().kind(Kind::Metadata).limit(200);
+    let events = client.database().query(filter).await?;
+
+    let mut persons = vec![];
+
+    for event in events.into_iter() {
+        let metadata = Metadata::from_json(event.content).unwrap_or_default();
+        let person = Person::new(event.pubkey, metadata);
+        persons.push(person);
+    }
+
+    Ok(persons)
 }

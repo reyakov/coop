@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    anchored, div, hsla, point, px, Animation, AnimationExt as _, AnyElement, App, Axis, Bounds,
+    anchored, div, hsla, point, px, Animation, AnimationExt as _, AnyElement, App, Bounds,
     BoxShadow, ClickEvent, Div, FocusHandle, InteractiveElement, IntoElement, KeyBinding,
     MouseButton, ParentElement, Pixels, Point, RenderOnce, SharedString, StyleRefinement, Styled,
     Window,
@@ -13,7 +13,8 @@ use theme::ActiveTheme;
 use crate::actions::{Cancel, Confirm};
 use crate::animation::cubic_bezier;
 use crate::button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _};
-use crate::{h_flex, v_flex, ContextModal, IconName, Root, Sizable, StyledExt};
+use crate::scroll::ScrollableElement;
+use crate::{h_flex, v_flex, IconName, Root, Sizable, StyledExt, WindowExtension};
 
 const CONTEXT: &str = "Modal";
 
@@ -97,9 +98,9 @@ pub struct Modal {
     button_props: ModalButtonProps,
 
     /// This will be change when open the modal, the focus handle is create when open the modal.
-    pub(crate) focus_handle: FocusHandle,
-    pub(crate) layer_ix: usize,
-    pub(crate) overlay_visible: bool,
+    pub focus_handle: FocusHandle,
+    pub layer_ix: usize,
+    pub overlay_visible: bool,
 }
 
 impl Modal {
@@ -255,7 +256,7 @@ impl Modal {
         self
     }
 
-    pub(crate) fn has_overlay(&self) -> bool {
+    pub fn has_overlay(&self) -> bool {
         self.overlay
     }
 }
@@ -341,7 +342,7 @@ impl RenderOnce for Modal {
             }
         });
 
-        let window_paddings = crate::window_border::window_paddings(window, cx);
+        let window_paddings = crate::root::window_paddings(window, cx);
         let radius = (cx.theme().radius_lg * 2.).min(px(20.));
 
         let view_size = window.viewport_size()
@@ -489,13 +490,13 @@ impl RenderOnce for Modal {
                                     .w_full()
                                     .h_auto()
                                     .flex_1()
-                                    .relative()
                                     .overflow_hidden()
                                     .child(
                                         v_flex()
                                             .pr(padding_right)
                                             .pl(padding_left)
-                                            .scrollable(Axis::Vertical)
+                                            .size_full()
+                                            .overflow_y_scrollbar()
                                             .child(self.content),
                                     ),
                             )

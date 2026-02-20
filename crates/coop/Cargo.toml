@@ -43,6 +43,7 @@ person = { path = "../person" }
 relay_auth = { path = "../relay_auth" }
 
 gpui.workspace = true
+gpui_platform.workspace = true
 gpui_tokio.workspace = true
 reqwest_client.workspace = true
 

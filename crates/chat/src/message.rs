@@ -1,17 +1,25 @@
 use std::hash::Hash;
 
+use common::EventUtils;
 use nostr_sdk::prelude::*;
 
 /// New message.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NewMessage {
+    pub room: u64,
     pub gift_wrap: EventId,
     pub rumor: UnsignedEvent,
 }
 
 impl NewMessage {
     pub fn new(gift_wrap: EventId, rumor: UnsignedEvent) -> Self {
-        Self { gift_wrap, rumor }
+        let room = rumor.uniq_id();
+
+        Self {
+            room,
+            gift_wrap,
+            rumor,
+        }
     }
 }
 

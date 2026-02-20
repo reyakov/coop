@@ -4,7 +4,7 @@ use gpui::{
 };
 
 use crate::button::Button;
-use crate::popup_menu::PopupMenu;
+use crate::menu::PopupMenu;
 
 pub enum PanelEvent {
     ZoomIn,
