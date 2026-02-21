@@ -1,32 +1,27 @@
+use std::ops::Deref;
 use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, px, App, AppContext, Axis, Context, Element, Entity, InteractiveElement as _, IntoElement,
-    MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
-    StatefulInteractiveElement, Style, Styled as _, WeakEntity, Window,
+    div, px, App, AppContext, Axis, Context, Element, Entity, IntoElement, MouseMoveEvent,
+    MouseUpEvent, ParentElement as _, Pixels, Point, Render, Style, Styled as _, WeakEntity,
+    Window,
 };
-use serde::{Deserialize, Serialize};
-use theme::ActiveTheme;
 
 use super::{DockArea, DockItem};
 use crate::dock_area::panel::PanelView;
 use crate::dock_area::tab_panel::TabPanel;
-use crate::resizable::{HANDLE_PADDING, HANDLE_SIZE, PANEL_MIN_SIZE};
-use crate::{AxisExt as _, StyledExt};
+use crate::resizable::{resize_handle, PANEL_MIN_SIZE};
+use crate::StyledExt;
 
 #[derive(Clone, Render)]
 struct ResizePanel;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockPlacement {
-    #[serde(rename = "center")]
     Center,
-    #[serde(rename = "left")]
     Left,
-    #[serde(rename = "bottom")]
     Bottom,
-    #[serde(rename = "right")]
     Right,
 }
 
@@ -58,16 +53,21 @@ impl DockPlacement {
 pub struct Dock {
     pub(super) placement: DockPlacement,
     dock_area: WeakEntity<DockArea>,
+
+    /// Dock layout
     pub(crate) panel: DockItem,
+
     /// The size is means the width or height of the Dock, if the placement is left or right, the size is width, otherwise the size is height.
     pub(super) size: Pixels,
+
+    /// Whether the Dock is open
     pub(super) open: bool,
+
     /// Whether the Dock is collapsible, default: true
     pub(super) collapsible: bool,
 
-    // Runtime state
     /// Whether the Dock is resizing
-    is_resizing: bool,
+    resizing: bool,
 }
 
 impl Dock {
@@ -98,7 +98,7 @@ impl Dock {
             open: true,
             collapsible: true,
             size: px(200.0),
-            is_resizing: false,
+            resizing: false,
         }
     }
 
@@ -231,54 +231,16 @@ impl Dock {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let axis = self.placement.axis();
-        let neg_offset = -HANDLE_PADDING;
         let view = cx.entity().clone();
 
-        div()
-            .id("resize-handle")
-            .occlude()
-            .absolute()
-            .flex_shrink_0()
-            .when(self.placement.is_left(), |this| {
-                // FIXME: Improve this to let the scroll bar have px(HANDLE_PADDING)
-                this.cursor_col_resize()
-                    .top_0()
-                    .right(px(1.))
-                    .h_full()
-                    .w(HANDLE_SIZE)
-                    .pt_12()
-                    .pb_4()
-            })
-            .when(self.placement.is_right(), |this| {
-                this.cursor_col_resize()
-                    .top_0()
-                    .left(px(-0.5))
-                    .h_full()
-                    .w(HANDLE_SIZE)
-                    .pt_12()
-                    .pb_4()
-            })
-            .when(self.placement.is_bottom(), |this| {
-                this.cursor_row_resize()
-                    .top(neg_offset)
-                    .left_0()
-                    .w_full()
-                    .h(HANDLE_SIZE)
-                    .py(HANDLE_PADDING)
-            })
-            .child(
-                div()
-                    .rounded_full()
-                    .hover(|this| this.bg(cx.theme().border_variant))
-                    .when(axis.is_horizontal(), |this| this.h_full().w(HANDLE_SIZE))
-                    .when(axis.is_vertical(), |this| this.w_full().h(HANDLE_SIZE)),
-            )
+        resize_handle("resize-handle", axis)
+            .placement(self.placement)
             .on_drag(ResizePanel {}, move |info, _, _, cx| {
                 cx.stop_propagation();
-                view.update(cx, |view, _| {
-                    view.is_resizing = true;
+                view.update(cx, |view, _cx| {
+                    view.resizing = true;
                 });
-                cx.new(|_| info.clone())
+                cx.new(|_| info.deref().clone())
             })
     }
 
@@ -288,7 +250,7 @@ impl Dock {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.is_resizing {
+        if !self.resizing {
             return;
         }
 
@@ -349,7 +311,7 @@ impl Dock {
     }
 
     fn done_resizing(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.is_resizing = false;
+        self.resizing = false;
     }
 }
 
@@ -440,7 +402,7 @@ impl Element for DockElement {
     ) {
         window.on_mouse_event({
             let view = self.view.clone();
-            let is_resizing = view.read(cx).is_resizing;
+            let is_resizing = view.read(cx).resizing;
             move |e: &MouseMoveEvent, phase, window, cx| {
                 if !is_resizing {
                     return;

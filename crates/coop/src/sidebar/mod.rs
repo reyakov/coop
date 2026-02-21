@@ -18,15 +18,12 @@ use smallvec::{smallvec, SmallVec};
 use state::{NostrRegistry, FIND_DELAY};
 use theme::{ActiveTheme, TITLEBAR_HEIGHT};
 use ui::button::{Button, ButtonVariants};
-use ui::divider::Divider;
 use ui::dock_area::panel::{Panel, PanelEvent};
 use ui::indicator::Indicator;
 use ui::input::{InputEvent, InputState, TextInput};
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
-use ui::{
-    h_flex, v_flex, Disableable, Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension,
-};
+use ui::{h_flex, v_flex, Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension};
 
 mod entry;
 
@@ -122,12 +119,10 @@ impl Sidebar {
                         }
                     }
                     InputEvent::Focus => {
-                        this.set_input_focus(window, cx);
+                        this.set_input_focus(true, window, cx);
                         this.get_contact_list(window, cx);
                     }
-                    InputEvent::Blur => {
-                        this.set_input_focus(window, cx);
-                    }
+                    _ => {}
                 };
             }),
         );
@@ -246,6 +241,7 @@ impl Sidebar {
         }));
     }
 
+    /// Set the results of the search
     fn set_results(&mut self, results: Vec<PublicKey>, cx: &mut Context<Self>) {
         self.find_results.update(cx, |this, cx| {
             *this = Some(results);
@@ -253,6 +249,7 @@ impl Sidebar {
         });
     }
 
+    /// Set the finding status
     fn set_finding(&mut self, status: bool, _window: &mut Window, cx: &mut Context<Self>) {
         // Disable the input to prevent duplicate requests
         self.find_input.update(cx, |this, cx| {
@@ -264,13 +261,14 @@ impl Sidebar {
         cx.notify();
     }
 
-    fn set_input_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.find_focused = !self.find_focused;
+    /// Set the focus status of the input element.
+    fn set_input_focus(&mut self, status: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.find_focused = status;
         cx.notify();
 
-        // Reset the find panel
-        if !self.find_focused {
-            self.reset(window, cx);
+        // Focus to the input element
+        if !status {
+            window.focus_prev(cx);
         }
     }
 
@@ -356,7 +354,8 @@ impl Sidebar {
     }
 
     /// Set the active filter for the sidebar.
-    fn set_filter(&mut self, kind: RoomKind, cx: &mut Context<Self>) {
+    fn set_filter(&mut self, kind: RoomKind, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_input_focus(false, window, cx);
         self.filter.update(cx, |this, cx| {
             *this = kind;
             cx.notify();
@@ -495,12 +494,13 @@ impl Render for Sidebar {
         v_flex()
             .image_cache(self.image_cache.clone())
             .size_full()
-            .relative()
+            .gap_2()
             .child(
                 h_flex()
                     .h(TITLEBAR_HEIGHT)
                     .border_b_1()
-                    .border_color(cx.theme().border)
+                    .border_color(cx.theme().border_variant)
+                    .bg(cx.theme().elevated_surface_background)
                     .child(
                         TextInput::new(&self.find_input)
                             .appearance(false)
@@ -520,22 +520,17 @@ impl Render for Sidebar {
             )
             .child(
                 h_flex()
-                    .h(TITLEBAR_HEIGHT)
+                    .px_2()
+                    .gap_2()
                     .justify_center()
-                    .border_b_1()
-                    .border_color(cx.theme().border)
                     .when(show_find_panel, |this| {
                         this.child(
                             Button::new("search-results")
                                 .icon(IconName::Search)
-                                .label("Search")
                                 .tooltip("All search results")
                                 .small()
-                                .underline()
-                                .ghost()
+                                .ghost_alt()
                                 .font_semibold()
-                                .rounded_none()
-                                .h_full()
                                 .flex_1()
                                 .selected(true),
                         )
@@ -552,21 +547,16 @@ impl Render for Sidebar {
                             .when(!show_find_panel, |this| this.label("Inbox"))
                             .tooltip("All ongoing conversations")
                             .small()
-                            .underline()
-                            .ghost()
+                            .ghost_alt()
                             .font_semibold()
-                            .rounded_none()
-                            .h_full()
                             .flex_1()
-                            .disabled(show_find_panel)
                             .selected(
                                 !show_find_panel && self.current_filter(&RoomKind::Ongoing, cx),
                             )
-                            .on_click(cx.listener(|this, _ev, _window, cx| {
-                                this.set_filter(RoomKind::Ongoing, cx);
+                            .on_click(cx.listener(|this, _ev, window, cx| {
+                                this.set_filter(RoomKind::Ongoing, window, cx);
                             })),
                     )
-                    .child(Divider::vertical())
                     .child(
                         Button::new("requests")
                             .map(|this| {
@@ -579,31 +569,26 @@ impl Render for Sidebar {
                             .when(!show_find_panel, |this| this.label("Requests"))
                             .tooltip("Incoming new conversations")
                             .small()
-                            .ghost()
-                            .underline()
+                            .ghost_alt()
                             .font_semibold()
-                            .rounded_none()
-                            .h_full()
                             .flex_1()
-                            .disabled(show_find_panel)
                             .selected(
                                 !show_find_panel && !self.current_filter(&RoomKind::Ongoing, cx),
                             )
                             .when(self.new_requests, |this| {
                                 this.child(div().size_1().rounded_full().bg(cx.theme().cursor))
                             })
-                            .on_click(cx.listener(|this, _ev, _window, cx| {
-                                this.set_filter(RoomKind::default(), cx);
+                            .on_click(cx.listener(|this, _ev, window, cx| {
+                                this.set_filter(RoomKind::default(), window, cx);
                             })),
                     ),
             )
             .when(!show_find_panel && !loading && total_rooms == 0, |this| {
                 this.child(
-                    div().mt_2().px_2().child(
+                    div().px_2().child(
                         v_flex()
                             .p_3()
                             .h_24()
-                            .w_full()
                             .border_2()
                             .border_dashed()
                             .border_color(cx.theme().border_variant)
@@ -629,9 +614,8 @@ impl Render for Sidebar {
                 v_flex()
                     .h_full()
                     .px_1p5()
-                    .mt_2()
-                    .flex_1()
                     .gap_1()
+                    .flex_1()
                     .overflow_y_hidden()
                     .when(show_find_panel, |this| {
                         this.gap_3()
@@ -747,7 +731,7 @@ impl Render for Sidebar {
                                 .bg(cx.theme().background.opacity(0.85))
                                 .border_color(cx.theme().border_disabled)
                                 .border_1()
-                                .when(cx.theme().shadow, |this| this.shadow_sm())
+                                .when(cx.theme().shadow, |this| this.shadow_xs())
                                 .rounded_full()
                                 .text_xs()
                                 .font_semibold()

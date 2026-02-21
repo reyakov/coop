@@ -1,36 +1,44 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, AnyElement, App, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, Stateful, StatefulInteractiveElement, Styled, Window,
+    div, px, AnyElement, App, Div, InteractiveElement, IntoElement, MouseButton, ParentElement,
+    RenderOnce, StatefulInteractiveElement, Styled, Window,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TITLEBAR_HEIGHT};
 
-use crate::Selectable;
+use crate::{Selectable, Sizable, Size};
 
 pub mod tab_bar;
 
 #[derive(IntoElement)]
 pub struct Tab {
-    base: Stateful<Div>,
-    label: AnyElement,
+    ix: usize,
+    base: Div,
+    label: Option<AnyElement>,
     prefix: Option<AnyElement>,
     suffix: Option<AnyElement>,
     disabled: bool,
     selected: bool,
+    size: Size,
 }
 
 impl Tab {
-    pub fn new(id: impl Into<ElementId>, label: impl IntoElement) -> Self {
-        let id: ElementId = id.into();
-
+    pub fn new() -> Self {
         Self {
-            base: div().id(id),
-            label: label.into_any_element(),
+            ix: 0,
+            base: div(),
+            label: None,
             disabled: false,
             selected: false,
             prefix: None,
             suffix: None,
+            size: Size::default(),
         }
+    }
+
+    /// Set label for the tab.
+    pub fn label(mut self, label: impl Into<AnyElement>) -> Self {
+        self.label = Some(label.into());
+        self
     }
 
     /// Set the left side of the tab
@@ -49,6 +57,18 @@ impl Tab {
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
+    }
+
+    /// Set index to the tab.
+    pub fn ix(mut self, ix: usize) -> Self {
+        self.ix = ix;
+        self
+    }
+}
+
+impl Default for Tab {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -77,34 +97,47 @@ impl Styled for Tab {
     }
 }
 
+impl Sizable for Tab {
+    fn with_size(mut self, size: impl Into<Size>) -> Self {
+        self.size = size.into();
+        self
+    }
+}
+
 impl RenderOnce for Tab {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let (text_color, bg_color, hover_bg_color) = match (self.selected, self.disabled) {
-            (true, false) => (
-                cx.theme().text,
-                cx.theme().tab_active_background,
-                cx.theme().tab_hover_background,
-            ),
-            (false, false) => (
-                cx.theme().text_muted,
-                cx.theme().ghost_element_background,
-                cx.theme().tab_hover_background,
-            ),
-            (true, true) => (
-                cx.theme().text_muted,
-                cx.theme().ghost_element_background,
-                cx.theme().tab_hover_background,
-            ),
-            (false, true) => (
-                cx.theme().text_muted,
-                cx.theme().ghost_element_background,
-                cx.theme().tab_hover_background,
-            ),
-        };
+        let (text_color, hover_text_color, bg_color, border_color) =
+            match (self.selected, self.disabled) {
+                (true, false) => (
+                    cx.theme().tab_active_foreground,
+                    cx.theme().tab_hover_foreground,
+                    cx.theme().tab_active_background,
+                    cx.theme().border,
+                ),
+                (false, false) => (
+                    cx.theme().tab_inactive_foreground,
+                    cx.theme().tab_hover_foreground,
+                    cx.theme().ghost_element_background,
+                    cx.theme().border_transparent,
+                ),
+                (true, true) => (
+                    cx.theme().tab_inactive_foreground,
+                    cx.theme().tab_hover_foreground,
+                    cx.theme().ghost_element_background,
+                    cx.theme().border_disabled,
+                ),
+                (false, true) => (
+                    cx.theme().tab_inactive_foreground,
+                    cx.theme().tab_hover_foreground,
+                    cx.theme().ghost_element_background,
+                    cx.theme().border_disabled,
+                ),
+            };
 
         self.base
-            .h(px(30.))
-            .px_2()
+            .id(self.ix)
+            .h(TITLEBAR_HEIGHT)
+            .px_4()
             .relative()
             .flex()
             .items_center()
@@ -115,12 +148,19 @@ impl RenderOnce for Tab {
             .text_ellipsis()
             .text_color(text_color)
             .bg(bg_color)
-            .rounded(cx.theme().radius_lg)
-            .hover(|this| this.bg(hover_bg_color))
+            .border_l(px(1.))
+            .border_r(px(1.))
+            .border_color(border_color)
+            .when(!self.selected && !self.disabled, |this| {
+                this.hover(|this| this.text_color(hover_text_color))
+            })
             .when_some(self.prefix, |this, prefix| {
                 this.child(prefix).text_color(text_color)
             })
-            .child(self.label)
+            .when_some(self.label, |this, label| this.child(label))
             .when_some(self.suffix, |this, suffix| this.child(suffix))
+            .on_mouse_down(MouseButton::Left, |_ev, _window, cx| {
+                cx.stop_propagation();
+            })
     }
 }

@@ -78,8 +78,10 @@ pub struct ThemeColors {
 
     // Tab colors
     pub tab_inactive_background: Hsla,
-    pub tab_hover_background: Hsla,
+    pub tab_inactive_foreground: Hsla,
     pub tab_active_background: Hsla,
+    pub tab_active_foreground: Hsla,
+    pub tab_hover_foreground: Hsla,
 
     // Scrollbar colors
     pub scrollbar_thumb_background: Hsla,
@@ -106,10 +108,10 @@ impl ThemeColors {
             background: neutral().light().step_1(),
             surface_background: neutral().light().step_2(),
             elevated_surface_background: neutral().light().step_3(),
-            panel_background: gpui::white(),
+            panel_background: neutral().light().step_1(),
             overlay: neutral().light_alpha().step_3(),
-            title_bar: gpui::transparent_black(),
-            title_bar_inactive: neutral().light().step_1(),
+            title_bar: neutral().light().step_2(),
+            title_bar_inactive: neutral().light().step_3(),
             window_border: hsl(240.0, 5.9, 78.0),
 
             border: neutral().light().step_6(),
@@ -164,9 +166,11 @@ impl ThemeColors {
             ghost_element_selected: neutral().light().step_5(),
             ghost_element_disabled: neutral().light_alpha().step_2(),
 
-            tab_inactive_background: neutral().light().step_3(),
-            tab_hover_background: neutral().light().step_4(),
-            tab_active_background: neutral().light().step_5(),
+            tab_inactive_background: neutral().light().step_2(),
+            tab_inactive_foreground: neutral().light().step_11(),
+            tab_active_background: neutral().light().step_1(),
+            tab_active_foreground: neutral().light().step_12(),
+            tab_hover_foreground: brand().light().step_9(),
 
             scrollbar_thumb_background: neutral().light_alpha().step_3(),
             scrollbar_thumb_hover_background: neutral().light_alpha().step_4(),
@@ -246,9 +250,11 @@ impl ThemeColors {
             ghost_element_selected: neutral().dark().step_5(),
             ghost_element_disabled: neutral().dark_alpha().step_2(),
 
-            tab_inactive_background: neutral().dark().step_3(),
-            tab_hover_background: neutral().dark().step_4(),
-            tab_active_background: neutral().dark().step_5(),
+            tab_inactive_background: neutral().dark().step_2(),
+            tab_inactive_foreground: neutral().dark().step_11(),
+            tab_active_background: neutral().dark().step_3(),
+            tab_active_foreground: neutral().dark().step_12(),
+            tab_hover_foreground: brand().dark().step_9(),
 
             scrollbar_thumb_background: neutral().dark_alpha().step_3(),
             scrollbar_thumb_hover_background: neutral().dark_alpha().step_4(),

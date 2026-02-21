@@ -6,6 +6,7 @@ use gpui::{
 use crate::button::Button;
 use crate::menu::PopupMenu;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PanelEvent {
     ZoomIn,
     ZoomOut,

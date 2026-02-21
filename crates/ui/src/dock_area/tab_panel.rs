@@ -7,13 +7,13 @@ use gpui::{
     MouseButton, ParentElement, Pixels, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, WeakEntity, Window,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, CLIENT_SIDE_DECORATION_ROUNDING, TITLEBAR_HEIGHT};
 
-use super::panel::PanelView;
-use super::stack_panel::StackPanel;
-use super::{ClosePanel, DockArea, PanelEvent, PanelStyle, ToggleZoom};
 use crate::button::{Button, ButtonVariants as _};
-use crate::dock_area::panel::Panel;
+use crate::dock_area::dock::DockPlacement;
+use crate::dock_area::panel::{Panel, PanelView};
+use crate::dock_area::stack_panel::StackPanel;
+use crate::dock_area::{ClosePanel, DockArea, PanelEvent, PanelStyle, ToggleZoom};
 use crate::menu::{DropdownMenu, PopupMenu};
 use crate::tab::tab_bar::TabBar;
 use crate::tab::Tab;
@@ -65,16 +65,29 @@ impl Render for DragPanel {
 pub struct TabPanel {
     focus_handle: FocusHandle,
     dock_area: WeakEntity<DockArea>,
-    /// The stock_panel can be None, if is None, that means the panels can't be split or move
-    stack_panel: Option<WeakEntity<StackPanel>>,
+
+    /// List of panels in the tab panel
     pub(crate) panels: Vec<Arc<dyn PanelView>>,
+
+    /// Current active panel index
     pub(crate) active_ix: usize,
+
     /// If this is true, the Panel closeable will follow the active panel's closeable,
     /// otherwise this TabPanel will not able to close
     pub(crate) closable: bool,
+
+    /// The stock_panel can be None, if is None, that means the panels can't be split or move
+    stack_panel: Option<WeakEntity<StackPanel>>,
+
+    /// Scroll handle for the tab bar
     tab_bar_scroll_handle: ScrollHandle,
-    is_zoomed: bool,
-    is_collapsed: bool,
+
+    /// Whether the tab panel is zoomeds
+    zoomed: bool,
+
+    /// Whether the tab panel is collapsed
+    collapsed: bool,
+
     /// When drag move, will get the placement of the panel to be split
     will_split_placement: Option<Placement>,
 }
@@ -142,8 +155,8 @@ impl TabPanel {
             active_ix: 0,
             tab_bar_scroll_handle: ScrollHandle::new(),
             will_split_placement: None,
-            is_zoomed: false,
-            is_collapsed: false,
+            zoomed: false,
+            collapsed: false,
             closable: true,
         }
     }
@@ -339,7 +352,7 @@ impl TabPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.is_collapsed = collapsed;
+        self.collapsed = collapsed;
         cx.notify();
     }
 
@@ -352,7 +365,7 @@ impl TabPanel {
             return true;
         }
 
-        if self.is_zoomed {
+        if self.zoomed {
             return true;
         }
 
@@ -408,7 +421,7 @@ impl TabPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let is_zoomed = self.is_zoomed && state.zoomable;
+        let is_zoomed = self.zoomed && state.zoomable;
         let view = cx.entity().clone();
         let build_popup_menu = move |this, cx: &App| view.read(cx).popup_menu(this, cx);
         let toolbar = self.toolbar_buttons(window, cx);
@@ -420,7 +433,7 @@ impl TabPanel {
             .occlude()
             .rounded_full()
             .children(toolbar.into_iter().map(|btn| btn.small().ghost().rounded()))
-            .when(self.is_zoomed, |this| {
+            .when(self.zoomed, |this| {
                 this.child(
                     Button::new("zoom")
                         .icon(IconName::Zoom)
@@ -433,8 +446,7 @@ impl TabPanel {
                 )
             })
             .when(has_toolbar, |this| {
-                this.bg(cx.theme().surface_background)
-                    .child(div().flex_shrink_0().h_4().w_px().bg(cx.theme().border))
+                this.child(div().flex_shrink_0().h_4().w_px().bg(cx.theme().border))
             })
             .child(
                 Button::new("menu")
@@ -461,21 +473,113 @@ impl TabPanel {
             )
     }
 
+    fn render_dock_toggle_button(
+        &self,
+        placement: DockPlacement,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Button> {
+        if self.zoomed {
+            return None;
+        }
+
+        let dock_area = self.dock_area.upgrade()?.read(cx);
+
+        if !dock_area.toggle_button_visible {
+            return None;
+        }
+
+        if !dock_area.is_dock_collapsible(placement, cx) {
+            return None;
+        }
+
+        let view_entity_id = cx.entity().entity_id();
+        let toggle_button_panels = dock_area.toggle_button_panels;
+
+        // Check if current TabPanel's entity_id matches the one stored in DockArea for this placement
+        if !match placement {
+            DockPlacement::Left => {
+                dock_area.left_dock.is_some() && toggle_button_panels.left == Some(view_entity_id)
+            }
+            DockPlacement::Right => {
+                dock_area.right_dock.is_some() && toggle_button_panels.right == Some(view_entity_id)
+            }
+            DockPlacement::Bottom => {
+                dock_area.bottom_dock.is_some()
+                    && toggle_button_panels.bottom == Some(view_entity_id)
+            }
+            DockPlacement::Center => unreachable!(),
+        } {
+            return None;
+        }
+
+        let is_open = dock_area.is_dock_open(placement, cx);
+
+        let icon = match placement {
+            DockPlacement::Left => {
+                if is_open {
+                    IconName::PanelLeft
+                } else {
+                    IconName::PanelLeftOpen
+                }
+            }
+            DockPlacement::Right => {
+                if is_open {
+                    IconName::PanelRight
+                } else {
+                    IconName::PanelRightOpen
+                }
+            }
+            DockPlacement::Bottom => {
+                if is_open {
+                    IconName::PanelBottom
+                } else {
+                    IconName::PanelBottomOpen
+                }
+            }
+            DockPlacement::Center => unreachable!(),
+        };
+
+        Some(
+            Button::new(SharedString::from(format!("toggle-dock:{:?}", placement)))
+                .icon(icon)
+                .small()
+                .ghost()
+                .tab_stop(false)
+                .tooltip(match is_open {
+                    true => "Collapse",
+                    false => "Expand",
+                })
+                .on_click(cx.listener({
+                    let dock_area = self.dock_area.clone();
+                    move |_this, _ev, window, cx| {
+                        _ = dock_area.update(cx, |dock_area, cx| {
+                            dock_area.toggle_dock(placement, window, cx);
+                        });
+                    }
+                })),
+        )
+    }
+
     fn render_title_bar(
         &self,
         state: &TabState,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let view = cx.entity().clone();
-
+        // Get the dock area entity
         let Some(dock_area) = self.dock_area.upgrade() else {
+            // Return a default element if the dock area is not available
             return div().into_any_element();
         };
 
-        let panel_style = dock_area.read(cx).panel_style;
+        let left_dock_button = self.render_dock_toggle_button(DockPlacement::Left, window, cx);
+        let bottom_dock_button = self.render_dock_toggle_button(DockPlacement::Bottom, window, cx);
+        let right_dock_button = self.render_dock_toggle_button(DockPlacement::Right, window, cx);
+        let has_extend_dock_button = left_dock_button.is_some() || bottom_dock_button.is_some();
+        let tabs_count = self.panels.len();
 
-        if self.panels.len() == 1 && panel_style == PanelStyle::Default {
+        if tabs_count == 1 && dock_area.read(cx).panel_style == PanelStyle::Default {
             let panel = self.panels.first().unwrap();
 
             if !panel.visible(cx) {
@@ -488,7 +592,20 @@ impl TabPanel {
                 .line_height(rems(1.0))
                 .h(px(30.))
                 .py_2()
-                .px_3()
+                .pl_3()
+                .pr_2()
+                .when(left_dock_button.is_some(), |this| this.pl_2())
+                .when(right_dock_button.is_some(), |this| this.pr_2())
+                .when(has_extend_dock_button, |this| {
+                    this.child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .mr_1()
+                            .gap_1()
+                            .children(left_dock_button)
+                            .children(bottom_dock_button),
+                    )
+                })
                 .child(
                     div()
                         .id("tab")
@@ -507,7 +624,7 @@ impl TabPanel {
                             this.on_drag(
                                 DragPanel {
                                     panel: panel.clone(),
-                                    tab_panel: view,
+                                    tab_panel: cx.entity(),
                                 },
                                 |drag, _, _, cx| {
                                     cx.stop_propagation();
@@ -526,25 +643,43 @@ impl TabPanel {
                 .into_any_element();
         }
 
-        let tabs_count = self.panels.len();
-
-        TabBar::new("tab-bar")
-            .track_scroll(self.tab_bar_scroll_handle.clone())
+        TabBar::new()
+            .track_scroll(&self.tab_bar_scroll_handle)
+            .h(TITLEBAR_HEIGHT)
+            .when(has_extend_dock_button, |this| {
+                this.prefix(
+                    h_flex()
+                        .items_center()
+                        .top_0()
+                        .right(-px(1.))
+                        .border_r_1()
+                        .border_b_1()
+                        .h_full()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().surface_background)
+                        .px_2()
+                        .children(left_dock_button)
+                        .children(bottom_dock_button),
+                )
+            })
             .children(self.panels.iter().enumerate().filter_map(|(ix, panel)| {
+                let disabled = self.collapsed;
                 let mut active = state.active_panel.as_ref() == Some(panel);
-                let disabled = self.is_collapsed;
 
+                // If the panel is not visible, hide the tabbar
                 if !panel.visible(cx) {
                     return None;
                 }
 
                 // Always not show active tab style, if the panel is collapsed
-                if self.is_collapsed {
+                if self.collapsed {
                     active = false;
                 }
 
                 Some(
-                    Tab::new(("tab", ix), panel.title(cx))
+                    Tab::new()
+                        .ix(ix)
+                        .label(panel.title(cx))
                         .py_2()
                         .selected(active)
                         .disabled(disabled)
@@ -563,7 +698,7 @@ impl TabPanel {
                             }))
                             .when(state.draggable, |this| {
                                 this.on_drag(
-                                    DragPanel::new(panel.clone(), view.clone()),
+                                    DragPanel::new(panel.clone(), cx.entity().clone()),
                                     |drag, _, _, cx| {
                                         cx.stop_propagation();
                                         cx.new(|_| drag.clone())
@@ -587,16 +722,17 @@ impl TabPanel {
                         }),
                 )
             }))
-            .child(
+            .last_empty_space(
                 // empty space to allow move to last tab right
                 div()
                     .id("tab-bar-empty-space")
                     .h_full()
                     .flex_grow()
                     .min_w_16()
-                    .rounded(cx.theme().radius)
                     .when(state.droppable, |this| {
-                        this.drag_over::<DragPanel>(|this, _, _, cx| {
+                        let view = cx.entity();
+
+                        this.drag_over::<DragPanel>(|this, _d, _window, cx| {
                             this.bg(cx.theme().surface_background)
                         })
                         .on_drop(cx.listener(
@@ -614,16 +750,22 @@ impl TabPanel {
                         ))
                     }),
             )
-            .suffix(
-                h_flex()
-                    .items_center()
-                    .top_0()
-                    .right_0()
-                    .h_full()
-                    .px_2()
-                    .gap_1()
-                    .child(self.render_toolbar(state, window, cx)),
-            )
+            .when(!self.collapsed, |this| {
+                this.suffix(
+                    h_flex()
+                        .items_center()
+                        .px_2()
+                        .gap_1()
+                        .top_0()
+                        .right_0()
+                        .h_full()
+                        .border_color(cx.theme().border)
+                        .border_l_1()
+                        .border_b_1()
+                        .child(self.render_toolbar(state, window, cx))
+                        .when_some(right_dock_button, |this, btn| this.child(btn)),
+                )
+            })
             .into_any_element()
     }
 
@@ -633,7 +775,7 @@ impl TabPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        if self.is_collapsed {
+        if self.collapsed {
             return Empty {}.into_any_element();
         }
 
@@ -646,14 +788,13 @@ impl TabPanel {
             .group("")
             .overflow_hidden()
             .flex_1()
-            .p_1()
             .child(
                 div()
                     .size_full()
-                    .rounded(cx.theme().radius_lg)
-                    .when(cx.theme().shadow, |this| this.shadow_sm())
-                    .when(cx.theme().mode.is_dark(), |this| this.shadow_lg())
                     .bg(cx.theme().panel_background)
+                    .when(cx.theme().platform.is_linux(), |this| {
+                        this.rounded_b(CLIENT_SIDE_DECORATION_ROUNDING)
+                    })
                     .overflow_hidden()
                     .child(
                         active_panel
@@ -667,7 +808,6 @@ impl TabPanel {
                         div()
                             .invisible()
                             .absolute()
-                            .p_1()
                             .child(
                                 div()
                                     .rounded(cx.theme().radius_lg)
@@ -911,16 +1051,16 @@ impl TabPanel {
             return;
         }
 
-        if !self.is_zoomed {
+        if !self.zoomed {
             cx.emit(PanelEvent::ZoomIn)
         } else {
             cx.emit(PanelEvent::ZoomOut)
         }
 
-        self.is_zoomed = !self.is_zoomed;
+        self.zoomed = !self.zoomed;
 
         cx.spawn({
-            let is_zoomed = self.is_zoomed;
+            let is_zoomed = self.zoomed;
             async move |view, cx| {
                 view.update(cx, |view, cx| {
                     view.set_zoomed(is_zoomed, cx);
@@ -933,7 +1073,7 @@ impl TabPanel {
 
     fn on_action_close_panel(
         &mut self,
-        _: &ClosePanel,
+        _ev: &ClosePanel,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -954,7 +1094,6 @@ impl Focusable for TabPanel {
 }
 
 impl EventEmitter<DismissEvent> for TabPanel {}
-
 impl EventEmitter<PanelEvent> for TabPanel {}
 
 impl Render for TabPanel {
@@ -975,11 +1114,12 @@ impl Render for TabPanel {
         }
 
         v_flex()
-            .when(!self.is_collapsed, |this| {
+            .when(!self.collapsed, |this| {
                 this.on_action(cx.listener(Self::on_action_toggle_zoom))
                     .on_action(cx.listener(Self::on_action_close_panel))
             })
             .id("tab-panel")
+            .tab_group()
             .track_focus(&focus_handle)
             .size_full()
             .overflow_hidden()

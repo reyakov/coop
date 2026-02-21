@@ -2,30 +2,23 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    actions, canvas, div, px, AnyElement, AnyView, App, AppContext, Axis, Bounds, Context, Edges,
-    Entity, EntityId, EventEmitter, Focusable, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, Render, SharedString, Styled, Subscription, WeakEntity, Window,
+    actions, div, px, AnyElement, AnyView, App, AppContext, Axis, Bounds, Context, Edges, Entity,
+    EntityId, EventEmitter, Focusable, InteractiveElement as _, IntoElement, ParentElement as _,
+    Pixels, Render, SharedString, Styled, Subscription, WeakEntity, Window,
 };
 
 use crate::dock_area::dock::{Dock, DockPlacement};
 use crate::dock_area::panel::{Panel, PanelEvent, PanelStyle, PanelView};
 use crate::dock_area::stack_panel::StackPanel;
 use crate::dock_area::tab_panel::TabPanel;
+use crate::ElementExt;
 
 pub mod dock;
 pub mod panel;
 pub mod stack_panel;
 pub mod tab_panel;
 
-actions!(
-    dock,
-    [
-        /// Zoom the current panel
-        ToggleZoom,
-        /// Close the current panel
-        ClosePanel
-    ]
-);
+actions!(dock, [ToggleZoom, ClosePanel]);
 
 pub enum DockEvent {
     /// The layout of the dock has changed, subscribers this to save the layout.
@@ -38,20 +31,31 @@ pub enum DockEvent {
 /// The main area of the dock.
 pub struct DockArea {
     pub(crate) bounds: Bounds<Pixels>,
+
     /// The center view of the dockarea.
     pub items: DockItem,
-    /// The entity_id of the [`TabPanel`](TabPanel) where each toggle button should be displayed,
-    toggle_button_panels: Edges<Option<EntityId>>,
+
     /// The left dock of the dock_area.
     left_dock: Option<Entity<Dock>>,
+
     /// The bottom dock of the dock_area.
     bottom_dock: Option<Entity<Dock>>,
+
     /// The right dock of the dock_area.
     right_dock: Option<Entity<Dock>>,
+
+    /// The entity_id of the [`TabPanel`](TabPanel) where each toggle button should be displayed,
+    toggle_button_panels: Edges<Option<EntityId>>,
+
+    /// Whether to show the toggle button.
+    toggle_button_visible: bool,
+
     /// The top zoom view of the dock_area, if any.
     zoom_view: Option<AnyView>,
+
     /// Lock panels layout, but allow to resize.
     is_locked: bool,
+
     /// The panel style, default is [`PanelStyle::Default`](PanelStyle::Default).
     pub(crate) panel_style: PanelStyle,
     subscriptions: Vec<Subscription>,
@@ -330,6 +334,7 @@ impl DockArea {
             items: dock_item,
             zoom_view: None,
             toggle_button_panels: Edges::default(),
+            toggle_button_visible: true,
             left_dock: None,
             right_dock: None,
             bottom_dock: None,
@@ -344,7 +349,7 @@ impl DockArea {
     }
 
     /// Set the panel style of the dock area.
-    pub fn panel_style(mut self, style: PanelStyle) -> Self {
+    pub fn style(mut self, style: PanelStyle) -> Self {
         self.panel_style = style;
         self
     }
@@ -649,31 +654,35 @@ impl DockArea {
             cx.subscribe_in(
                 view,
                 window,
-                move |_, panel, event, window, cx| match event {
+                move |_this, panel, event, window, cx| match event {
                     PanelEvent::ZoomIn => {
                         let panel = panel.clone();
                         cx.spawn_in(window, async move |view, window| {
-                            _ = view.update_in(window, |view, window, cx| {
+                            view.update_in(window, |view, window, cx| {
                                 view.set_zoomed_in(panel, window, cx);
                                 cx.notify();
-                            });
+                            })
+                            .ok();
                         })
                         .detach();
                     }
-                    PanelEvent::ZoomOut => cx
-                        .spawn_in(window, async move |view, window| {
+                    PanelEvent::ZoomOut => {
+                        cx.spawn_in(window, async move |view, window| {
                             _ = view.update_in(window, |view, window, cx| {
                                 view.set_zoomed_out(window, cx);
                             });
                         })
-                        .detach(),
+                        .detach();
+                    }
                     PanelEvent::LayoutChanged => {
                         cx.spawn_in(window, async move |view, window| {
-                            _ = view.update_in(window, |view, window, cx| {
+                            view.update_in(window, |view, window, cx| {
                                 view.update_toggle_button_tab_panels(window, cx)
-                            });
+                            })
+                            .ok();
                         })
                         .detach();
+                        // Emit layout changed event for dock
                         cx.emit(DockEvent::LayoutChanged);
                     }
                 },
@@ -746,14 +755,7 @@ impl Render for DockArea {
             .relative()
             .size_full()
             .overflow_hidden()
-            .child(
-                canvas(
-                    move |bounds, _, cx| view.update(cx, |r, _| r.bounds = bounds),
-                    |_, _, _, _| {},
-                )
-                .absolute()
-                .size_full(),
-            )
+            .on_prepaint(move |bounds, _, cx| view.update(cx, |r, _| r.bounds = bounds))
             .map(|this| {
                 if let Some(zoom_view) = self.zoom_view.clone() {
                     this.child(zoom_view)

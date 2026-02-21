@@ -373,7 +373,7 @@ impl Render for Root {
                     })
                     .size_full()
                     .font_family(font_family)
-                    .bg(cx.theme().background)
+                    .bg(cx.theme().surface_background)
                     .text_color(cx.theme().text)
                     .child(self.view.clone()),
             )

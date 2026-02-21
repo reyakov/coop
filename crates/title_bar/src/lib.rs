@@ -106,7 +106,7 @@ impl Render for TitleBar {
             })
             .bg(color)
             .border_b_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().border_variant)
             .content_stretch()
             .child(
                 h_flex()

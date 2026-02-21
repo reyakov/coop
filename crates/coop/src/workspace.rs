@@ -9,7 +9,7 @@ use gpui::{
 use person::PersonRegistry;
 use smallvec::{smallvec, SmallVec};
 use state::{NostrRegistry, RelayState};
-use theme::{ActiveTheme, SIDEBAR_WIDTH, TITLEBAR_HEIGHT};
+use theme::{ActiveTheme, Theme, SIDEBAR_WIDTH, TITLEBAR_HEIGHT};
 use title_bar::TitleBar;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
@@ -41,9 +41,16 @@ impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let chat = ChatRegistry::global(cx);
         let titlebar = cx.new(|_| TitleBar::new());
-        let dock = cx.new(|cx| DockArea::new(window, cx).panel_style(PanelStyle::TabBar));
+        let dock = cx.new(|cx| DockArea::new(window, cx).style(PanelStyle::TabBar));
 
         let mut subscriptions = smallvec![];
+
+        subscriptions.push(
+            // Observe system appearance and update theme
+            cx.observe_window_appearance(window, |_this, window, cx| {
+                Theme::sync_system_appearance(Some(window), cx);
+            }),
+        );
 
         subscriptions.push(
             // Observe all events emitted by the chat registry
@@ -236,11 +243,11 @@ impl Workspace {
                     h_flex()
                         .h_6()
                         .w_full()
-                        .px_1()
+                        .px_2()
                         .text_xs()
                         .text_color(cx.theme().warning_foreground)
                         .bg(cx.theme().warning_background)
-                        .rounded_sm()
+                        .rounded_full()
                         .child(SharedString::from(
                             "User hasn't configured a messaging relay list",
                         )),
