@@ -1321,7 +1321,6 @@ dependencies = [
  "gpui_windows",
  "indexset",
  "itertools 0.13.0",
- "key_store",
  "log",
  "nostr-connect",
  "nostr-sdk",
@@ -3507,22 +3506,6 @@ checksum = "d36139f1c97c42c0c86a411910b04e48d4939a0376e6e0f989420cbdee0120e5"
 dependencies = [
  "once_cell",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "key_store"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "common",
- "futures",
- "gpui",
- "log",
- "nostr-sdk",
- "serde",
- "serde_json",
- "smallvec",
- "smol",
 ]
 
 [[package]]

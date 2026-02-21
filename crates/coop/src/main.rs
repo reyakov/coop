@@ -79,9 +79,6 @@ fn main() {
                     // Initialize theme registry
                     theme::init(cx);
 
-                    // Initialize backend for keys storage
-                    key_store::init(cx);
-
                     // Initialize the nostr client
                     state::init(window, cx);
 
