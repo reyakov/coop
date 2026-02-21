@@ -4,7 +4,7 @@ use std::sync::Arc;
 pub use actions::*;
 use anyhow::{Context as AnyhowContext, Error};
 use chat::{Message, RenderedMessage, Room, RoomEvent, SendReport};
-use common::{nip96_upload, RenderedTimestamp};
+use common::RenderedTimestamp;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     deferred, div, img, list, px, red, relative, rems, svg, white, AnyElement, App, AppContext,
@@ -21,7 +21,7 @@ use settings::AppSettings;
 use smallvec::{smallvec, SmallVec};
 use smol::fs;
 use smol::lock::RwLock;
-use state::NostrRegistry;
+use state::{nostr_upload, NostrRegistry};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
@@ -504,7 +504,7 @@ impl ChatPanel {
 
             let upload = Tokio::spawn(cx, async move {
                 let file = fs::read(path).await.ok()?;
-                let url = nip96_upload(&client, &nip96_server, file).await.ok()?;
+                let url = nostr_upload(&client, &nip96_server, file).await.ok()?;
 
                 Some(url)
             });

@@ -15,7 +15,6 @@ chrono.workspace = true
 smallvec.workspace = true
 smol.workspace = true
 futures.workspace = true
-reqwest.workspace = true
 log.workspace = true
 
 dirs = "5.0"

@@ -2,7 +2,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, Error};
-use common::{nip96_upload, shorten_pubkey};
+use common::shorten_pubkey;
 use gpui::{
     div, rems, AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter,
     FocusHandle, Focusable, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
@@ -13,7 +13,7 @@ use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
 use settings::AppSettings;
 use smol::fs;
-use state::NostrRegistry;
+use state::{nostr_upload, NostrRegistry};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
@@ -170,7 +170,7 @@ impl ProfilePanel {
                 Ok(Ok(Some(mut paths))) => {
                     if let Some(path) = paths.pop() {
                         let file = fs::read(path).await?;
-                        let url = nip96_upload(&client, &nip96_server, file).await?;
+                        let url = nostr_upload(&client, &nip96_server, file).await?;
 
                         Ok(url)
                     } else {

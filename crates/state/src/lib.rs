@@ -13,11 +13,13 @@ use nostr_sdk::prelude::*;
 mod constants;
 mod gossip;
 mod nip05;
+mod nip96;
 mod signer;
 
 pub use constants::*;
 pub use gossip::*;
 pub use nip05::*;
+pub use nip96::*;
 pub use signer::*;
 
 pub fn init(window: &mut Window, cx: &mut App) {

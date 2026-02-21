@@ -1,11 +1,10 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    img, Action, App, InteractiveElement, IntoElement, MouseButton, ParentElement, RenderOnce,
-    StatefulInteractiveElement, Styled, Window,
+    svg, Action, App, InteractiveElement, IntoElement, MouseButton, ParentElement, RenderOnce,
+    SharedString, StatefulInteractiveElement, Styled, Window,
 };
 use linicon::{lookup_icon, IconType};
 use theme::ActiveTheme;
@@ -26,21 +25,26 @@ impl LinuxWindowControls {
 
 impl RenderOnce for LinuxWindowControls {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let supported_controls = window.window_controls();
+
         h_flex()
             .id("linux-window-controls")
-            .px_2()
             .gap_2()
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(WindowControl::new(
-                LinuxControl::Minimize,
-                IconName::WindowMinimize,
-            ))
-            .child({
-                if window.is_maximized() {
-                    WindowControl::new(LinuxControl::Restore, IconName::WindowRestore)
-                } else {
-                    WindowControl::new(LinuxControl::Maximize, IconName::WindowMaximize)
-                }
+            .when(supported_controls.minimize, |this| {
+                this.child(WindowControl::new(
+                    LinuxControl::Minimize,
+                    IconName::WindowMinimize,
+                ))
+            })
+            .when(supported_controls.maximize, |this| {
+                this.child({
+                    if window.is_maximized() {
+                        WindowControl::new(LinuxControl::Restore, IconName::WindowRestore)
+                    } else {
+                        WindowControl::new(LinuxControl::Maximize, IconName::WindowMaximize)
+                    }
+                })
             })
             .child(
                 WindowControl::new(LinuxControl::Close, IconName::WindowClose)
@@ -87,24 +91,22 @@ impl RenderOnce for WindowControl {
             .justify_center()
             .items_center()
             .rounded_full()
-            .map(|this| {
-                if is_gnome {
-                    this.size_6()
-                        .bg(cx.theme().tab_inactive_background)
-                        .hover(|this| this.bg(cx.theme().tab_hover_background))
-                        .active(|this| this.bg(cx.theme().tab_active_background))
-                } else {
-                    this.size_5()
-                        .bg(cx.theme().ghost_element_background)
-                        .hover(|this| this.bg(cx.theme().ghost_element_hover))
-                        .active(|this| this.bg(cx.theme().ghost_element_active))
-                }
+            .size_6()
+            .when(is_gnome, |this| {
+                this.bg(cx.theme().ghost_element_background_alt)
+                    .hover(|this| this.bg(cx.theme().ghost_element_hover))
+                    .active(|this| this.bg(cx.theme().ghost_element_active))
             })
             .map(|this| {
                 if let Some(Some(path)) = linux_controls().get(&self.kind).cloned() {
-                    this.child(img(path).flex_grow().size_4())
+                    this.child(
+                        svg()
+                            .external_path(SharedString::from(path))
+                            .size_4()
+                            .text_color(cx.theme().text),
+                    )
                 } else {
-                    this.child(Icon::new(self.fallback).flex_grow().small())
+                    this.child(Icon::new(self.fallback).small().text_color(cx.theme().text))
                 }
             })
             .on_mouse_move(|_, _window, cx| cx.stop_propagation())
@@ -114,20 +116,14 @@ impl RenderOnce for WindowControl {
                     LinuxControl::Minimize => window.minimize_window(),
                     LinuxControl::Restore => window.zoom_window(),
                     LinuxControl::Maximize => window.zoom_window(),
-                    LinuxControl::Close => window.dispatch_action(
-                        self.close_action
-                            .as_ref()
-                            .expect("Use WindowControl::new_close() for close control.")
-                            .boxed_clone(),
-                        cx,
-                    ),
+                    LinuxControl::Close => cx.quit(),
                 }
             })
     }
 }
 
 static DE: OnceLock<DesktopEnvironment> = OnceLock::new();
-static LINUX_CONTROLS: OnceLock<HashMap<LinuxControl, Option<PathBuf>>> = OnceLock::new();
+static LINUX_CONTROLS: OnceLock<HashMap<LinuxControl, Option<String>>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DesktopEnvironment {
@@ -182,7 +178,7 @@ impl LinuxControl {
     }
 }
 
-fn linux_controls() -> &'static HashMap<LinuxControl, Option<PathBuf>> {
+fn linux_controls() -> &'static HashMap<LinuxControl, Option<String>> {
     LINUX_CONTROLS.get_or_init(|| {
         let mut icons = HashMap::new();
         icons.insert(LinuxControl::Close, None);
@@ -219,7 +215,9 @@ fn linux_controls() -> &'static HashMap<LinuxControl, Option<PathBuf>> {
                 }
 
                 if let Some(Ok(icon)) = control_icon {
-                    icons.entry(control).and_modify(|v| *v = Some(icon.path));
+                    icons
+                        .entry(control)
+                        .and_modify(|v| *v = Some(icon.path.to_string_lossy().to_string()));
                 }
             }
         }

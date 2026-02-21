@@ -103,7 +103,7 @@ fn main() {
                     person::init(cx);
 
                     // Initialize auto update
-                    auto_update::init(cx);
+                    auto_update::init(window, cx);
 
                     // Root Entity
                     Root::new(workspace::init(window, cx).into(), window, cx)

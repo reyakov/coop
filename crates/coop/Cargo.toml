@@ -44,6 +44,9 @@ relay_auth = { path = "../relay_auth" }
 
 gpui.workspace = true
 gpui_platform.workspace = true
+gpui_linux.workspace = true
+gpui_windows.workspace = true
+gpui_macos.workspace = true
 gpui_tokio.workspace = true
 reqwest_client.workspace = true
 

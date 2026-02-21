@@ -78,6 +78,9 @@ pub struct Theme {
 
     /// Show the scrollbar mode, default: scrolling
     pub scrollbar_mode: ScrollbarMode,
+
+    /// Platform kind
+    pub platform: PlatformKind,
 }
 
 impl Deref for Theme {
@@ -201,6 +204,7 @@ impl From<ThemeFamily> for Theme {
             mode,
             colors: *colors,
             theme: Rc::new(family),
+            platform,
         }
     }
 }

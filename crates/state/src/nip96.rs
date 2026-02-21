@@ -59,7 +59,7 @@ where
     Ok(upload_response.download_url()?.to_owned())
 }
 
-pub async fn nip96_upload(
+pub async fn nostr_upload(
     client: &Client,
     server: &Url,
     file: Vec<u8>,

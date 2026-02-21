@@ -7,11 +7,13 @@ use anyhow::{anyhow, Context as AnyhowContext, Error};
 use gpui::http_client::{AsyncBody, HttpClient};
 use gpui::{
     App, AppContext, AsyncApp, BackgroundExecutor, Context, Entity, Global, Subscription, Task,
+    Window,
 };
 use semver::Version;
 use serde::Deserialize;
 use smallvec::{smallvec, SmallVec};
 use smol::fs::File;
+use smol::io::AsyncReadExt;
 use smol::process::Command;
 
 const GITHUB_API_URL: &str = "https://api.github.com";
@@ -30,14 +32,14 @@ fn is_flatpak_installation() -> bool {
     std::env::var("FLATPAK_ID").is_ok() || std::env::var(COOP_UPDATE_EXPLANATION).is_ok()
 }
 
-pub fn init(cx: &mut App) {
+pub fn init(window: &mut Window, cx: &mut App) {
     // Skip auto-update initialization if installed via Flatpak
     if is_flatpak_installation() {
         log::info!("Skipping auto-update initialization: App is installed via Flatpak");
         return;
     }
 
-    AutoUpdater::set_global(cx.new(AutoUpdater::new), cx);
+    AutoUpdater::set_global(cx.new(|cx| AutoUpdater::new(window, cx)), cx);
 }
 
 struct GlobalAutoUpdater(Entity<AutoUpdater>);
@@ -181,7 +183,7 @@ pub struct AutoUpdater {
     _subscriptions: SmallVec<[Subscription; 1]>,
 
     /// Background tasks
-    _tasks: SmallVec<[Task<()>; 2]>,
+    tasks: Vec<Task<Result<(), Error>>>,
 }
 
 impl AutoUpdater {
@@ -195,44 +197,9 @@ impl AutoUpdater {
         cx.set_global(GlobalAutoUpdater(state));
     }
 
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
-        let async_version = version.clone();
-
         let mut subscriptions = smallvec![];
-        let mut tasks = smallvec![];
-
-        tasks.push(
-            // Check for updates after 2 minutes
-            cx.spawn(async move |this, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_secs(120))
-                    .await;
-
-                // Update the status to checking
-                this.update(cx, |this, cx| {
-                    this.set_status(AutoUpdateStatus::Checking, cx);
-                })
-                .ok();
-
-                match Self::check_for_updates(async_version, cx).await {
-                    Ok(download_url) => {
-                        // Update the status to checked with download URL
-                        this.update(cx, |this, cx| {
-                            this.set_status(AutoUpdateStatus::checked(download_url), cx);
-                        })
-                        .ok();
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to check for updates: {e}");
-                        this.update(cx, |this, cx| {
-                            this.set_status(AutoUpdateStatus::Idle, cx);
-                        })
-                        .ok();
-                    }
-                }
-            }),
-        );
 
         subscriptions.push(
             // Observe the status
@@ -243,11 +210,16 @@ impl AutoUpdater {
             }),
         );
 
+        // Run at the end of current cycle
+        cx.defer_in(window, |this, _window, cx| {
+            this.check(cx);
+        });
+
         Self {
             status: AutoUpdateStatus::Idle,
             version,
+            tasks: vec![],
             _subscriptions: subscriptions,
-            _tasks: tasks,
         }
     }
 
@@ -256,31 +228,63 @@ impl AutoUpdater {
         cx.notify();
     }
 
-    fn check_for_updates(version: Version, cx: &AsyncApp) -> Task<Result<String, Error>> {
+    fn check(&mut self, cx: &mut Context<Self>) {
+        let version = self.version.clone();
+        let duration = Duration::from_secs(120);
+        let task = self.check_for_updates(version, cx);
+
+        // Check for updates after 2 minutes
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(duration).await;
+
+            // Update the status to checking
+            this.update(cx, |this, cx| {
+                this.set_status(AutoUpdateStatus::Checking, cx);
+            })?;
+
+            match task.await {
+                Ok(download_url) => {
+                    // Update the status to checked with download URL
+                    this.update(cx, |this, cx| {
+                        this.set_status(AutoUpdateStatus::checked(download_url), cx);
+                    })?;
+                }
+                Err(e) => {
+                    log::warn!("Failed to check for updates: {e}");
+                    this.update(cx, |this, cx| {
+                        this.set_status(AutoUpdateStatus::Idle, cx);
+                    })?;
+                }
+            }
+
+            Ok(())
+        }));
+    }
+
+    fn check_for_updates(&self, version: Version, cx: &App) -> Task<Result<String, Error>> {
+        let http_client = cx.http_client();
+        let repo_owner = get_github_repo_owner();
+        let repo_name = get_github_repo_name();
+
         cx.background_spawn(async move {
-            let client = reqwest::Client::new();
-            let repo_owner = get_github_repo_owner();
-            let repo_name = get_github_repo_name();
             let url = format!(
                 "{}/repos/{}/{}/releases/latest",
                 GITHUB_API_URL, repo_owner, repo_name
             );
 
-            let response = client
-                .get(&url)
-                .header("User-Agent", "Coop-Auto-Updater")
-                .send()
-                .await
-                .context("Failed to fetch GitHub releases")?;
+            let async_body = AsyncBody::default();
+            let mut body = Vec::new();
+            let mut response = http_client.get(&url, async_body, false).await?;
+
+            // Read the response body into a vector
+            response.body_mut().read_to_end(&mut body).await?;
 
             if !response.status().is_success() {
                 return Err(anyhow!("GitHub API returned error: {}", response.status()));
             }
 
-            let release: GitHubRelease = response
-                .json()
-                .await
-                .context("Failed to parse GitHub release")?;
+            // Parse the response body as JSON
+            let release: GitHubRelease = serde_json::from_slice(&body)?;
 
             // Parse version from tag (remove 'v' prefix if present)
             let tag_version = release.tag_name.trim_start_matches('v');
@@ -334,29 +338,31 @@ impl AutoUpdater {
             Ok((installer_dir, target_path))
         });
 
-        self._tasks.push(
+        self.tasks.push(
             // Install the new release
             cx.spawn(async move |this, cx| {
-                _ = this.update(cx, |this, cx| {
+                this.update(cx, |this, cx| {
                     this.set_status(AutoUpdateStatus::Installing, cx);
-                });
+                })?;
 
                 match task.await {
                     Ok((installer_dir, target_path)) => {
                         if Self::install(installer_dir, target_path, cx).await.is_ok() {
                             // Update the status to updated
-                            _ = this.update(cx, |this, cx| {
+                            this.update(cx, |this, cx| {
                                 this.set_status(AutoUpdateStatus::Updated, cx);
-                            });
+                            })?;
                         }
                     }
                     Err(e) => {
                         // Update the status to error including the error message
-                        _ = this.update(cx, |this, cx| {
+                        this.update(cx, |this, cx| {
                             this.set_status(AutoUpdateStatus::error(e.to_string()), cx);
-                        });
+                        })?;
                     }
                 }
+
+                Ok(())
             }),
         );
     }
