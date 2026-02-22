@@ -17,7 +17,7 @@ use gpui_tokio::Tokio;
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
-use settings::AppSettings;
+use settings::{AppSettings, SignerKind};
 use smallvec::{smallvec, SmallVec};
 use smol::fs;
 use smol::lock::RwLock;
@@ -40,6 +40,11 @@ use crate::text::RenderedText;
 
 mod actions;
 mod text;
+
+const NO_INBOX: &str = "has not set up messaging relays. \
+    They will not receive your messages.";
+const NO_ANNOUNCEMENT: &str = "has not set up an encryption key. \
+    You cannot send messages encrypted with an encryption key to them yet.";
 
 pub fn init(room: WeakEntity<Room>, window: &mut Window, cx: &mut App) -> Entity<ChatPanel> {
     cx.new(|cx| ChatPanel::new(room, window, cx))
@@ -225,12 +230,43 @@ impl ChatPanel {
     }
 
     /// Get all necessary data for each member
-    fn connect(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        let Ok(connect) = self.room.read_with(cx, |this, cx| this.early_connect(cx)) else {
+    fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Ok(tasks) = self.room.read_with(cx, |this, cx| this.connect(cx)) else {
             return;
         };
 
-        self.tasks.push(cx.background_spawn(connect));
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            for (member, task) in tasks.into_iter() {
+                match task.await {
+                    Ok((has_inbox, has_announcement)) => {
+                        this.update(cx, |this, cx| {
+                            let persons = PersonRegistry::global(cx);
+                            let profile = persons.read(cx).get(&member, cx);
+
+                            if !has_inbox {
+                                let content = format!("{} {}", profile.name(), NO_INBOX);
+                                let message = Message::warning(content);
+
+                                this.insert_message(message, true, cx);
+                            }
+
+                            if !has_announcement {
+                                let content = format!("{} {}", profile.name(), NO_ANNOUNCEMENT);
+                                let message = Message::warning(content);
+
+                                this.insert_message(message, true, cx);
+                            }
+                        })?;
+                    }
+                    Err(e) => {
+                        this.update(cx, |this, cx| {
+                            this.insert_message(Message::warning(e.to_string()), true, cx);
+                        })?;
+                    }
+                };
+            }
+            Ok(())
+        }));
     }
 
     /// Load all messages belonging to this room
@@ -339,6 +375,7 @@ impl ChatPanel {
         };
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            // Send and get reports
             let outputs = task.await;
 
             // Add sent IDs to the list
@@ -557,6 +594,36 @@ impl ChatPanel {
     fn profile(&self, public_key: &PublicKey, cx: &Context<Self>) -> Person {
         let persons = PersonRegistry::global(cx);
         persons.read(cx).get(public_key, cx)
+    }
+
+    fn on_command(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) {
+        match command {
+            Command::Insert(content) => {
+                self.send_message(content, window, cx);
+            }
+            Command::ChangeSubject(subject) => {
+                if self
+                    .room
+                    .update(cx, |this, cx| {
+                        this.set_subject(*subject, cx);
+                    })
+                    .is_err()
+                {
+                    window.push_notification(Notification::error("Failed to change subject"), cx);
+                }
+            }
+            Command::ChangeSigner(kind) => {
+                if self
+                    .room
+                    .update(cx, |this, cx| {
+                        this.set_signer_kind(kind, cx);
+                    })
+                    .is_err()
+                {
+                    window.push_notification(Notification::error("Failed to change signer"), cx);
+                }
+            }
+        }
     }
 
     fn render_announcement(&self, ix: usize, cx: &Context<Self>) -> AnyElement {
@@ -1133,23 +1200,60 @@ impl ChatPanel {
         items
     }
 
-    fn on_command(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) {
-        match command {
-            Command::Insert(content) => {
-                self.send_message(content, window, cx);
-            }
-            Command::ChangeSubject(subject) => {
-                if self
-                    .room
-                    .update(cx, |this, cx| {
-                        this.set_subject(*subject, cx);
-                    })
-                    .is_err()
-                {
-                    window.push_notification(Notification::error("Failed to change subject"), cx);
-                }
-            }
-        }
+    fn render_encryption_menu(&self, _window: &mut Window, cx: &Context<Self>) -> impl IntoElement {
+        let signer_kind = self
+            .room
+            .read_with(cx, |this, _cx| this.config().signer_kind().clone())
+            .ok()
+            .unwrap_or_default();
+
+        Button::new("encryption")
+            .icon(IconName::UserKey)
+            .ghost()
+            .large()
+            .dropdown_menu(move |this, _window, _cx| {
+                let auto = matches!(signer_kind, SignerKind::Auto);
+                let encryption = matches!(signer_kind, SignerKind::Encryption);
+                let user = matches!(signer_kind, SignerKind::User);
+
+                this.check_side(ui::Side::Right)
+                    .menu_with_check_and_disabled(
+                        "Auto",
+                        auto,
+                        Box::new(Command::ChangeSigner(SignerKind::Auto)),
+                        auto,
+                    )
+                    .menu_with_check_and_disabled(
+                        "Decoupled Encryption Key",
+                        encryption,
+                        Box::new(Command::ChangeSigner(SignerKind::Encryption)),
+                        encryption,
+                    )
+                    .menu_with_check_and_disabled(
+                        "User Identity",
+                        user,
+                        Box::new(Command::ChangeSigner(SignerKind::User)),
+                        user,
+                    )
+            })
+    }
+
+    fn render_emoji_menu(&self, _window: &Window, _cx: &Context<Self>) -> impl IntoElement {
+        Button::new("emoji")
+            .icon(IconName::Emoji)
+            .ghost()
+            .large()
+            .dropdown_menu_with_anchor(gpui::Corner::BottomLeft, move |this, _window, _cx| {
+                this.horizontal()
+                    .menu("👍", Box::new(Command::Insert("👍")))
+                    .menu("👎", Box::new(Command::Insert("👎")))
+                    .menu("😄", Box::new(Command::Insert("😄")))
+                    .menu("🎉", Box::new(Command::Insert("🎉")))
+                    .menu("😕", Box::new(Command::Insert("😕")))
+                    .menu("❤️", Box::new(Command::Insert("❤️")))
+                    .menu("🚀", Box::new(Command::Insert("🚀")))
+                    .menu("👀", Box::new(Command::Insert("👀")))
+            })
     }
 }
 
@@ -1235,26 +1339,8 @@ impl Render for ChatPanel {
                                 h_flex()
                                     .pl_1()
                                     .gap_1()
-                                    .child(
-                                        Button::new("emoji")
-                                            .icon(IconName::Emoji)
-                                            .ghost()
-                                            .large()
-                                            .dropdown_menu_with_anchor(
-                                                gpui::Corner::BottomLeft,
-                                                move |this, _window, _cx| {
-                                                    this.horizontal()
-                                                        .menu("👍", Box::new(Command::Insert("👍")))
-                                                        .menu("👎", Box::new(Command::Insert("👎")))
-                                                        .menu("😄", Box::new(Command::Insert("😄")))
-                                                        .menu("🎉", Box::new(Command::Insert("🎉")))
-                                                        .menu("😕", Box::new(Command::Insert("😕")))
-                                                        .menu("❤️", Box::new(Command::Insert("❤️")))
-                                                        .menu("🚀", Box::new(Command::Insert("🚀")))
-                                                        .menu("👀", Box::new(Command::Insert("👀")))
-                                                },
-                                            ),
-                                    )
+                                    .child(self.render_encryption_menu(window, cx))
+                                    .child(self.render_emoji_menu(window, cx))
                                     .child(
                                         Button::new("send")
                                             .icon(IconName::PaperPlaneFill)

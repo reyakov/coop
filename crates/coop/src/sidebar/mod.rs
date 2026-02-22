@@ -16,7 +16,7 @@ use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use smallvec::{smallvec, SmallVec};
 use state::{NostrRegistry, FIND_DELAY};
-use theme::{ActiveTheme, TITLEBAR_HEIGHT};
+use theme::{ActiveTheme, TABBAR_HEIGHT};
 use ui::button::{Button, ButtonVariants};
 use ui::dock_area::panel::{Panel, PanelEvent};
 use ui::indicator::Indicator;
@@ -497,7 +497,7 @@ impl Render for Sidebar {
             .gap_2()
             .child(
                 h_flex()
-                    .h(TITLEBAR_HEIGHT)
+                    .h(TABBAR_HEIGHT)
                     .border_b_1()
                     .border_color(cx.theme().border_variant)
                     .bg(cx.theme().elevated_surface_background)

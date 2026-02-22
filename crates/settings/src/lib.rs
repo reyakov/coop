@@ -80,12 +80,24 @@ pub struct RoomConfig {
 }
 
 impl RoomConfig {
+    /// Get backup config
     pub fn backup(&self) -> bool {
         self.backup
     }
 
+    /// Get signer kind config
     pub fn signer_kind(&self) -> &SignerKind {
         &self.signer_kind
+    }
+
+    /// Set backup config
+    pub fn set_backup(&mut self, backup: bool) {
+        self.backup = backup;
+    }
+
+    /// Set signer kind config
+    pub fn set_signer_kind(&mut self, kind: &SignerKind) {
+        self.signer_kind = kind.to_owned();
     }
 }
 

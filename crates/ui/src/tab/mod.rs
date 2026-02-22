@@ -3,7 +3,7 @@ use gpui::{
     div, px, AnyElement, App, Div, InteractiveElement, IntoElement, MouseButton, ParentElement,
     RenderOnce, StatefulInteractiveElement, Styled, Window,
 };
-use theme::{ActiveTheme, TITLEBAR_HEIGHT};
+use theme::{ActiveTheme, TABBAR_HEIGHT};
 
 use crate::{Selectable, Sizable, Size};
 
@@ -136,7 +136,7 @@ impl RenderOnce for Tab {
 
         self.base
             .id(self.ix)
-            .h(TITLEBAR_HEIGHT)
+            .h(TABBAR_HEIGHT)
             .px_4()
             .relative()
             .flex()

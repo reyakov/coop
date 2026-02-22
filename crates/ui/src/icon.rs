@@ -1,11 +1,22 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    svg, AnyElement, App, AppContext, Entity, Hsla, IntoElement, Radians, Render, RenderOnce,
-    SharedString, StyleRefinement, Styled, Svg, Transformation, Window,
+    svg, AnyElement, App, AppContext, Context, Entity, Hsla, IntoElement, Radians, Render,
+    RenderOnce, SharedString, StyleRefinement, Styled, Svg, Transformation, Window,
 };
 use theme::ActiveTheme;
 
 use crate::{Sizable, Size};
+
+pub trait IconNamed {
+    /// Returns the embedded path of the icon.
+    fn path(self) -> SharedString;
+}
+
+impl<T: IconNamed> From<T> for Icon {
+    fn from(value: T) -> Self {
+        Icon::build(value)
+    }
+}
 
 #[derive(IntoElement, Clone)]
 pub enum IconName {
@@ -43,6 +54,7 @@ pub enum IconName {
     Sun,
     Ship,
     Shield,
+    UserKey,
     Upload,
     Usb,
     PanelLeft,
@@ -63,7 +75,14 @@ pub enum IconName {
 }
 
 impl IconName {
-    pub fn path(self) -> SharedString {
+    /// Return the icon as a Entity<Icon>
+    pub fn view(self, cx: &mut App) -> Entity<Icon> {
+        Icon::build(self).view(cx)
+    }
+}
+
+impl IconNamed for IconName {
+    fn path(self) -> SharedString {
         match self {
             Self::ArrowLeft => "icons/arrow-left.svg",
             Self::ArrowRight => "icons/arrow-right.svg",
@@ -99,6 +118,7 @@ impl IconName {
             Self::Sun => "icons/sun.svg",
             Self::Ship => "icons/ship.svg",
             Self::Shield => "icons/shield.svg",
+            Self::UserKey => "icons/user-key.svg",
             Self::Upload => "icons/upload.svg",
             Self::Usb => "icons/usb.svg",
             Self::PanelLeft => "icons/panel-left.svg",
@@ -119,17 +139,6 @@ impl IconName {
         }
         .into()
     }
-
-    /// Return the icon as a Entity<Icon>
-    pub fn view(self, window: &mut Window, cx: &mut App) -> Entity<Icon> {
-        Icon::build(self).view(window, cx)
-    }
-}
-
-impl From<IconName> for Icon {
-    fn from(val: IconName) -> Self {
-        Icon::build(val)
-    }
 }
 
 impl From<IconName> for AnyElement {
@@ -139,7 +148,7 @@ impl From<IconName> for AnyElement {
 }
 
 impl RenderOnce for IconName {
-    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, _: &mut Window, _cx: &mut App) -> impl IntoElement {
         Icon::build(self)
     }
 }
@@ -147,6 +156,7 @@ impl RenderOnce for IconName {
 #[derive(IntoElement)]
 pub struct Icon {
     base: Svg,
+    style: StyleRefinement,
     path: SharedString,
     text_color: Option<Hsla>,
     size: Option<Size>,
@@ -157,6 +167,7 @@ impl Default for Icon {
     fn default() -> Self {
         Self {
             base: svg().flex_none().size_4(),
+            style: StyleRefinement::default(),
             path: "".into(),
             text_color: None,
             size: None,
@@ -168,15 +179,12 @@ impl Default for Icon {
 impl Clone for Icon {
     fn clone(&self) -> Self {
         let mut this = Self::default().path(self.path.clone());
-        if let Some(size) = self.size {
-            this = this.with_size(size);
-        }
+        this.style = self.style.clone();
+        this.rotation = self.rotation;
+        this.size = self.size;
+        this.text_color = self.text_color;
         this
     }
-}
-
-pub trait IconNamed {
-    fn path(&self) -> SharedString;
 }
 
 impl Icon {
@@ -184,7 +192,7 @@ impl Icon {
         icon.into()
     }
 
-    fn build(name: IconName) -> Self {
+    fn build(name: impl IconNamed) -> Self {
         Self::default().path(name.path())
     }
 
@@ -197,7 +205,7 @@ impl Icon {
     }
 
     /// Create a new view for the icon
-    pub fn view(self, _window: &mut Window, cx: &mut App) -> Entity<Icon> {
+    pub fn view(self, cx: &mut App) -> Entity<Icon> {
         cx.new(|_| self)
     }
 
@@ -221,7 +229,7 @@ impl Icon {
 
 impl Styled for Icon {
     fn style(&mut self) -> &mut StyleRefinement {
-        self.base.style()
+        &mut self.style
     }
 
     fn text_color(mut self, color: impl Into<Hsla>) -> Self {
@@ -240,9 +248,15 @@ impl Sizable for Icon {
 impl RenderOnce for Icon {
     fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let text_color = self.text_color.unwrap_or_else(|| window.text_style().color);
+        let text_size = window.text_style().font_size.to_pixels(window.rem_size());
+        let has_base_size = self.style.size.width.is_some() || self.style.size.height.is_some();
 
-        self.base
+        let mut base = self.base;
+        *base.style() = self.style;
+
+        base.flex_shrink_0()
             .text_color(text_color)
+            .when(!has_base_size, |this| this.size(text_size))
             .when_some(self.size, |this, size| match size {
                 Size::Size(px) => this.size(px),
                 Size::XSmall => this.size_3(),
@@ -261,16 +275,17 @@ impl From<Icon> for AnyElement {
 }
 
 impl Render for Icon {
-    fn render(
-        &mut self,
-        _window: &mut gpui::Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let text_color = self.text_color.unwrap_or_else(|| cx.theme().icon);
+        let text_size = window.text_style().font_size.to_pixels(window.rem_size());
+        let has_base_size = self.style.size.width.is_some() || self.style.size.height.is_some();
 
-        svg()
-            .flex_none()
+        let mut base = svg().flex_none();
+        *base.style() = self.style.clone();
+
+        base.flex_shrink_0()
             .text_color(text_color)
+            .when(!has_base_size, |this| this.size(text_size))
             .when_some(self.size, |this, size| match size {
                 Size::Size(px) => this.size(px),
                 Size::XSmall => this.size_3(),
@@ -278,7 +293,7 @@ impl Render for Icon {
                 Size::Medium => this.size_5(),
                 Size::Large => this.size_6(),
             })
-            .when(!self.path.is_empty(), |this| this.path(self.path.clone()))
+            .path(self.path.clone())
             .when_some(self.rotation, |this, rotation| {
                 this.with_transformation(Transformation::rotate(rotation))
             })

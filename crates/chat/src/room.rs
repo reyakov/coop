@@ -1,8 +1,9 @@
 use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
-use anyhow::{Context as AnyhowContext, Error};
+use anyhow::{anyhow, Error};
 use common::EventUtils;
 use gpui::{App, AppContext, Context, EventEmitter, SharedString, Task};
 use itertools::Itertools;
@@ -11,7 +12,10 @@ use person::{Person, PersonRegistry};
 use settings::{RoomConfig, SignerKind};
 use state::{NostrRegistry, TIMEOUT};
 
-use crate::{ChatRegistry, NewMessage};
+use crate::NewMessage;
+
+const NO_DEKEY: &str = "User hasn't set up a decoupled encryption key yet.";
+const USER_NO_DEKEY: &str = "You haven't set up a decoupled encryption key or it's not available.";
 
 #[derive(Debug, Clone)]
 pub struct SendReport {
@@ -222,6 +226,17 @@ impl Room {
         cx.notify();
     }
 
+    /// Updates the signer kind config for the room
+    pub fn set_signer_kind(&mut self, kind: &SignerKind, cx: &mut Context<Self>) {
+        self.config.set_signer_kind(kind);
+        cx.notify();
+    }
+
+    /// Returns the config of the room
+    pub fn config(&self) -> &RoomConfig {
+        &self.config
+    }
+
     /// Returns the members of the room
     pub fn members(&self) -> Vec<PublicKey> {
         self.members.clone()
@@ -296,10 +311,6 @@ impl Room {
 
         if new_message {
             self.set_created_at(created_at, cx);
-            // Sort chats after emitting a new message
-            ChatRegistry::global(cx).update(cx, |this, cx| {
-                this.sort(cx);
-            });
         }
     }
 
@@ -308,49 +319,88 @@ impl Room {
         cx.emit(RoomEvent::Reload);
     }
 
+    #[allow(clippy::type_complexity)]
     /// Get gossip relays for each member
-    pub fn early_connect(&self, cx: &App) -> Task<Result<(), Error>> {
+    pub fn connect(&self, cx: &App) -> HashMap<PublicKey, Task<Result<(bool, bool), Error>>> {
         let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
+        let public_key = signer.public_key().unwrap();
 
         let members = self.members();
-        let subscription_id = SubscriptionId::new(format!("room-{}", self.id));
+        let mut tasks = HashMap::new();
 
-        cx.background_spawn(async move {
-            let signer = client.signer().context("Signer not found")?;
-            let public_key = signer.get_public_key().await?;
-
-            for member in members.into_iter() {
-                if member == public_key {
-                    continue;
-                };
-
-                // Construct a filter for messaging relays
-                let inbox = Filter::new()
-                    .kind(Kind::InboxRelays)
-                    .author(member)
-                    .limit(1);
-
-                // Construct a filter for announcement
-                let announcement = Filter::new()
-                    .kind(Kind::Custom(10044))
-                    .author(member)
-                    .limit(1);
-
-                // Subscribe to get member's gossip relays
-                client
-                    .subscribe(vec![inbox, announcement])
-                    .with_id(subscription_id.clone())
-                    .close_on(
-                        SubscribeAutoCloseOptions::default()
-                            .timeout(Some(Duration::from_secs(TIMEOUT)))
-                            .exit_policy(ReqExitPolicy::ExitOnEOSE),
-                    )
-                    .await?;
+        for member in members.into_iter() {
+            // Skip if member is the current user
+            if member == public_key {
+                continue;
             }
 
-            Ok(())
-        })
+            let client = nostr.read(cx).client();
+            let write_relays = nostr.read(cx).write_relays(&member, cx);
+
+            tasks.insert(
+                member,
+                cx.background_spawn(async move {
+                    let urls = write_relays.await;
+
+                    // Return if no relays are available
+                    if urls.is_empty() {
+                        return Err(anyhow!(
+                            "User has not set up any relays. You cannot send messages to them."
+                        ));
+                    }
+
+                    // Construct filters for inbox and announcement
+                    let inbox_filter = Filter::new()
+                        .kind(Kind::InboxRelays)
+                        .author(member)
+                        .limit(1);
+                    let announcement_filter = Filter::new()
+                        .kind(Kind::Custom(10044))
+                        .author(member)
+                        .limit(1);
+
+                    // Create subscription targets
+                    let target = urls
+                        .into_iter()
+                        .map(|relay| {
+                            (
+                                relay,
+                                vec![inbox_filter.clone(), announcement_filter.clone()],
+                            )
+                        })
+                        .collect::<HashMap<_, _>>();
+
+                    // Stream events from user's write relays
+                    let mut stream = client
+                        .stream_events(target)
+                        .timeout(Duration::from_secs(TIMEOUT))
+                        .await?;
+
+                    let mut has_inbox = false;
+                    let mut has_announcement = false;
+
+                    while let Some((_url, res)) = stream.next().await {
+                        let event = res?;
+
+                        match event.kind {
+                            Kind::InboxRelays => has_inbox = true,
+                            Kind::Custom(10044) => has_announcement = true,
+                            _ => {}
+                        }
+
+                        // Early exit if both flags are found
+                        if has_inbox && has_announcement {
+                            break;
+                        }
+                    }
+
+                    Ok((has_inbox, has_announcement))
+                }),
+            );
+        }
+
+        tasks
     }
 
     /// Get all messages belonging to the room
@@ -418,11 +468,6 @@ impl Room {
 
         // Add all receiver tags
         for member in members.into_iter() {
-            // Skip current user
-            if member.public_key() == sender {
-                continue;
-            }
-
             tags.push(Tag::from_standardized_without_cell(
                 TagStandard::PublicKey {
                     public_key: member.public_key(),
@@ -445,61 +490,59 @@ impl Room {
 
     /// Send rumor event to all members's messaging relays
     pub fn send(&self, rumor: UnsignedEvent, cx: &App) -> Option<Task<Vec<SendReport>>> {
+        let config = self.config.clone();
         let persons = PersonRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
 
-        // Get room's config
-        let config = self.config.clone();
-
         // Get current user's public key
-        let sender = nostr.read(cx).signer().public_key()?;
+        let public_key = nostr.read(cx).signer().public_key()?;
+        let sender = persons.read(cx).get(&public_key, cx);
 
         // Get all members (excluding sender)
         let members: Vec<Person> = self
             .members
             .iter()
-            .filter(|public_key| public_key != &&sender)
+            .filter(|public_key| public_key != &&sender.public_key())
             .map(|member| persons.read(cx).get(member, cx))
             .collect();
 
         Some(cx.background_spawn(async move {
             let signer_kind = config.signer_kind();
+            let backup = config.backup();
+
             let user_signer = signer.get().await;
             let encryption_signer = signer.get_encryption_signer().await;
 
+            let mut sents = 0;
             let mut reports = Vec::new();
 
+            // Process each member
             for member in members {
                 let relays = member.messaging_relays();
                 let announcement = member.announcement();
+                let public_key = member.public_key();
 
-                // Skip if member has no messaging relays
                 if relays.is_empty() {
-                    reports.push(SendReport::new(member.public_key()).error("No messaging relays"));
+                    reports.push(SendReport::new(public_key).error("No messaging relays"));
                     continue;
                 }
 
-                // Ensure relay connections
-                for url in relays.iter() {
-                    client
-                        .add_relay(url)
-                        .and_connect()
-                        .capabilities(RelayCapabilities::GOSSIP)
-                        .await
-                        .ok();
+                // Handle encryption signer requirements
+                if signer_kind.encryption() {
+                    if announcement.is_none() {
+                        reports.push(SendReport::new(public_key).error(NO_DEKEY));
+                        continue;
+                    }
+                    if encryption_signer.is_none() {
+                        reports.push(SendReport::new(sender.public_key()).error(USER_NO_DEKEY));
+                        continue;
+                    }
                 }
 
-                // When forced to use encryption signer, skip if receiver has no announcement
-                if signer_kind.encryption() && announcement.is_none() {
-                    reports
-                        .push(SendReport::new(member.public_key()).error("Encryption not found"));
-                    continue;
-                }
-
-                // Determine receiver and signer based on signer kind
-                let (receiver, signer_to_use) = match signer_kind {
+                // Determine receiver and signer
+                let (receiver, signer) = match signer_kind {
                     SignerKind::Auto => {
                         if let Some(announcement) = announcement {
                             if let Some(enc_signer) = encryption_signer.as_ref() {
@@ -512,272 +555,77 @@ impl Room {
                         }
                     }
                     SignerKind::Encryption => {
-                        let Some(encryption_signer) = encryption_signer.as_ref() else {
-                            reports.push(
-                                SendReport::new(member.public_key()).error("Encryption not found"),
-                            );
-                            continue;
-                        };
-                        let Some(announcement) = announcement else {
-                            reports.push(
-                                SendReport::new(member.public_key())
-                                    .error("Announcement not found"),
-                            );
-                            continue;
-                        };
-                        (announcement.public_key(), encryption_signer.clone())
+                        // Safe to unwrap due to earlier checks
+                        (
+                            announcement.unwrap().public_key(),
+                            encryption_signer.as_ref().unwrap().clone(),
+                        )
                     }
                     SignerKind::User => (member.public_key(), user_signer.clone()),
                 };
 
-                // Create and send gift-wrapped event
-                match EventBuilder::gift_wrap(&signer_to_use, &receiver, rumor.clone(), []).await {
-                    Ok(event) => {
-                        match client
-                            .send_event(&event)
-                            .to(relays)
-                            .ack_policy(AckPolicy::none())
-                            .await
-                        {
-                            Ok(output) => {
-                                reports.push(
-                                    SendReport::new(member.public_key())
-                                        .gift_wrap_id(event.id)
-                                        .output(output),
-                                );
-                            }
-                            Err(e) => {
-                                reports.push(
-                                    SendReport::new(member.public_key()).error(e.to_string()),
-                                );
-                            }
-                        }
+                match send_gift_wrap(&client, &signer, &receiver, &rumor, relays, public_key).await
+                {
+                    Ok((report, _)) => {
+                        reports.push(report);
+                        sents += 1;
                     }
-                    Err(e) => {
-                        reports.push(SendReport::new(member.public_key()).error(e.to_string()));
-                    }
+                    Err(report) => reports.push(report),
+                }
+            }
+
+            // Send backup to current user if needed
+            if backup && sents >= 1 {
+                let relays = sender.messaging_relays();
+                let public_key = sender.public_key();
+                let signer = encryption_signer.as_ref().unwrap_or(&user_signer);
+
+                match send_gift_wrap(&client, signer, &public_key, &rumor, relays, public_key).await
+                {
+                    Ok((report, _)) => reports.push(report),
+                    Err(report) => reports.push(report),
                 }
             }
 
             reports
         }))
     }
+}
 
-    /*
-    * /// Create a new unsigned message event
-    pub fn create_message(
-        &self,
-        content: &str,
-        replies: Vec<EventId>,
-        cx: &App,
-    ) -> Task<Result<UnsignedEvent, Error>> {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
+// Helper function to send a gift-wrapped event
+async fn send_gift_wrap<T>(
+    client: &Client,
+    signer: &T,
+    receiver: &PublicKey,
+    rumor: &UnsignedEvent,
+    relays: &[RelayUrl],
+    public_key: PublicKey,
+) -> Result<(SendReport, bool), SendReport>
+where
+    T: NostrSigner + 'static,
+{
+    // Ensure relay connections
+    for url in relays {
+        client.add_relay(url).and_connect().await.ok();
+    }
 
-        let subject = self.subject.clone();
-        let content = content.to_string();
-
-        let mut member_and_relay_hints = HashMap::new();
-
-        // Populate the hashmap with member and relay hint tasks
-        for member in self.members.iter() {
-            let hint = nostr.read(cx).relay_hint(member, cx);
-            member_and_relay_hints.insert(member.to_owned(), hint);
+    match EventBuilder::gift_wrap(signer, receiver, rumor.clone(), []).await {
+        Ok(event) => {
+            match client
+                .send_event(&event)
+                .to(relays)
+                .ack_policy(AckPolicy::none())
+                .await
+            {
+                Ok(output) => Ok((
+                    SendReport::new(public_key)
+                        .gift_wrap_id(event.id)
+                        .output(output),
+                    true,
+                )),
+                Err(e) => Err(SendReport::new(public_key).error(e.to_string())),
+            }
         }
-
-        cx.background_spawn(async move {
-            let signer = client.signer().context("Signer not found")?;
-            let public_key = signer.get_public_key().await?;
-
-            // List of event tags for each receiver
-            let mut tags = vec![];
-
-            for (member, task) in member_and_relay_hints.into_iter() {
-                // Skip current user
-                if member == public_key {
-                    continue;
-                }
-
-                // Get relay hint if available
-                let relay_url = task.await;
-
-                // Construct a public key tag with relay hint
-                let tag = TagStandard::PublicKey {
-                    public_key: member,
-                    relay_url,
-                    alias: None,
-                    uppercase: false,
-                };
-
-                tags.push(Tag::from_standardized_without_cell(tag));
-            }
-
-            // Add subject tag if present
-            if let Some(value) = subject {
-                tags.push(Tag::from_standardized_without_cell(TagStandard::Subject(
-                    value.to_string(),
-                )));
-            }
-
-            // Add all reply tags
-            for id in replies {
-                tags.push(Tag::event(id))
-            }
-
-            // Construct a direct message event
-            //
-            // WARNING: never sign and send this event to relays
-            let mut event = EventBuilder::new(Kind::PrivateDirectMessage, content)
-                .tags(tags)
-                .build(public_key);
-
-            // Ensure the event ID has been generated
-            event.ensure_id();
-
-            Ok(event)
-        })
+        Err(e) => Err(SendReport::new(public_key).error(e.to_string())),
     }
-
-    /// Create a task to send a message to all room members
-    pub fn send_message(
-        &self,
-        rumor: &UnsignedEvent,
-        cx: &App,
-    ) -> Task<Result<Vec<SendReport>, Error>> {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-
-        let mut members = self.members();
-        let rumor = rumor.to_owned();
-
-        cx.background_spawn(async move {
-            let signer = client.signer().context("Signer not found")?;
-            let current_user = signer.get_public_key().await?;
-
-            // Remove the current user's public key from the list of receivers
-            // the current user will be handled separately
-            members.retain(|this| this != &current_user);
-
-            // Collect the send reports
-            let mut reports: Vec<SendReport> = vec![];
-
-            for receiver in members.into_iter() {
-                // Construct the gift wrap event
-                let event =
-                    EventBuilder::gift_wrap(signer, &receiver, rumor.clone(), vec![]).await?;
-
-                // Send the gift wrap event to the messaging relays
-                match client.send_event(&event).to_nip17().await {
-                    Ok(output) => {
-                        let id = output.id().to_owned();
-                        let auth = output.failed.iter().any(|(_, s)| s.starts_with("auth-"));
-                        let report = SendReport::new(receiver).status(output);
-                        let tracker = tracker().read().await;
-
-                        if auth {
-                            // Wait for authenticated and resent event successfully
-                            for attempt in 0..=SEND_RETRY {
-                                // Check if event was successfully resent
-                                if tracker.is_sent_by_coop(&id) {
-                                    let output = Output::new(id);
-                                    let report = SendReport::new(receiver).status(output);
-                                    reports.push(report);
-                                    break;
-                                }
-
-                                // Check if retry limit exceeded
-                                if attempt == SEND_RETRY {
-                                    reports.push(report);
-                                    break;
-                                }
-
-                                smol::Timer::after(Duration::from_millis(1200)).await;
-                            }
-                        } else {
-                            reports.push(report);
-                        }
-                    }
-                    Err(e) => {
-                        reports.push(SendReport::new(receiver).error(e.to_string()));
-                    }
-                }
-            }
-
-            // Construct the gift-wrapped event
-            let event =
-                EventBuilder::gift_wrap(signer, &current_user, rumor.clone(), vec![]).await?;
-
-            // Only send a backup message to current user if sent successfully to others
-            if reports.iter().all(|r| r.is_sent_success()) {
-                // Send the event to the messaging relays
-                match client.send_event(&event).to_nip17().await {
-                    Ok(output) => {
-                        reports.push(SendReport::new(current_user).status(output));
-                    }
-                    Err(e) => {
-                        reports.push(SendReport::new(current_user).error(e.to_string()));
-                    }
-                }
-            } else {
-                reports.push(SendReport::new(current_user).on_hold(event));
-            }
-
-            Ok(reports)
-        })
-    }
-
-    /// Create a task to resend a failed message
-    pub fn resend_message(
-        &self,
-        reports: Vec<SendReport>,
-        cx: &App,
-    ) -> Task<Result<Vec<SendReport>, Error>> {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-
-        cx.background_spawn(async move {
-            let mut resend_reports = vec![];
-
-            for report in reports.into_iter() {
-                let receiver = report.receiver;
-
-                // Process failed events
-                if let Some(output) = report.status {
-                    let id = output.id();
-                    let urls: Vec<&RelayUrl> = output.failed.keys().collect();
-
-                    if let Some(event) = client.database().event_by_id(id).await? {
-                        for url in urls.into_iter() {
-                            let relay = client.relay(url).await?.context("Relay not found")?;
-                            let id = relay.send_event(&event).await?;
-
-                            let resent: Output<EventId> = Output {
-                                val: id,
-                                success: HashSet::from([url.to_owned()]),
-                                failed: HashMap::new(),
-                            };
-
-                            resend_reports.push(SendReport::new(receiver).status(resent));
-                        }
-                    }
-                }
-
-                // Process the on hold event if it exists
-                if let Some(event) = report.on_hold {
-                    // Send the event to the messaging relays
-                    match client.send_event(&event).await {
-                        Ok(output) => {
-                            resend_reports.push(SendReport::new(receiver).status(output));
-                        }
-                        Err(e) => {
-                            resend_reports.push(SendReport::new(receiver).error(e.to_string()));
-                        }
-                    }
-                }
-            }
-
-            Ok(resend_reports)
-        })
-    }
-    */
 }

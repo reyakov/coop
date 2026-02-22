@@ -1,48 +1,108 @@
+use std::rc::Rc;
+use std::time::Duration;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, svg, App, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    SharedString, StatefulInteractiveElement as _, Styled as _, Window,
+    div, px, relative, rems, svg, Animation, AnimationExt, AnyElement, App, Div, ElementId,
+    InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString,
+    StatefulInteractiveElement, StyleRefinement, Styled, Window,
 };
 use theme::ActiveTheme;
 
-use crate::{h_flex, v_flex, Disableable, IconName, Selectable};
-
-type OnClick = Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>;
+use crate::icon::IconNamed;
+use crate::{v_flex, Disableable, IconName, Selectable, Sizable, Size, StyledExt as _};
 
 /// A Checkbox element.
+#[allow(clippy::type_complexity)]
 #[derive(IntoElement)]
 pub struct Checkbox {
     id: ElementId,
+    base: Div,
+    style: StyleRefinement,
     label: Option<SharedString>,
+    children: Vec<AnyElement>,
     checked: bool,
     disabled: bool,
-    on_click: OnClick,
+    size: Size,
+    tab_stop: bool,
+    tab_index: isize,
+    on_click: Option<Rc<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
 }
 
 impl Checkbox {
+    /// Create a new Checkbox with the given id.
     pub fn new(id: impl Into<ElementId>) -> Self {
         Self {
             id: id.into(),
+            base: div(),
+            style: StyleRefinement::default(),
             label: None,
+            children: Vec::new(),
             checked: false,
             disabled: false,
+            size: Size::default(),
             on_click: None,
+            tab_stop: true,
+            tab_index: 0,
         }
     }
 
+    /// Set the label for the checkbox.
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
         self.label = Some(label.into());
         self
     }
 
+    /// Set the checked state for the checkbox.
     pub fn checked(mut self, checked: bool) -> Self {
         self.checked = checked;
         self
     }
 
+    /// Set the click handler for the checkbox.
+    ///
+    /// The `&bool` parameter indicates the new checked state after the click.
     pub fn on_click(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
-        self.on_click = Some(Box::new(handler));
+        self.on_click = Some(Rc::new(handler));
         self
+    }
+
+    /// Set the tab stop for the checkbox, default is true.
+    pub fn tab_stop(mut self, tab_stop: bool) -> Self {
+        self.tab_stop = tab_stop;
+        self
+    }
+
+    /// Set the tab index for the checkbox, default is 0.
+    pub fn tab_index(mut self, tab_index: isize) -> Self {
+        self.tab_index = tab_index;
+        self
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn handle_click(
+        on_click: &Option<Rc<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
+        checked: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        let new_checked = !checked;
+        if let Some(f) = on_click {
+            (f)(&new_checked, window, cx);
+        }
+    }
+}
+
+impl InteractiveElement for Checkbox {
+    fn interactivity(&mut self) -> &mut gpui::Interactivity {
+        self.base.interactivity()
+    }
+}
+impl StatefulInteractiveElement for Checkbox {}
+
+impl Styled for Checkbox {
+    fn style(&mut self) -> &mut gpui::StyleRefinement {
+        &mut self.style
     }
 }
 
@@ -63,64 +123,190 @@ impl Selectable for Checkbox {
     }
 }
 
+impl ParentElement for Checkbox {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
+    }
+}
+
+impl Sizable for Checkbox {
+    fn with_size(mut self, size: impl Into<Size>) -> Self {
+        self.size = size.into();
+        self
+    }
+}
+
+pub(crate) fn checkbox_check_icon(
+    id: ElementId,
+    size: Size,
+    checked: bool,
+    disabled: bool,
+    window: &mut Window,
+    cx: &mut App,
+) -> impl IntoElement {
+    let toggle_state = window.use_keyed_state(id, cx, |_, _| checked);
+
+    let color = if disabled {
+        cx.theme().text.opacity(0.5)
+    } else {
+        cx.theme().text
+    };
+
+    svg()
+        .absolute()
+        .top_px()
+        .left_px()
+        .map(|this| match size {
+            Size::XSmall => this.size_2(),
+            Size::Small => this.size_2p5(),
+            Size::Medium => this.size_3(),
+            Size::Large => this.size_3p5(),
+            _ => this.size_3(),
+        })
+        .text_color(color)
+        .map(|this| match checked {
+            true => this.path(IconName::Check.path()),
+            _ => this,
+        })
+        .map(|this| {
+            if !disabled && checked != *toggle_state.read(cx) {
+                let duration = Duration::from_secs_f64(0.25);
+                cx.spawn({
+                    let toggle_state = toggle_state.clone();
+                    async move |cx| {
+                        cx.background_executor().timer(duration).await;
+                        toggle_state.update(cx, |this, _| *this = checked);
+                    }
+                })
+                .detach();
+
+                this.with_animation(
+                    ElementId::NamedInteger("toggle".into(), checked as u64),
+                    Animation::new(Duration::from_secs_f64(0.25)),
+                    move |this, delta| {
+                        this.opacity(if checked { 1.0 * delta } else { 1.0 - delta })
+                    },
+                )
+                .into_any_element()
+            } else {
+                this.into_any_element()
+            }
+        })
+}
+
 impl RenderOnce for Checkbox {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let icon_color = if self.disabled {
-            cx.theme().icon_muted
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let focus_handle = window
+            .use_keyed_state(self.id.clone(), cx, |_, cx| cx.focus_handle())
+            .read(cx)
+            .clone();
+
+        let checked = self.checked;
+        let radius = cx.theme().radius.min(px(4.));
+
+        let border_color = if checked {
+            cx.theme().border_focused
         } else {
-            cx.theme().icon_accent
+            cx.theme().border
         };
 
-        h_flex()
-            .id(self.id)
-            .gap_2()
-            .items_center()
-            .child(
-                v_flex()
-                    .flex_shrink_0()
-                    .relative()
-                    .rounded_sm()
-                    .size_5()
-                    .bg(cx.theme().elevated_surface_background)
-                    .child(
-                        svg()
-                            .absolute()
-                            .top_0p5()
-                            .left_0p5()
-                            .size_4()
-                            .text_color(icon_color)
-                            .map(|this| match self.checked {
-                                true => this.path(IconName::Check.path()),
-                                _ => this,
-                            }),
-                    ),
-            )
-            .map(|this| {
-                if let Some(label) = self.label {
-                    this.text_color(cx.theme().text_muted).child(
-                        div()
-                            .w_full()
-                            .overflow_x_hidden()
-                            .text_ellipsis()
-                            .text_sm()
-                            .child(label),
+        let color = if self.disabled {
+            border_color.opacity(0.5)
+        } else {
+            border_color
+        };
+
+        div().child(
+            self.base
+                .id(self.id.clone())
+                .when(!self.disabled, |this| {
+                    this.track_focus(
+                        &focus_handle
+                            .tab_stop(self.tab_stop)
+                            .tab_index(self.tab_index),
                     )
-                } else {
-                    this
-                }
-            })
-            .when(self.disabled, |this| {
-                this.cursor_not_allowed()
-                    .text_color(cx.theme().text_placeholder)
-            })
-            .when_some(
-                self.on_click.filter(|_| !self.disabled),
-                |this, on_click| {
-                    this.on_click(move |_, window, cx| {
-                        let checked = !self.checked;
-                        on_click(&checked, window, cx);
+                })
+                .h_flex()
+                .gap_2()
+                .items_start()
+                .line_height(relative(1.))
+                .text_color(cx.theme().text)
+                .map(|this| match self.size {
+                    Size::XSmall => this.text_xs(),
+                    Size::Small => this.text_sm(),
+                    Size::Medium => this.text_base(),
+                    Size::Large => this.text_lg(),
+                    _ => this,
+                })
+                .when(self.disabled, |this| this.text_color(cx.theme().text_muted))
+                .rounded(cx.theme().radius * 0.5)
+                .refine_style(&self.style)
+                .child(
+                    div()
+                        .relative()
+                        .map(|this| match self.size {
+                            Size::XSmall => this.size_3(),
+                            Size::Small => this.size_3p5(),
+                            Size::Medium => this.size_4(),
+                            Size::Large => this.size(rems(1.125)),
+                            _ => this.size_4(),
+                        })
+                        .flex_shrink_0()
+                        .border_1()
+                        .border_color(color)
+                        .rounded(radius)
+                        .when(cx.theme().shadow && !self.disabled, |this| this.shadow_xs())
+                        .map(|this| match checked {
+                            false => this.bg(cx.theme().background),
+                            _ => this.bg(color),
+                        })
+                        .child(checkbox_check_icon(
+                            self.id,
+                            self.size,
+                            checked,
+                            self.disabled,
+                            window,
+                            cx,
+                        )),
+                )
+                .when(self.label.is_some() || !self.children.is_empty(), |this| {
+                    this.child(
+                        v_flex()
+                            .w_full()
+                            .line_height(relative(1.2))
+                            .gap_1()
+                            .map(|this| {
+                                if let Some(label) = self.label {
+                                    this.child(
+                                        div()
+                                            .size_full()
+                                            .text_color(cx.theme().text)
+                                            .when(self.disabled, |this| {
+                                                this.text_color(cx.theme().text_muted)
+                                            })
+                                            .line_height(relative(1.))
+                                            .child(label),
+                                    )
+                                } else {
+                                    this
+                                }
+                            })
+                            .children(self.children),
+                    )
+                })
+                .on_mouse_down(gpui::MouseButton::Left, |_, window, _| {
+                    // Avoid focus on mouse down.
+                    window.prevent_default();
+                })
+                .when(!self.disabled, |this| {
+                    this.on_click({
+                        let on_click = self.on_click.clone();
+                        move |_, window, cx| {
+                            window.prevent_default();
+                            Self::handle_click(&on_click, checked, window, cx);
+                        }
                     })
-                },
-            )
+                }),
+        )
     }
 }

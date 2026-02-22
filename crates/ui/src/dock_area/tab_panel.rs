@@ -7,7 +7,7 @@ use gpui::{
     MouseButton, ParentElement, Pixels, Render, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, WeakEntity, Window,
 };
-use theme::{ActiveTheme, CLIENT_SIDE_DECORATION_ROUNDING, TITLEBAR_HEIGHT};
+use theme::{ActiveTheme, CLIENT_SIDE_DECORATION_ROUNDING, TABBAR_HEIGHT};
 
 use crate::button::{Button, ButtonVariants as _};
 use crate::dock_area::dock::DockPlacement;
@@ -645,7 +645,7 @@ impl TabPanel {
 
         TabBar::new()
             .track_scroll(&self.tab_bar_scroll_handle)
-            .h(TITLEBAR_HEIGHT)
+            .h(TABBAR_HEIGHT)
             .when(has_extend_dock_button, |this| {
                 this.prefix(
                     h_flex()

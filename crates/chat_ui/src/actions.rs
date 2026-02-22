@@ -1,12 +1,14 @@
 use gpui::Action;
 use nostr_sdk::prelude::*;
 use serde::Deserialize;
+use settings::SignerKind;
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = chat, no_json)]
 pub enum Command {
     Insert(&'static str),
     ChangeSubject(&'static str),
+    ChangeSigner(SignerKind),
 }
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]

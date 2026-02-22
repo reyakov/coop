@@ -176,11 +176,7 @@ impl NostrRegistry {
 
             while let Some(notification) = notifications.next().await {
                 if let ClientNotification::Message {
-                    message:
-                        RelayMessage::Event {
-                            event,
-                            subscription_id,
-                        },
+                    message: RelayMessage::Event { event, .. },
                     ..
                 } = notification
                 {
@@ -191,11 +187,6 @@ impl NostrRegistry {
 
                     match event.kind {
                         Kind::RelayList => {
-                            // Automatically get messaging relays for each member when the user opens a room
-                            if subscription_id.as_str().starts_with("room-") {
-                                get_adv_events_by(&client, event.as_ref()).await?;
-                            }
-
                             tx.send_async(event.into_owned()).await?;
                         }
                         Kind::InboxRelays => {
@@ -773,53 +764,6 @@ impl NostrRegistry {
     }
 }
 
-/// Automatically get messaging relays and encryption announcement from a received relay list
-async fn get_adv_events_by(client: &Client, event: &Event) -> Result<(), Error> {
-    // Subscription options
-    let opts = SubscribeAutoCloseOptions::default()
-        .timeout(Some(Duration::from_secs(TIMEOUT)))
-        .exit_policy(ReqExitPolicy::ExitOnEOSE);
-
-    // Extract write relays from event
-    let write_relays: Vec<&RelayUrl> = nip65::extract_relay_list(event)
-        .filter_map(|(url, metadata)| {
-            if metadata.is_none() || metadata == &Some(RelayMetadata::Write) {
-                Some(url)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // Ensure relay connections
-    for relay in write_relays.iter() {
-        client.add_relay(*relay).await?;
-        client.connect_relay(*relay).await?;
-    }
-
-    // Construct filter for inbox relays
-    let inbox = Filter::new()
-        .kind(Kind::InboxRelays)
-        .author(event.pubkey)
-        .limit(1);
-
-    // Construct filter for encryption announcement
-    let announcement = Filter::new()
-        .kind(Kind::Custom(10044))
-        .author(event.pubkey)
-        .limit(1);
-
-    // Construct target for subscription
-    let target = write_relays
-        .into_iter()
-        .map(|relay| (relay, vec![inbox.clone(), announcement.clone()]))
-        .collect::<HashMap<_, _>>();
-
-    client.subscribe(target).close_on(opts).await?;
-
-    Ok(())
-}
-
 /// Get or create a new app keys
 fn get_or_init_app_keys() -> Result<Keys, Error> {
     let dir = config_dir().join(".app_keys");
@@ -857,15 +801,15 @@ fn default_relay_list() -> Vec<(RelayUrl, Option<RelayMetadata>)> {
             Some(RelayMetadata::Write),
         ),
         (
-            RelayUrl::parse("wss://relay.primal.net/").unwrap(),
+            RelayUrl::parse("wss://relay.primal.net").unwrap(),
             Some(RelayMetadata::Write),
         ),
         (
-            RelayUrl::parse("wss://relay.damus.io/").unwrap(),
+            RelayUrl::parse("wss://relay.damus.io").unwrap(),
             Some(RelayMetadata::Read),
         ),
         (
-            RelayUrl::parse("wss://nos.lol/").unwrap(),
+            RelayUrl::parse("wss://nos.lol").unwrap(),
             Some(RelayMetadata::Read),
         ),
     ]
@@ -873,8 +817,8 @@ fn default_relay_list() -> Vec<(RelayUrl, Option<RelayMetadata>)> {
 
 fn default_messaging_relays() -> Vec<RelayUrl> {
     vec![
-        //RelayUrl::parse("wss://auth.nostr1.com/").unwrap(),
-        RelayUrl::parse("wss://nip17.com/").unwrap(),
+        RelayUrl::parse("wss://nos.lol").unwrap(),
+        RelayUrl::parse("wss://nip17.com").unwrap(),
     ]
 }
 

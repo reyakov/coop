@@ -42,7 +42,7 @@ pub const SEARCH_RELAYS: [&str; 1] = ["wss://antiprimal.net"];
 /// Default bootstrap relays
 pub const BOOTSTRAP_RELAYS: [&str; 3] = [
     "wss://relay.damus.io",
-    "wss://relay.primal.net",
+    "wss://nos.lol",
     "wss://user.kindpag.es",
 ];
 

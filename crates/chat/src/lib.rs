@@ -588,6 +588,7 @@ impl ChatRegistry {
                 room.update(cx, |this, cx| {
                     this.push_message(message, cx);
                 });
+                self.sort(cx);
             }
             None => {
                 // Push the new room to the front of the list
