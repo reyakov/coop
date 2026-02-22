@@ -1216,25 +1216,24 @@ impl ChatPanel {
                 let encryption = matches!(signer_kind, SignerKind::Encryption);
                 let user = matches!(signer_kind, SignerKind::User);
 
-                this.check_side(ui::Side::Right)
-                    .menu_with_check_and_disabled(
-                        "Auto",
-                        auto,
-                        Box::new(Command::ChangeSigner(SignerKind::Auto)),
-                        auto,
-                    )
-                    .menu_with_check_and_disabled(
-                        "Decoupled Encryption Key",
-                        encryption,
-                        Box::new(Command::ChangeSigner(SignerKind::Encryption)),
-                        encryption,
-                    )
-                    .menu_with_check_and_disabled(
-                        "User Identity",
-                        user,
-                        Box::new(Command::ChangeSigner(SignerKind::User)),
-                        user,
-                    )
+                this.menu_with_check_and_disabled(
+                    "Auto",
+                    auto,
+                    Box::new(Command::ChangeSigner(SignerKind::Auto)),
+                    auto,
+                )
+                .menu_with_check_and_disabled(
+                    "Decoupled Encryption Key",
+                    encryption,
+                    Box::new(Command::ChangeSigner(SignerKind::Encryption)),
+                    encryption,
+                )
+                .menu_with_check_and_disabled(
+                    "User Identity",
+                    user,
+                    Box::new(Command::ChangeSigner(SignerKind::User)),
+                    user,
+                )
             })
     }
 
@@ -1339,8 +1338,8 @@ impl Render for ChatPanel {
                                 h_flex()
                                     .pl_1()
                                     .gap_1()
-                                    .child(self.render_encryption_menu(window, cx))
                                     .child(self.render_emoji_menu(window, cx))
+                                    .child(self.render_encryption_menu(window, cx))
                                     .child(
                                         Button::new("send")
                                             .icon(IconName::PaperPlaneFill)

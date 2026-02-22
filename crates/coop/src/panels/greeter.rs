@@ -1,4 +1,4 @@
-use chat::ChatRegistry;
+use chat::{ChatRegistry, InboxState};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, relative, svg, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle,
@@ -83,15 +83,16 @@ impl Render for GreeterPanel {
         const DESCRIPTION: &str = "Chat Freely, Stay Private on Nostr.";
 
         let chat = ChatRegistry::global(cx);
-        let nip17_state = chat.read(cx).relay_state(cx);
+        let nip17 = chat.read(cx).state(cx);
 
         let nostr = NostrRegistry::global(cx);
-        let nip65_state = nostr.read(cx).relay_list_state();
+        let nip65 = nostr.read(cx).relay_list_state();
+
         let signer = nostr.read(cx).signer();
         let owned = signer.owned();
 
         let required_actions =
-            nip65_state == RelayState::NotConfigured || nip17_state == RelayState::NotConfigured;
+            nip65 == RelayState::NotConfigured || nip17 == InboxState::RelayNotAvailable;
 
         h_flex()
             .size_full()
@@ -152,7 +153,7 @@ impl Render for GreeterPanel {
                                     v_flex()
                                         .gap_2()
                                         .w_full()
-                                        .when(nip65_state.not_configured(), |this| {
+                                        .when(nip65.not_configured(), |this| {
                                             this.child(
                                                 Button::new("relaylist")
                                                     .icon(Icon::new(IconName::Relay))
@@ -170,7 +171,7 @@ impl Render for GreeterPanel {
                                                     }),
                                             )
                                         })
-                                        .when(nip17_state.not_configured(), |this| {
+                                        .when(nip17.not_configured(), |this| {
                                             this.child(
                                                 Button::new("import")
                                                     .icon(Icon::new(IconName::Relay))

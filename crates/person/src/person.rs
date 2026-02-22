@@ -1,9 +1,9 @@
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 
-use device::Announcement;
 use gpui::SharedString;
 use nostr_sdk::prelude::*;
+use state::Announcement;
 
 const IMAGE_RESIZER: &str = "https://wsrv.nl";
 

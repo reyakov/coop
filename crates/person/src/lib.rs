@@ -5,11 +5,10 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Error};
 use common::EventUtils;
-use device::Announcement;
 use gpui::{App, AppContext, Context, Entity, Global, Task};
 use nostr_sdk::prelude::*;
 use smallvec::{smallvec, SmallVec};
-use state::{NostrRegistry, BOOTSTRAP_RELAYS, TIMEOUT};
+use state::{Announcement, NostrRegistry, BOOTSTRAP_RELAYS, TIMEOUT};
 
 mod person;
 

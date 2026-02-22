@@ -5,10 +5,7 @@ use nostr_sdk::prelude::*;
 /// Gossip
 #[derive(Debug, Clone, Default)]
 pub struct Gossip {
-    /// Gossip relays for each public key
     relays: HashMap<PublicKey, HashSet<(RelayUrl, Option<RelayMetadata>)>>,
-    /// Messaging relays for each public key
-    messaging_relays: HashMap<PublicKey, HashSet<RelayUrl>>,
 }
 
 impl Gossip {
@@ -69,39 +66,5 @@ impl Gossip {
                 })
                 .take(3),
         );
-
-        log::info!("Updating gossip relays for: {}", event.pubkey);
-    }
-
-    /// Get messaging relays for a given public key
-    pub fn messaging_relays(&self, public_key: &PublicKey) -> Vec<RelayUrl> {
-        self.messaging_relays
-            .get(public_key)
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .collect()
-    }
-
-    /// Insert messaging relays for a public key
-    pub fn insert_messaging_relays(&mut self, event: &Event) {
-        self.messaging_relays
-            .entry(event.pubkey)
-            .or_default()
-            .extend(
-                event
-                    .tags
-                    .iter()
-                    .filter_map(|tag| {
-                        if let Some(TagStandard::Relay(url)) = tag.as_standardized() {
-                            Some(url.to_owned())
-                        } else {
-                            None
-                        }
-                    })
-                    .take(3),
-            );
-
-        log::info!("Updating messaging relays for: {}", event.pubkey);
     }
 }

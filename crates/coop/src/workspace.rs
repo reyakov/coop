@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use chat::{ChatEvent, ChatRegistry};
+use chat::{ChatEvent, ChatRegistry, InboxState};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, rems, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement,
@@ -233,13 +233,13 @@ impl Workspace {
                 ),
                 _ => this,
             })
-            .map(|this| match chat.read(cx).relay_state(cx) {
-                RelayState::Checking => {
+            .map(|this| match chat.read(cx).state(cx) {
+                InboxState::Checking => {
                     this.child(div().text_xs().text_color(cx.theme().text_muted).child(
                         SharedString::from("Fetching user's messaging relay list..."),
                     ))
                 }
-                RelayState::NotConfigured => this.child(
+                InboxState::RelayNotAvailable => this.child(
                     h_flex()
                         .h_6()
                         .w_full()

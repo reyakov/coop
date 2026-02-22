@@ -11,12 +11,14 @@ use nostr_lmdb::prelude::*;
 use nostr_sdk::prelude::*;
 
 mod constants;
+mod device;
 mod gossip;
 mod nip05;
 mod nip96;
 mod signer;
 
 pub use constants::*;
+pub use device::*;
 pub use gossip::*;
 pub use nip05::*;
 pub use nip96::*;
@@ -181,18 +183,16 @@ impl NostrRegistry {
                 } = notification
                 {
                     // Skip if the event has already been processed
-                    if !processed_events.insert(event.id) {
-                        continue;
-                    }
-
-                    match event.kind {
-                        Kind::RelayList => {
-                            tx.send_async(event.into_owned()).await?;
+                    if processed_events.insert(event.id) {
+                        match event.kind {
+                            Kind::RelayList => {
+                                tx.send_async(event.into_owned()).await?;
+                            }
+                            Kind::InboxRelays => {
+                                tx.send_async(event.into_owned()).await?;
+                            }
+                            _ => {}
                         }
-                        Kind::InboxRelays => {
-                            tx.send_async(event.into_owned()).await?;
-                        }
-                        _ => {}
                     }
                 }
             }
@@ -205,20 +205,11 @@ impl NostrRegistry {
 
         self.tasks.push(cx.spawn(async move |_this, cx| {
             while let Ok(event) = rx.recv_async().await {
-                match event.kind {
-                    Kind::RelayList => {
-                        gossip.update(cx, |this, cx| {
-                            this.insert_relays(&event);
-                            cx.notify();
-                        })?;
-                    }
-                    Kind::InboxRelays => {
-                        gossip.update(cx, |this, cx| {
-                            this.insert_messaging_relays(&event);
-                            cx.notify();
-                        })?;
-                    }
-                    _ => {}
+                if let Kind::RelayList = event.kind {
+                    gossip.update(cx, |this, cx| {
+                        this.insert_relays(&event);
+                        cx.notify();
+                    })?;
                 }
             }
 
@@ -256,15 +247,6 @@ impl NostrRegistry {
         self.relay_list_state.clone()
     }
 
-    /// Get a relay hint (messaging relay) for a given public key
-    pub fn relay_hint(&self, public_key: &PublicKey, cx: &App) -> Option<RelayUrl> {
-        self.gossip
-            .read(cx)
-            .messaging_relays(public_key)
-            .first()
-            .cloned()
-    }
-
     /// Get a list of write relays for a given public key
     pub fn write_relays(&self, public_key: &PublicKey, cx: &App) -> Task<Vec<RelayUrl>> {
         let client = self.client();
@@ -284,21 +266,6 @@ impl NostrRegistry {
     pub fn read_relays(&self, public_key: &PublicKey, cx: &App) -> Task<Vec<RelayUrl>> {
         let client = self.client();
         let relays = self.gossip.read(cx).read_relays(public_key);
-
-        cx.background_spawn(async move {
-            // Ensure relay connections
-            for url in relays.iter() {
-                client.add_relay(url).and_connect().await.ok();
-            }
-
-            relays
-        })
-    }
-
-    /// Get a list of messaging relays for a given public key
-    pub fn messaging_relays(&self, public_key: &PublicKey, cx: &App) -> Task<Vec<RelayUrl>> {
-        let client = self.client();
-        let relays = self.gossip.read(cx).messaging_relays(public_key);
 
         cx.background_spawn(async move {
             // Ensure relay connections

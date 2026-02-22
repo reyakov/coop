@@ -1658,6 +1658,7 @@ dependencies = [
  "itertools 0.13.0",
  "log",
  "nostr-sdk",
+ "person",
  "serde",
  "serde_json",
  "smallvec",
@@ -4658,7 +4659,6 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "common",
- "device",
  "flume",
  "gpui",
  "log",

@@ -4,12 +4,11 @@ use std::time::Duration;
 use anyhow::{anyhow, Context as AnyhowContext, Error};
 use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task, Window};
 use nostr_sdk::prelude::*;
+use person::PersonRegistry;
 use smallvec::{smallvec, SmallVec};
-use state::{app_name, NostrRegistry, RelayState, DEVICE_GIFTWRAP, TIMEOUT};
-
-mod device;
-
-pub use device::*;
+use state::{
+    app_name, Announcement, DeviceState, NostrRegistry, RelayState, DEVICE_GIFTWRAP, TIMEOUT,
+};
 
 const IDENTIFIER: &str = "coop:device";
 
@@ -218,16 +217,17 @@ impl DeviceRegistry {
         let signer = nostr.read(cx).signer();
         let public_key = signer.public_key().unwrap();
 
-        let messaging_relays = nostr.read(cx).messaging_relays(&public_key, cx);
+        let persons = PersonRegistry::global(cx);
+        let profile = persons.read(cx).get(&public_key, cx);
+        let relay_urls = profile.messaging_relays().clone();
 
         cx.background_spawn(async move {
-            let relay_urls = messaging_relays.await;
             let filter = Filter::new().kind(Kind::GiftWrap).pubkey(public_key);
             let id = SubscriptionId::new(DEVICE_GIFTWRAP);
 
             // Construct target for subscription
-            let target: HashMap<&RelayUrl, Filter> = relay_urls
-                .iter()
+            let target: HashMap<RelayUrl, Filter> = relay_urls
+                .into_iter()
                 .map(|relay| (relay, filter.clone()))
                 .collect();
 

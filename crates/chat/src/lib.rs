@@ -50,11 +50,28 @@ enum Signal {
     Eose,
 }
 
+/// Inbox state.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum InboxState {
+    #[default]
+    Idle,
+    Checking,
+    RelayNotAvailable,
+    RelayConfigured(Box<Event>),
+    Subscribing,
+}
+
+impl InboxState {
+    pub fn not_configured(&self) -> bool {
+        matches!(self, InboxState::RelayNotAvailable)
+    }
+}
+
 /// Chat Registry
 #[derive(Debug)]
 pub struct ChatRegistry {
     /// Relay state for messaging relay list
-    messaging_relay_list: Entity<RelayState>,
+    state: Entity<InboxState>,
 
     /// Collection of all chat rooms
     rooms: Vec<Entity<Room>>,
@@ -84,7 +101,7 @@ impl ChatRegistry {
 
     /// Create a new chat registry instance
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let messaging_relay_list = cx.new(|_| RelayState::default());
+        let state = cx.new(|_| InboxState::default());
         let nostr = NostrRegistry::global(cx);
 
         let mut subscriptions = smallvec![];
@@ -106,26 +123,28 @@ impl ChatRegistry {
 
         subscriptions.push(
             // Observe the nip17 state and load chat rooms on every state change
-            cx.observe(&messaging_relay_list, |this, state, cx| {
-                match state.read(cx) {
-                    RelayState::Configured => {
-                        this.get_messages(cx);
-                    }
-                    _ => {
-                        this.get_rooms(cx);
-                    }
+            cx.observe(&state, |this, state, cx| {
+                if let InboxState::RelayConfigured(event) = state.read(cx) {
+                    let relay_urls: Vec<_> = nip17::extract_relay_list(event).cloned().collect();
+                    this.get_messages(relay_urls, cx);
                 }
             }),
         );
 
-        // Run at the end of current cycle
+        // Run at the end of the current cycle
         cx.defer_in(window, |this, _window, cx| {
+            // Handle nostr notifications
             this.handle_notifications(cx);
+
+            // Track unwrap gift wrap progress
             this.tracking(cx);
+
+            // Load chat rooms
+            this.get_rooms(cx);
         });
 
         Self {
-            messaging_relay_list,
+            state,
             rooms: vec![],
             tracking_flag: Arc::new(AtomicBool::new(false)),
             tasks: smallvec![],
@@ -169,8 +188,6 @@ impl ChatRegistry {
                             // Skip non-gift wrap events
                             continue;
                         }
-
-                        log::info!("Received gift wrap event: {:?}", event);
 
                         // Extract the rumor from the gift wrap event
                         match Self::extract_rumor(&client, &device_signer, event.as_ref()).await {
@@ -238,17 +255,19 @@ impl ChatRegistry {
         }));
     }
 
+    /// Ensure messaging relays are set up for the current user.
     fn ensure_messaging_relays(&mut self, cx: &mut Context<Self>) {
-        let state = self.messaging_relay_list.downgrade();
         let task = self.verify_relays(cx);
 
-        self.tasks.push(cx.spawn(async move |_this, cx| {
+        // Set state to checking
+        self.set_state(InboxState::Checking, cx);
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
             let result = task.await?;
 
             // Update state
-            state.update(cx, |this, cx| {
-                *this = result;
-                cx.notify();
+            this.update(cx, |this, cx| {
+                this.set_state(result, cx);
             })?;
 
             Ok(())
@@ -256,13 +275,12 @@ impl ChatRegistry {
     }
 
     // Verify messaging relay list for current user
-    fn verify_relays(&mut self, cx: &mut Context<Self>) -> Task<Result<RelayState, Error>> {
+    fn verify_relays(&mut self, cx: &mut Context<Self>) -> Task<Result<InboxState, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
         let signer = nostr.read(cx).signer();
         let public_key = signer.public_key().unwrap();
-
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
         cx.background_spawn(async move {
@@ -287,8 +305,7 @@ impl ChatRegistry {
             while let Some((_url, res)) = stream.next().await {
                 match res {
                     Ok(event) => {
-                        log::info!("Received relay list event: {event:?}");
-                        return Ok(RelayState::Configured);
+                        return Ok(InboxState::RelayConfigured(Box::new(event)));
                     }
                     Err(e) => {
                         log::error!("Failed to receive relay list event: {e}");
@@ -296,41 +313,54 @@ impl ChatRegistry {
                 }
             }
 
-            Ok(RelayState::NotConfigured)
+            Ok(InboxState::RelayNotAvailable)
         })
     }
 
     /// Get all messages for current user
-    fn get_messages(&mut self, cx: &mut Context<Self>) {
-        let task = self.subscribe_to_giftwrap_events(cx);
+    fn get_messages<I>(&mut self, relay_urls: I, cx: &mut Context<Self>)
+    where
+        I: IntoIterator<Item = RelayUrl>,
+    {
+        let task = self.subscribe(relay_urls, cx);
 
-        self.tasks.push(cx.spawn(async move |_this, _cx| {
+        self.tasks.push(cx.spawn(async move |this, cx| {
             task.await?;
 
             // Update state
+            this.update(cx, |this, cx| {
+                this.set_state(InboxState::Subscribing, cx);
+            })?;
 
             Ok(())
         }));
     }
 
     /// Continuously get gift wrap events for the current user in their messaging relays
-    fn subscribe_to_giftwrap_events(&mut self, cx: &mut Context<Self>) -> Task<Result<(), Error>> {
+    fn subscribe<I>(&mut self, urls: I, cx: &mut Context<Self>) -> Task<Result<(), Error>>
+    where
+        I: IntoIterator<Item = RelayUrl>,
+    {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
-
-        let messaging_relays = nostr.read(cx).messaging_relays(&public_key, cx);
+        let urls = urls.into_iter().collect::<Vec<_>>();
 
         cx.background_spawn(async move {
-            let urls = messaging_relays.await;
+            let public_key = signer.get_public_key().await?;
             let filter = Filter::new().kind(Kind::GiftWrap).pubkey(public_key);
             let id = SubscriptionId::new(USER_GIFTWRAP);
 
+            // Ensure relay connections
+            for url in urls.iter() {
+                client.add_relay(url).and_connect().await?;
+            }
+
             // Construct target for subscription
-            let target: HashMap<&RelayUrl, Filter> =
-                urls.iter().map(|relay| (relay, filter.clone())).collect();
+            let target: HashMap<RelayUrl, Filter> = urls
+                .into_iter()
+                .map(|relay| (relay, filter.clone()))
+                .collect();
 
             let output = client.subscribe(target).with_id(id).await?;
 
@@ -343,9 +373,17 @@ impl ChatRegistry {
         })
     }
 
+    /// Set the state of the inbox
+    fn set_state(&mut self, state: InboxState, cx: &mut Context<Self>) {
+        self.state.update(cx, |this, cx| {
+            *this = state;
+            cx.notify();
+        });
+    }
+
     /// Get the relay state
-    pub fn relay_state(&self, cx: &App) -> RelayState {
-        self.messaging_relay_list.read(cx).clone()
+    pub fn state(&self, cx: &App) -> InboxState {
+        self.state.read(cx).clone()
     }
 
     /// Get the loading status of the chat registry
@@ -491,16 +529,21 @@ impl ChatRegistry {
     pub fn get_rooms(&mut self, cx: &mut Context<Self>) {
         let task = self.get_rooms_from_database(cx);
 
-        cx.spawn(async move |this, cx| {
-            let rooms = task.await.ok()?;
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            match task.await {
+                Ok(rooms) => {
+                    this.update(cx, |this, cx| {
+                        this.extend_rooms(rooms, cx);
+                        this.sort(cx);
+                    })?;
+                }
+                Err(e) => {
+                    log::error!("Failed to load rooms: {}", e);
+                }
+            };
 
-            this.update(cx, move |this, cx| {
-                this.extend_rooms(rooms, cx);
-                this.sort(cx);
-            })
-            .ok()
-        })
-        .detach();
+            Ok(())
+        }));
     }
 
     /// Create a task to load rooms from the database
