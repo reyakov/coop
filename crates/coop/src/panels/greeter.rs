@@ -1,8 +1,8 @@
 use chat::{ChatRegistry, InboxState};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, relative, svg, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    div, svg, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    IntoElement, ParentElement, Render, SharedString, Styled, Window,
 };
 use state::{NostrRegistry, RelayState};
 use theme::ActiveTheme;
@@ -122,14 +122,13 @@ impl Render for GreeterPanel {
                                     .child(
                                         div()
                                             .font_semibold()
-                                            .line_height(relative(1.25))
+                                            .text_color(cx.theme().text)
                                             .child(SharedString::from(TITLE)),
                                     )
                                     .child(
                                         div()
-                                            .text_sm()
+                                            .text_xs()
                                             .text_color(cx.theme().text_muted)
-                                            .line_height(relative(1.25))
                                             .child(SharedString::from(DESCRIPTION)),
                                     ),
                             ),
@@ -141,9 +140,9 @@ impl Render for GreeterPanel {
                                 .w_full()
                                 .child(
                                     h_flex()
-                                        .gap_1()
+                                        .gap_2()
                                         .w_full()
-                                        .text_sm()
+                                        .text_xs()
                                         .font_semibold()
                                         .text_color(cx.theme().text_muted)
                                         .child(SharedString::from("Required Actions"))
@@ -199,9 +198,9 @@ impl Render for GreeterPanel {
                                 .w_full()
                                 .child(
                                     h_flex()
-                                        .gap_1()
+                                        .gap_2()
                                         .w_full()
-                                        .text_sm()
+                                        .text_xs()
                                         .font_semibold()
                                         .text_color(cx.theme().text_muted)
                                         .child(SharedString::from("Use your own identity"))
@@ -252,9 +251,9 @@ impl Render for GreeterPanel {
                             .w_full()
                             .child(
                                 h_flex()
-                                    .gap_1()
+                                    .gap_2()
                                     .w_full()
-                                    .text_sm()
+                                    .text_xs()
                                     .font_semibold()
                                     .text_color(cx.theme().text_muted)
                                     .child(SharedString::from("Get Started"))
@@ -264,14 +263,6 @@ impl Render for GreeterPanel {
                                 v_flex()
                                     .gap_2()
                                     .w_full()
-                                    .child(
-                                        Button::new("backup")
-                                            .icon(Icon::new(IconName::Shield))
-                                            .label("Backup account")
-                                            .ghost()
-                                            .small()
-                                            .justify_start(),
-                                    )
                                     .child(
                                         Button::new("profile")
                                             .icon(Icon::new(IconName::Profile))

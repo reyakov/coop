@@ -180,7 +180,7 @@ impl DeviceRegistry {
 
     /// Reset the device state
     fn reset(&mut self, cx: &mut Context<Self>) {
-        self.state = DeviceState::Initial;
+        self.state = DeviceState::Idle;
         self.requests.update(cx, |this, cx| {
             this.clear();
             cx.notify();

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use gpui::SharedString;
 use nostr_sdk::prelude::*;
 
 /// Gossip
@@ -9,6 +10,18 @@ pub struct Gossip {
 }
 
 impl Gossip {
+    pub fn read_only_relays(&self, public_key: &PublicKey) -> Vec<SharedString> {
+        self.relays
+            .get(public_key)
+            .map(|relays| {
+                relays
+                    .iter()
+                    .map(|(url, _)| url.to_string().into())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Get read relays for a given public key
     pub fn read_relays(&self, public_key: &PublicKey) -> Vec<RelayUrl> {
         self.relays

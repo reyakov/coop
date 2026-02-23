@@ -4,7 +4,7 @@ use nostr_sdk::prelude::*;
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum DeviceState {
     #[default]
-    Initial,
+    Idle,
     Requesting,
     Set,
 }

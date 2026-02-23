@@ -4,7 +4,7 @@ use gpui::MouseButton;
 #[cfg(not(target_os = "windows"))]
 use gpui::Pixels;
 use gpui::{
-    div, px, AnyElement, Context, Decorations, Hsla, InteractiveElement as _, IntoElement,
+    px, AnyElement, Context, Decorations, Hsla, InteractiveElement as _, IntoElement,
     ParentElement, Render, StatefulInteractiveElement as _, Styled, Window, WindowControlArea,
 };
 use smallvec::{smallvec, SmallVec};
@@ -127,62 +127,48 @@ impl Render for TitleBar {
                             }
                         })
                     })
+                    .when(!cx.theme().platform.is_mac(), |this| this.pr_2())
                     .children(children),
             )
-            .child(
-                h_flex()
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .pr_2()
-                    .h(height)
-                    .child(
-                        div().when(!window.is_fullscreen(), |this| match cx.theme().platform {
-                            PlatformKind::Linux => {
-                                #[cfg(target_os = "linux")]
-                                if matches!(decorations, Decorations::Client { .. }) {
-                                    this.child(LinuxWindowControls::new(None))
-                                        .when(supported_controls.window_menu, |this| {
-                                            this.on_mouse_down(
-                                                MouseButton::Right,
-                                                move |ev, window, _| {
-                                                    window.show_window_menu(ev.position)
-                                                },
-                                            )
-                                        })
-                                        .on_mouse_move(cx.listener(move |this, _ev, window, _| {
-                                            if this.should_move {
-                                                this.should_move = false;
-                                                window.start_window_move();
-                                            }
-                                        }))
-                                        .on_mouse_down_out(cx.listener(
-                                            move |this, _ev, _window, _cx| {
-                                                this.should_move = false;
-                                            },
-                                        ))
-                                        .on_mouse_up(
-                                            MouseButton::Left,
-                                            cx.listener(move |this, _ev, _window, _cx| {
-                                                this.should_move = false;
-                                            }),
-                                        )
-                                        .on_mouse_down(
-                                            MouseButton::Left,
-                                            cx.listener(move |this, _ev, _window, _cx| {
-                                                this.should_move = true;
-                                            }),
-                                        )
-                                } else {
-                                    this
+            .when(!window.is_fullscreen(), |this| match cx.theme().platform {
+                PlatformKind::Linux => {
+                    #[cfg(target_os = "linux")]
+                    if matches!(decorations, Decorations::Client { .. }) {
+                        this.child(LinuxWindowControls::new(None))
+                            .when(supported_controls.window_menu, |this| {
+                                this.on_mouse_down(MouseButton::Right, move |ev, window, _| {
+                                    window.show_window_menu(ev.position)
+                                })
+                            })
+                            .on_mouse_move(cx.listener(move |this, _ev, window, _| {
+                                if this.should_move {
+                                    this.should_move = false;
+                                    window.start_window_move();
                                 }
-                                #[cfg(not(target_os = "linux"))]
-                                this
-                            }
-                            PlatformKind::Windows => this.child(WindowsWindowControls::new(height)),
-                            PlatformKind::Mac => this,
-                        }),
-                    ),
-            )
+                            }))
+                            .on_mouse_down_out(cx.listener(move |this, _ev, _window, _cx| {
+                                this.should_move = false;
+                            }))
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(move |this, _ev, _window, _cx| {
+                                    this.should_move = false;
+                                }),
+                            )
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, _ev, _window, _cx| {
+                                    this.should_move = true;
+                                }),
+                            )
+                    } else {
+                        this
+                    }
+                    #[cfg(not(target_os = "linux"))]
+                    this
+                }
+                PlatformKind::Windows => this.child(WindowsWindowControls::new(height)),
+                PlatformKind::Mac => this,
+            })
     }
 }

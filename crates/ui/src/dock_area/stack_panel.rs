@@ -371,7 +371,6 @@ impl Focusable for StackPanel {
 }
 
 impl EventEmitter<PanelEvent> for StackPanel {}
-
 impl EventEmitter<DismissEvent> for StackPanel {}
 
 impl Render for StackPanel {

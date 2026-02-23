@@ -70,6 +70,7 @@ pub enum PopupMenuItem {
 }
 
 impl FluentBuilder for PopupMenuItem {}
+
 impl PopupMenuItem {
     /// Create a new menu item with the given label.
     #[inline]
@@ -1025,7 +1026,7 @@ impl PopupMenu {
         } else if checked {
             Icon::new(IconName::Check)
         } else {
-            Icon::empty()
+            return None;
         };
 
         Some(icon.small())
@@ -1116,7 +1117,14 @@ impl PopupMenu {
                     .items_center()
                     .gap_x_1()
                     .children(Self::render_icon(has_left_icon, false, None, window, cx))
-                    .child(div().flex_1().child(label.clone())),
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(cx.theme().text_muted)
+                            .child(label.clone()),
+                    ),
             ),
             PopupMenuItem::ElementItem {
                 render,
@@ -1281,6 +1289,7 @@ impl Render for PopupMenu {
         let view = cx.entity().clone();
         let items_count = self.menu_items.len();
 
+        let max_width = self.max_width();
         let max_height = self.max_height.unwrap_or_else(|| {
             let window_half_height = window.window_bounds().get_bounds().size.height * 0.5;
             window_half_height.min(px(450.))
@@ -1291,7 +1300,6 @@ impl Render for PopupMenu {
             .iter()
             .any(|item| item.has_left_icon(self.check_side));
 
-        let max_width = self.max_width();
         let options = RenderOptions {
             has_left_icon,
             check_side: self.check_side,

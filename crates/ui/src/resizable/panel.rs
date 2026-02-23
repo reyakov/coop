@@ -240,11 +240,13 @@ impl RenderOnce for ResizablePanel {
         let state = self
             .state
             .expect("BUG: The `state` in ResizablePanel should be present.");
+
         let panel_state = state
             .read(cx)
             .panels
             .get(self.panel_ix)
             .expect("BUG: The `index` of ResizablePanel should be one of in `state`.");
+
         let size_range = self.size_range.clone();
 
         div()

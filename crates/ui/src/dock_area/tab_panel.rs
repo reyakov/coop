@@ -479,11 +479,11 @@ impl TabPanel {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<Button> {
+        let dock_area = self.dock_area.upgrade()?.read(cx);
+
         if self.zoomed {
             return None;
         }
-
-        let dock_area = self.dock_area.upgrade()?.read(cx);
 
         if !dock_area.toggle_button_visible {
             return None;
@@ -590,10 +590,11 @@ impl TabPanel {
                 .justify_between()
                 .items_center()
                 .line_height(rems(1.0))
-                .h(px(30.))
+                .h(TABBAR_HEIGHT)
                 .py_2()
                 .pl_3()
                 .pr_2()
+                .bg(cx.theme().panel_background)
                 .when(left_dock_button.is_some(), |this| this.pl_2())
                 .when(right_dock_button.is_some(), |this| this.pr_2())
                 .when(has_extend_dock_button, |this| {
@@ -610,6 +611,7 @@ impl TabPanel {
                     div()
                         .id("tab")
                         .flex_1()
+                        .px_2()
                         .min_w_16()
                         .overflow_hidden()
                         .whitespace_nowrap()
@@ -638,7 +640,8 @@ impl TabPanel {
                         .flex_shrink_0()
                         .ml_1()
                         .gap_1()
-                        .child(self.render_toolbar(state, window, cx)),
+                        .child(self.render_toolbar(state, window, cx))
+                        .children(right_dock_button),
                 )
                 .into_any_element();
         }

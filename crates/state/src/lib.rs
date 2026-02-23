@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context as AnyhowContext, Error};
 use common::config_dir;
-use gpui::{App, AppContext, Context, Entity, Global, Task, Window};
+use gpui::{App, AppContext, Context, Entity, Global, SharedString, Task, Window};
 use nostr_connect::prelude::*;
 use nostr_lmdb::prelude::*;
 use nostr_sdk::prelude::*;
@@ -247,6 +247,11 @@ impl NostrRegistry {
         self.relay_list_state.clone()
     }
 
+    /// Get all relays for a given public key without ensuring connections
+    pub fn read_only_relays(&self, public_key: &PublicKey, cx: &App) -> Vec<SharedString> {
+        self.gossip.read(cx).read_only_relays(public_key)
+    }
+
     /// Get a list of write relays for a given public key
     pub fn write_relays(&self, public_key: &PublicKey, cx: &App) -> Task<Vec<RelayUrl>> {
         let client = self.client();
@@ -483,7 +488,7 @@ impl NostrRegistry {
         cx.notify();
     }
 
-    fn ensure_relay_list(&mut self, cx: &mut Context<Self>) {
+    pub fn ensure_relay_list(&mut self, cx: &mut Context<Self>) {
         let task = self.verify_relay_list(cx);
 
         self.tasks.push(cx.spawn(async move |this, cx| {

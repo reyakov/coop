@@ -52,8 +52,8 @@ pub enum AuthMode {
 /// Signer kind
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SignerKind {
-    Auto,
     #[default]
+    Auto,
     User,
     Encryption,
 }

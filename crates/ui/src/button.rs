@@ -131,8 +131,8 @@ pub struct Button {
 
     rounded: bool,
     compact: bool,
-    underline: bool,
     caret: bool,
+    indicator: bool,
 
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_hover: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
@@ -162,7 +162,7 @@ impl Button {
             variant: ButtonVariant::default(),
             disabled: false,
             selected: false,
-            underline: false,
+            indicator: false,
             compact: false,
             caret: false,
             rounded: false,
@@ -219,9 +219,9 @@ impl Button {
         self
     }
 
-    /// Set true to show the underline indicator.
-    pub fn underline(mut self) -> Self {
-        self.underline = true;
+    /// Set true to show the indicator.
+    pub fn indicator(mut self) -> Self {
+        self.indicator = true;
         self
     }
 
@@ -455,6 +455,17 @@ impl RenderOnce for Button {
                     })
             })
             .text_color(normal_style.fg)
+            .when(self.indicator && !self.disabled, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .bottom_px()
+                        .right_px()
+                        .size_1()
+                        .rounded_full()
+                        .bg(gpui::green()),
+                )
+            })
             .when(!self.disabled && !self.selected, |this| {
                 this.bg(normal_style.bg)
                     .hover(|this| {
@@ -469,17 +480,6 @@ impl RenderOnce for Button {
             .when(self.selected, |this| {
                 let selected_style = style.selected(cx);
                 this.bg(selected_style.bg).text_color(selected_style.fg)
-            })
-            .when(self.selected && self.underline, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .bottom_0()
-                        .left_0()
-                        .h_px()
-                        .w_full()
-                        .bg(cx.theme().element_background),
-                )
             })
             .when(self.disabled, |this| {
                 let disabled_style = style.disabled(cx);

@@ -659,7 +659,7 @@ impl Render for Sidebar {
                                                 .text_xs()
                                                 .font_semibold()
                                                 .text_color(cx.theme().text_muted)
-                                                .child(Icon::new(IconName::ChevronDown))
+                                                .child(Icon::new(IconName::ChevronDown).small())
                                                 .child(SharedString::from("Suggestions")),
                                         )
                                         .child(

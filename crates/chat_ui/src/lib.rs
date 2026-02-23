@@ -657,7 +657,7 @@ impl ChatPanel {
             .id(ix)
             .relative()
             .w_full()
-            .py_1()
+            .py_2()
             .px_3()
             .bg(cx.theme().warning_background)
             .child(
