@@ -13,15 +13,13 @@ use gpui::{
     PathPromptOptions, Render, SharedString, StatefulInteractiveElement, Styled, StyledImage,
     Subscription, Task, WeakEntity, Window,
 };
-use gpui_tokio::Tokio;
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
 use settings::{AppSettings, SignerKind};
 use smallvec::{smallvec, SmallVec};
-use smol::fs;
 use smol::lock::RwLock;
-use state::{nostr_upload, NostrRegistry};
+use state::{upload, NostrRegistry};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
@@ -522,12 +520,10 @@ impl ChatPanel {
     }
 
     fn upload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
+        // Get the user's configured blossom server
+        let server = AppSettings::get_file_server(cx);
 
-        // Get the user's configured NIP96 server
-        let nip96_server = AppSettings::get_file_server(cx);
-
+        // Ask user for file upload
         let path = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -536,34 +532,27 @@ impl ChatPanel {
         });
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            this.update(cx, |this, cx| {
+                this.set_uploading(true, cx);
+            })?;
+
             let mut paths = path.await??.context("Not found")?;
             let path = paths.pop().context("No path")?;
 
-            let upload = Tokio::spawn(cx, async move {
-                let file = fs::read(path).await.ok()?;
-                let url = nostr_upload(&client, &nip96_server, file).await.ok()?;
-
-                Some(url)
-            });
-
-            if let Ok(task) = upload.await {
-                this.update(cx, |this, cx| {
-                    this.set_uploading(true, cx);
-                })
-                .ok();
-
-                this.update_in(cx, |this, _window, cx| {
-                    match task {
-                        Some(url) => {
-                            this.add_attachment(url, cx);
-                            this.set_uploading(false, cx);
-                        }
-                        None => {
-                            this.set_uploading(false, cx);
-                        }
-                    };
-                })
-                .ok();
+            // Upload via blossom client
+            match upload(server, path, cx).await {
+                Ok(url) => {
+                    this.update_in(cx, |this, _window, cx| {
+                        this.add_attachment(url, cx);
+                        this.set_uploading(false, cx);
+                    })?;
+                }
+                Err(e) => {
+                    this.update_in(cx, |this, window, cx| {
+                        this.set_uploading(false, cx);
+                        window.push_notification(Notification::error(e.to_string()), cx);
+                    })?;
+                }
             }
 
             Ok(())

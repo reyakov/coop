@@ -10,18 +10,18 @@ use nostr_connect::prelude::*;
 use nostr_lmdb::prelude::*;
 use nostr_sdk::prelude::*;
 
+mod blossom;
 mod constants;
 mod device;
 mod gossip;
 mod nip05;
-mod nip96;
 mod signer;
 
+pub use blossom::*;
 pub use constants::*;
 pub use device::*;
 pub use gossip::*;
 pub use nip05::*;
-pub use nip96::*;
 pub use signer::*;
 
 pub fn init(window: &mut Window, cx: &mut App) {

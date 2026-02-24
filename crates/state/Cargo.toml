@@ -11,6 +11,7 @@ nostr.workspace = true
 nostr-sdk.workspace = true
 nostr-lmdb.workspace = true
 nostr-connect.workspace = true
+nostr-blossom.workspace = true
 
 gpui.workspace = true
 gpui_tokio.workspace = true
@@ -25,4 +26,4 @@ serde_json.workspace = true
 rustls = "0.23"
 petname = "2.0.2"
 whoami = "1.6.1"
-reqwest = { version = "0.12", features = ["multipart", "stream", "json"] }
+mime_guess = "2.0.4"

@@ -119,7 +119,7 @@ pub struct Settings {
     /// Configuration for each chat room
     pub room_configs: HashMap<u64, RoomConfig>,
 
-    /// File server for NIP-96 media attachments
+    /// Server for blossom media attachments
     pub file_server: Url,
 }
 
@@ -131,7 +131,7 @@ impl Default for Settings {
             auth_mode: AuthMode::default(),
             trusted_relays: HashSet::default(),
             room_configs: HashMap::default(),
-            file_server: Url::parse("https://nostrmedia.com").unwrap(),
+            file_server: Url::parse("https://blossom.band/").unwrap(),
         }
     }
 }

@@ -1,18 +1,16 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{anyhow, Error};
+use anyhow::{Context as AnyhowContext, Error};
 use gpui::{
     div, rems, AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter,
     FocusHandle, Focusable, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
     Styled, Task, Window,
 };
-use gpui_tokio::Tokio;
 use nostr_sdk::prelude::*;
 use person::{shorten_pubkey, Person, PersonRegistry};
 use settings::AppSettings;
-use smol::fs;
-use state::{nostr_upload, NostrRegistry};
+use state::{upload, NostrRegistry};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
@@ -150,66 +148,51 @@ impl ProfilePanel {
         }
     }
 
-    fn uploading(&mut self, status: bool, cx: &mut Context<Self>) {
+    fn set_uploading(&mut self, status: bool, cx: &mut Context<Self>) {
         self.uploading = status;
         cx.notify();
     }
 
     fn upload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.uploading(true, cx);
+        // Get the user's configured blossom server
+        let server = AppSettings::get_file_server(cx);
 
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-
-        // Get the user's configured NIP96 server
-        let nip96_server = AppSettings::get_file_server(cx);
-
-        // Open native file dialog
-        let paths = cx.prompt_for_paths(PathPromptOptions {
+        // Ask user for file upload
+        let path = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
             multiple: false,
             prompt: None,
         });
 
-        let task = Tokio::spawn(cx, async move {
-            match paths.await {
-                Ok(Ok(Some(mut paths))) => {
-                    if let Some(path) = paths.pop() {
-                        let file = fs::read(path).await?;
-                        let url = nostr_upload(&client, &nip96_server, file).await?;
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            this.update(cx, |this, cx| {
+                this.set_uploading(true, cx);
+            })?;
 
-                        Ok(url)
-                    } else {
-                        Err(anyhow!("Path not found"))
-                    }
-                }
-                _ => Err(anyhow!("Error")),
-            }
-        });
+            let mut paths = path.await??.context("Not found")?;
+            let path = paths.pop().context("No path")?;
 
-        cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
-
-            this.update_in(cx, |this, window, cx| {
-                match result {
-                    Ok(Ok(url)) => {
+            // Upload via blossom client
+            match upload(server, path, cx).await {
+                Ok(url) => {
+                    this.update_in(cx, |this, window, cx| {
                         this.avatar_input.update(cx, |this, cx| {
                             this.set_value(url.to_string(), window, cx);
                         });
-                    }
-                    Ok(Err(e)) => {
-                        window.push_notification(e.to_string(), cx);
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to upload avatar: {e}");
-                    }
-                };
-                this.uploading(false, cx);
-            })
-            .expect("Entity has been released");
-        })
-        .detach();
+                        this.set_uploading(false, cx);
+                    })?;
+                }
+                Err(e) => {
+                    this.update_in(cx, |this, window, cx| {
+                        this.set_uploading(false, cx);
+                        window.push_notification(Notification::error(e.to_string()), cx);
+                    })?;
+                }
+            }
+
+            Ok(())
+        }));
     }
 
     fn set_updating(&mut self, updating: bool, cx: &mut Context<Self>) {
