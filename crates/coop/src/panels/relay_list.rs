@@ -4,21 +4,34 @@ use std::time::Duration;
 use anyhow::{anyhow, Context as AnyhowContext, Error};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, relative, uniform_list, AnyElement, App, AppContext, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Task, TextAlign, UniformList, Window,
+    div, px, rems, Action, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled,
+    Subscription, Task, TextAlign, Window,
 };
 use nostr_sdk::prelude::*;
+use serde::Deserialize;
 use smallvec::{smallvec, SmallVec};
-use state::{NostrRegistry, BOOTSTRAP_RELAYS};
+use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::dock_area::panel::{Panel, PanelEvent};
 use ui::input::{InputEvent, InputState, TextInput};
-use ui::{divider, h_flex, v_flex, IconName, Sizable, StyledExt};
+use ui::menu::DropdownMenu;
+use ui::{divider, h_flex, v_flex, Disableable, IconName, Sizable, StyledExt, WindowExtension};
+
+const MSG: &str = "Relay List (or Gossip Relays) are a set of relays \
+                   where you will publish all your events. Others also publish events \
+                   related to you here.";
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<RelayListPanel> {
     cx.new(|cx| RelayListPanel::new(window, cx))
+}
+
+#[derive(Action, Clone, PartialEq, Eq, Deserialize)]
+#[action(namespace = relay, no_json)]
+enum SetMetadata {
+    Read,
+    Write,
 }
 
 #[derive(Debug)]
@@ -28,6 +41,9 @@ pub struct RelayListPanel {
 
     /// Relay URL input
     input: Entity<InputState>,
+
+    /// Whether the panel is updating
+    updating: bool,
 
     /// Relay metadata input
     metadata: Entity<Option<RelayMetadata>>,
@@ -42,7 +58,7 @@ pub struct RelayListPanel {
     _subscriptions: SmallVec<[Subscription; 1]>,
 
     // Background tasks
-    _tasks: SmallVec<[Task<()>; 1]>,
+    tasks: Vec<Task<Result<(), Error>>>,
 }
 
 impl RelayListPanel {
@@ -50,28 +66,7 @@ impl RelayListPanel {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("wss://example.com"));
         let metadata = cx.new(|_| None);
 
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-
         let mut subscriptions = smallvec![];
-        let mut tasks = smallvec![];
-
-        tasks.push(
-            // Load user's relays in the local database
-            cx.spawn_in(window, async move |this, cx| {
-                let result = cx
-                    .background_spawn(async move { Self::load(&client).await })
-                    .await;
-
-                if let Ok(relays) = result {
-                    this.update(cx, |this, cx| {
-                        this.relays.extend(relays);
-                        cx.notify();
-                    })
-                    .ok();
-                }
-            }),
-        );
 
         subscriptions.push(
             // Subscribe to user's input events
@@ -82,32 +77,57 @@ impl RelayListPanel {
             }),
         );
 
+        // Run at the end of current cycle
+        cx.defer_in(window, |this, window, cx| {
+            this.load(window, cx);
+        });
+
         Self {
             name: "Update Relay List".into(),
             focus_handle: cx.focus_handle(),
             input,
+            updating: false,
             metadata,
             relays: HashSet::new(),
             error: None,
             _subscriptions: subscriptions,
-            _tasks: tasks,
+            tasks: vec![],
         }
     }
 
-    async fn load(client: &Client) -> Result<Vec<(RelayUrl, Option<RelayMetadata>)>, Error> {
-        let signer = client.signer().context("Signer not found")?;
-        let public_key = signer.get_public_key().await?;
+    #[allow(clippy::type_complexity)]
+    fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
 
-        let filter = Filter::new()
-            .kind(Kind::RelayList)
-            .author(public_key)
-            .limit(1);
+        let task: Task<Result<Vec<(RelayUrl, Option<RelayMetadata>)>, Error>> = cx
+            .background_spawn(async move {
+                let signer = client.signer().context("Signer not found")?;
+                let public_key = signer.get_public_key().await?;
 
-        if let Some(event) = client.database().query(filter).await?.first_owned() {
-            Ok(nip65::extract_owned_relay_list(event).collect())
-        } else {
-            Err(anyhow!("Not found."))
-        }
+                let filter = Filter::new()
+                    .kind(Kind::RelayList)
+                    .author(public_key)
+                    .limit(1);
+
+                if let Some(event) = client.database().query(filter).await?.first_owned() {
+                    Ok(nip65::extract_owned_relay_list(event).collect())
+                } else {
+                    Err(anyhow!("Not found."))
+                }
+            });
+
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            let relays = task.await?;
+
+            // Update state
+            this.update(cx, |this, cx| {
+                this.relays.extend(relays);
+                cx.notify();
+            })?;
+
+            Ok(())
+        }));
     }
 
     fn add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -120,7 +140,7 @@ impl RelayListPanel {
         }
 
         if let Ok(url) = RelayUrl::parse(&value) {
-            if !self.relays.insert((url, metadata.to_owned())) {
+            if self.relays.insert((url, metadata.to_owned())) {
                 self.input.update(cx, |this, cx| {
                     this.set_value("", window, cx);
                 });
@@ -155,7 +175,29 @@ impl RelayListPanel {
         .detach();
     }
 
-    pub fn set_relays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn set_updating(&mut self, updating: bool, cx: &mut Context<Self>) {
+        self.updating = updating;
+        cx.notify();
+    }
+
+    fn set_metadata(&mut self, ev: &SetMetadata, _window: &mut Window, cx: &mut Context<Self>) {
+        match ev {
+            SetMetadata::Read => {
+                self.metadata.update(cx, |this, cx| {
+                    *this = Some(RelayMetadata::Read);
+                    cx.notify();
+                });
+            }
+            SetMetadata::Write => {
+                self.metadata.update(cx, |this, cx| {
+                    *this = Some(RelayMetadata::Write);
+                    cx.notify();
+                });
+            }
+        }
+    }
+
+    fn set_relays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.relays.is_empty() {
             self.set_error("You need to add at least 1 relay", window, cx);
             return;
@@ -163,109 +205,103 @@ impl RelayListPanel {
 
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
+
+        // Get all relays
         let relays = self.relays.clone();
+
+        // Set updating state
+        self.set_updating(true, cx);
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             let builder = EventBuilder::relay_list(relays);
             let event = client.sign_event_builder(builder).await?;
 
             // Set relay list for current user
-            client.send_event(&event).to(BOOTSTRAP_RELAYS).await?;
+            client.send_event(&event).await?;
 
             Ok(())
         });
 
-        cx.spawn_in(window, async move |this, cx| {
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             match task.await {
                 Ok(_) => {
-                    // TODO
+                    this.update_in(cx, |this, window, cx| {
+                        this.set_updating(false, cx);
+                        this.load(window, cx);
+
+                        window.push_notification("Update successful", cx);
+                    })?;
                 }
                 Err(e) => {
                     this.update_in(cx, |this, window, cx| {
                         this.set_error(e.to_string(), window, cx);
-                    })
-                    .ok();
+                    })?;
                 }
             };
-        })
-        .detach();
+
+            Ok(())
+        }));
     }
 
-    fn render_list(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> UniformList {
-        let relays = self.relays.clone();
-        let total = relays.len();
+    fn render_list_items(&mut self, cx: &mut Context<Self>) -> Vec<impl IntoElement> {
+        let mut items = Vec::new();
 
-        uniform_list(
-            "relays",
-            total,
-            cx.processor(move |_v, range, _window, cx| {
-                let mut items = Vec::new();
-
-                for ix in range {
-                    let Some((url, metadata)) = relays.iter().nth(ix) else {
-                        continue;
-                    };
-
-                    items.push(
-                        div()
-                            .id(SharedString::from(url.to_string()))
-                            .group("")
-                            .w_full()
-                            .h_9()
-                            .py_0p5()
+        for (url, metadata) in self.relays.iter() {
+            items.push(
+                h_flex()
+                    .id(SharedString::from(url.to_string()))
+                    .group("")
+                    .flex_1()
+                    .w_full()
+                    .h_8()
+                    .px_2()
+                    .justify_between()
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().secondary_background)
+                    .text_color(cx.theme().secondary_foreground)
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .text_sm()
+                            .child(SharedString::from(url.to_string()))
                             .child(
-                                h_flex()
-                                    .px_2()
-                                    .flex()
-                                    .justify_between()
-                                    .rounded(cx.theme().radius)
-                                    .bg(cx.theme().elevated_surface_background)
-                                    .child(
-                                        div().text_sm().child(SharedString::from(url.to_string())),
-                                    )
-                                    .child(
-                                        h_flex()
-                                            .gap_1()
-                                            .text_xs()
-                                            .map(|this| {
-                                                if let Some(metadata) = metadata {
-                                                    this.child(SharedString::from(
-                                                        metadata.to_string(),
-                                                    ))
-                                                } else {
-                                                    this.child(SharedString::from("Read+Write"))
-                                                }
-                                            })
-                                            .child(
-                                                Button::new("remove_{ix}")
-                                                    .icon(IconName::Close)
-                                                    .xsmall()
-                                                    .ghost()
-                                                    .invisible()
-                                                    .group_hover("", |this| this.visible())
-                                                    .on_click({
-                                                        let url = url.to_owned();
-                                                        cx.listener(
-                                                            move |this, _ev, _window, cx| {
-                                                                this.remove(&url, cx);
-                                                            },
-                                                        )
-                                                    }),
-                                            ),
-                                    ),
+                                div()
+                                    .p_0p5()
+                                    .rounded_xs()
+                                    .font_semibold()
+                                    .text_size(px(8.))
+                                    .text_color(cx.theme().secondary_foreground)
+                                    .map(|this| {
+                                        if let Some(metadata) = metadata {
+                                            this.child(SharedString::from(metadata.to_string()))
+                                        } else {
+                                            this.child("Read and Write")
+                                        }
+                                    }),
                             ),
                     )
-                }
+                    .child(
+                        Button::new("remove_{ix}")
+                            .icon(IconName::Close)
+                            .xsmall()
+                            .ghost()
+                            .invisible()
+                            .group_hover("", |this| this.visible())
+                            .on_click({
+                                let url = url.to_owned();
+                                cx.listener(move |this, _ev, _window, cx| {
+                                    this.remove(&url, cx);
+                                })
+                            }),
+                    ),
+            )
+        }
 
-                items
-            }),
-        )
-        .h_full()
+        items
     }
 
     fn render_empty(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
-            .mt_2()
             .h_20()
             .justify_center()
             .border_2()
@@ -299,36 +335,67 @@ impl Focusable for RelayListPanel {
 impl Render for RelayListPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .p_2()
-            .gap_10()
+            .on_action(cx.listener(Self::set_metadata))
+            .p_3()
+            .gap_2()
+            .w_full()
             .child(
                 div()
-                    .text_center()
-                    .font_semibold()
-                    .line_height(relative(1.25))
-                    .child(SharedString::from("Update Relay List")),
+                    .text_xs()
+                    .text_color(cx.theme().text_muted)
+                    .child(SharedString::from(MSG)),
             )
+            .child(divider(cx))
             .child(
                 v_flex()
-                    .w_112()
                     .gap_2()
+                    .flex_1()
+                    .w_full()
                     .text_sm()
                     .child(
+                        div()
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(cx.theme().text_muted)
+                            .child(SharedString::from("Relays:")),
+                    )
+                    .child(
                         v_flex()
-                            .gap_1p5()
+                            .gap_1()
                             .child(
                                 h_flex()
                                     .gap_1()
                                     .w_full()
-                                    .child(TextInput::new(&self.input).small())
+                                    .child(
+                                        TextInput::new(&self.input)
+                                            .small()
+                                            .bordered(false)
+                                            .cleanable(),
+                                    )
+                                    .child(
+                                        Button::new("metadata")
+                                            .map(|this| {
+                                                if let Some(metadata) = self.metadata.read(cx) {
+                                                    this.label(metadata.to_string())
+                                                } else {
+                                                    this.label("R & W")
+                                                }
+                                            })
+                                            .tooltip("Relay metadata")
+                                            .ghost()
+                                            .h(rems(2.))
+                                            .text_xs()
+                                            .dropdown_menu(|this, _window, _cx| {
+                                                this.menu("Read", Box::new(SetMetadata::Read))
+                                                    .menu("Write", Box::new(SetMetadata::Write))
+                                            }),
+                                    )
                                     .child(
                                         Button::new("add")
                                             .icon(IconName::Plus)
-                                            .label("Add")
+                                            .tooltip("Add relay")
                                             .ghost()
+                                            .size(rems(2.))
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.add(window, cx);
                                             })),
@@ -345,17 +412,25 @@ impl Render for RelayListPanel {
                             }),
                     )
                     .map(|this| {
-                        if !self.relays.is_empty() {
-                            this.child(self.render_list(window, cx))
-                        } else {
+                        if self.relays.is_empty() {
                             this.child(self.render_empty(window, cx))
+                        } else {
+                            this.child(
+                                v_flex()
+                                    .gap_1()
+                                    .flex_1()
+                                    .w_full()
+                                    .children(self.render_list_items(cx)),
+                            )
                         }
                     })
-                    .child(divider(cx))
                     .child(
                         Button::new("submit")
                             .label("Update")
                             .primary()
+                            .small()
+                            .loading(self.updating)
+                            .disabled(self.updating)
                             .on_click(cx.listener(move |this, _ev, window, cx| {
                                 this.set_relays(window, cx);
                             })),
