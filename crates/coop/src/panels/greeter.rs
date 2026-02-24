@@ -40,7 +40,7 @@ impl GreeterPanel {
                 cx.update(|window, cx| {
                     Workspace::add_panel(
                         profile::init(public_key, window, cx),
-                        DockPlacement::Center,
+                        DockPlacement::Right,
                         window,
                         cx,
                     );

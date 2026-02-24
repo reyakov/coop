@@ -513,7 +513,7 @@ impl ButtonVariant {
     fn bg_color(&self, cx: &App) -> Hsla {
         match self {
             ButtonVariant::Primary => cx.theme().element_background,
-            ButtonVariant::Secondary => cx.theme().elevated_surface_background,
+            ButtonVariant::Secondary => cx.theme().secondary_background,
             ButtonVariant::Danger => cx.theme().danger_background,
             ButtonVariant::Warning => cx.theme().warning_background,
             ButtonVariant::Ghost { alt } => {
@@ -531,7 +531,7 @@ impl ButtonVariant {
     fn text_color(&self, cx: &App) -> Hsla {
         match self {
             ButtonVariant::Primary => cx.theme().element_foreground,
-            ButtonVariant::Secondary => cx.theme().text_muted,
+            ButtonVariant::Secondary => cx.theme().secondary_foreground,
             ButtonVariant::Danger => cx.theme().danger_foreground,
             ButtonVariant::Warning => cx.theme().warning_foreground,
             ButtonVariant::Transparent => cx.theme().text_placeholder,

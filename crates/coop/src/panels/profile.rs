@@ -20,7 +20,7 @@ use ui::button::{Button, ButtonVariants};
 use ui::dock_area::panel::{Panel, PanelEvent};
 use ui::input::{InputState, TextInput};
 use ui::notification::Notification;
-use ui::{divider, h_flex, v_flex, Disableable, IconName, Sizable, StyledExt, WindowExtension};
+use ui::{h_flex, v_flex, Disableable, IconName, Sizable, StyledExt, WindowExtension};
 
 pub fn init(public_key: PublicKey, window: &mut Window, cx: &mut App) -> Entity<ProfilePanel> {
     cx.new(|cx| ProfilePanel::new(public_key, window, cx))
@@ -51,6 +51,12 @@ pub struct ProfilePanel {
 
     /// Copied states
     copied: bool,
+
+    /// Updating state
+    updating: bool,
+
+    /// Tasks
+    tasks: Vec<Task<Result<(), Error>>>,
 }
 
 impl ProfilePanel {
@@ -58,6 +64,7 @@ impl ProfilePanel {
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Alice"));
         let website_input = cx.new(|cx| InputState::new(window, cx).placeholder("alice.me"));
         let avatar_input = cx.new(|cx| InputState::new(window, cx).placeholder("alice.me/a.jpg"));
+
         // Use multi-line input for bio
         let bio_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -68,10 +75,7 @@ impl ProfilePanel {
 
         // Get user's profile and update inputs
         cx.defer_in(window, move |this, window, cx| {
-            let persons = PersonRegistry::global(cx);
-            let profile = persons.read(cx).get(&public_key, cx);
-            // Set all input's values with current profile
-            this.set_profile(profile, window, cx);
+            this.set_profile(window, cx);
         });
 
         Self {
@@ -84,11 +88,15 @@ impl ProfilePanel {
             website_input,
             uploading: false,
             copied: false,
+            updating: false,
+            tasks: vec![],
         }
     }
 
-    fn set_profile(&mut self, person: Person, window: &mut Window, cx: &mut Context<Self>) {
-        let metadata = person.metadata();
+    fn set_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let persons = PersonRegistry::global(cx);
+        let profile = persons.read(cx).get(&self.public_key, cx);
+        let metadata = profile.metadata();
 
         self.avatar_input.update(cx, |this, cx| {
             if let Some(avatar) = metadata.picture.as_ref() {
@@ -205,6 +213,11 @@ impl ProfilePanel {
         .detach();
     }
 
+    fn set_updating(&mut self, updating: bool, cx: &mut Context<Self>) {
+        self.updating = updating;
+        cx.notify();
+    }
+
     /// Set the metadata for the current user
     fn publish(&self, metadata: &Metadata, cx: &App) -> Task<Result<(), Error>> {
         let nostr = NostrRegistry::global(cx);
@@ -253,26 +266,34 @@ impl ProfilePanel {
         // Set the metadata
         let task = self.publish(&new_metadata, cx);
 
-        cx.spawn_in(window, async move |_this, cx| {
+        // Set the updating state
+        self.set_updating(true, cx);
+
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             match task.await {
                 Ok(_) => {
-                    cx.update(|window, cx| {
+                    this.update_in(cx, |this, window, cx| {
+                        // Update the registry
                         persons.update(cx, |this, cx| {
                             this.insert(Person::new(public_key, new_metadata), cx);
                         });
+
+                        // Update current panel
+                        this.set_updating(false, cx);
+                        this.set_profile(window, cx);
+
                         window.push_notification("Profile updated successfully", cx);
-                    })
-                    .ok();
+                    })?;
                 }
                 Err(e) => {
                     cx.update(|window, cx| {
                         window.push_notification(Notification::error(e.to_string()), cx);
-                    })
-                    .ok();
+                    })?;
                 }
             };
-        })
-        .detach();
+
+            Ok(())
+        }));
     }
 }
 
@@ -296,123 +317,126 @@ impl Focusable for ProfilePanel {
 
 impl Render for ProfilePanel {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let shorten_pkey = SharedString::from(shorten_pubkey(self.public_key, 8));
+        let avatar_input = self.avatar_input.read(cx).value();
 
         // Get the avatar
-        let avatar_input = self.avatar_input.read(cx).value();
         let avatar = if avatar_input.is_empty() {
             "brand/avatar.png"
         } else {
             avatar_input.as_str()
         };
 
+        // Get the public key as short string
+        let shorten_pkey = SharedString::from(shorten_pubkey(self.public_key, 8));
+
         v_flex()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .p_2()
+            .p_3()
+            .gap_3()
+            .w_full()
             .child(
                 v_flex()
-                    .gap_2()
-                    .w_112()
+                    .h_40()
+                    .w_full()
+                    .items_center()
+                    .justify_center()
+                    .gap_4()
+                    .child(Avatar::new(avatar).size(rems(4.25)))
                     .child(
-                        v_flex()
-                            .h_40()
-                            .w_full()
-                            .items_center()
-                            .justify_center()
-                            .gap_4()
-                            .child(Avatar::new(avatar).size(rems(4.25)))
-                            .child(
-                                Button::new("upload")
-                                    .icon(IconName::PlusCircle)
-                                    .label("Add an avatar")
-                                    .xsmall()
-                                    .ghost()
-                                    .rounded()
-                                    .disabled(self.uploading)
-                                    .loading(self.uploading)
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        this.upload(window, cx);
-                                    })),
-                            ),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .text_sm()
-                            .text_color(cx.theme().text_muted)
-                            .child(SharedString::from("What should people call you?"))
-                            .child(TextInput::new(&self.name_input).small()),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .text_sm()
-                            .text_color(cx.theme().text_muted)
-                            .child(SharedString::from("A short introduction about you:"))
-                            .child(TextInput::new(&self.bio_input).small()),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .text_sm()
-                            .text_color(cx.theme().text_muted)
-                            .child(SharedString::from("Website:"))
-                            .child(TextInput::new(&self.website_input).small()),
-                    )
-                    .child(divider(cx))
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                div()
-                                    .font_semibold()
-                                    .text_xs()
-                                    .text_color(cx.theme().text_placeholder)
-                                    .child(SharedString::from("Public Key:")),
-                            )
-                            .child(
-                                h_flex()
-                                    .h_8()
-                                    .w_full()
-                                    .justify_center()
-                                    .gap_2()
-                                    .bg(cx.theme().surface_background)
-                                    .rounded(cx.theme().radius)
-                                    .text_sm()
-                                    .child(shorten_pkey)
-                                    .child(
-                                        Button::new("copy")
-                                            .icon({
-                                                if self.copied {
-                                                    IconName::CheckCircle
-                                                } else {
-                                                    IconName::Copy
-                                                }
-                                            })
-                                            .xsmall()
-                                            .ghost()
-                                            .on_click(cx.listener(move |this, _ev, window, cx| {
-                                                this.copy(
-                                                    this.public_key.to_bech32().unwrap(),
-                                                    window,
-                                                    cx,
-                                                );
-                                            })),
-                                    ),
-                            ),
-                    )
-                    .child(divider(cx))
-                    .child(
-                        Button::new("submit")
-                            .label("Update")
-                            .primary()
+                        Button::new("upload")
+                            .icon(IconName::PlusCircle)
+                            .label("Add an avatar")
+                            .xsmall()
+                            .ghost()
+                            .rounded()
                             .disabled(self.uploading)
-                            .on_click(cx.listener(move |this, _ev, window, cx| {
-                                this.update(window, cx);
+                            .loading(self.uploading)
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.upload(window, cx);
                             })),
                     ),
+            )
+            .child(
+                v_flex()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().text_muted)
+                            .child(SharedString::from("What should people call you?")),
+                    )
+                    .child(TextInput::new(&self.name_input).bordered(false).small()),
+            )
+            .child(
+                v_flex()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().text_muted)
+                            .child(SharedString::from("A short introduction about you:")),
+                    )
+                    .child(TextInput::new(&self.bio_input).bordered(false).small()),
+            )
+            .child(
+                v_flex()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().text_muted)
+                            .child(SharedString::from("Website:")),
+                    )
+                    .child(TextInput::new(&self.website_input).bordered(false).small()),
+            )
+            .child(
+                v_flex()
+                    .gap_1p5()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().text_muted)
+                            .child(SharedString::from("Public Key:")),
+                    )
+                    .child(
+                        h_flex()
+                            .h_8()
+                            .w_full()
+                            .justify_center()
+                            .gap_3()
+                            .rounded(cx.theme().radius)
+                            .bg(cx.theme().secondary_background)
+                            .text_sm()
+                            .text_color(cx.theme().secondary_foreground)
+                            .child(shorten_pkey)
+                            .child(
+                                Button::new("copy")
+                                    .icon({
+                                        if self.copied {
+                                            IconName::CheckCircle
+                                        } else {
+                                            IconName::Copy
+                                        }
+                                    })
+                                    .xsmall()
+                                    .secondary()
+                                    .on_click(cx.listener(move |this, _ev, window, cx| {
+                                        this.copy(this.public_key.to_bech32().unwrap(), window, cx);
+                                    })),
+                            ),
+                    ),
+            )
+            .child(
+                Button::new("submit")
+                    .icon(IconName::CheckCircle)
+                    .label("Update")
+                    .primary()
+                    .small()
+                    .font_semibold()
+                    .loading(self.updating)
+                    .disabled(self.updating)
+                    .on_click(cx.listener(move |this, _ev, window, cx| {
+                        this.update(window, cx);
+                    })),
             )
     }
 }

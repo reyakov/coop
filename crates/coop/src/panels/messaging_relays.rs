@@ -296,7 +296,7 @@ impl Render for MessagingRelayPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .p_3()
-            .gap_2()
+            .gap_3()
             .w_full()
             .child(
                 div()
@@ -367,9 +367,11 @@ impl Render for MessagingRelayPanel {
                     })
                     .child(
                         Button::new("submit")
+                            .icon(IconName::CheckCircle)
                             .label("Update")
                             .primary()
                             .small()
+                            .font_semibold()
                             .loading(self.updating)
                             .disabled(self.updating)
                             .on_click(cx.listener(move |this, _ev, window, cx| {

@@ -337,7 +337,7 @@ impl Render for RelayListPanel {
         v_flex()
             .on_action(cx.listener(Self::set_metadata))
             .p_3()
-            .gap_2()
+            .gap_3()
             .w_full()
             .child(
                 div()
@@ -426,9 +426,11 @@ impl Render for RelayListPanel {
                     })
                     .child(
                         Button::new("submit")
+                            .icon(IconName::CheckCircle)
                             .label("Update")
                             .primary()
                             .small()
+                            .font_semibold()
                             .loading(self.updating)
                             .disabled(self.updating)
                             .on_click(cx.listener(move |this, _ev, window, cx| {
