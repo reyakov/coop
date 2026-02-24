@@ -13,38 +13,6 @@ const MINUTES_IN_HOUR: i64 = 60;
 const HOURS_IN_DAY: i64 = 24;
 const DAYS_IN_MONTH: i64 = 30;
 
-pub trait RenderedProfile {
-    fn avatar(&self) -> SharedString;
-    fn display_name(&self) -> SharedString;
-}
-
-impl RenderedProfile for Profile {
-    fn avatar(&self) -> SharedString {
-        self.metadata()
-            .picture
-            .as_ref()
-            .filter(|picture| !picture.is_empty())
-            .map(|picture| picture.into())
-            .unwrap_or_else(|| "brand/avatar.png".into())
-    }
-
-    fn display_name(&self) -> SharedString {
-        if let Some(display_name) = self.metadata().display_name.as_ref() {
-            if !display_name.is_empty() {
-                return SharedString::from(display_name);
-            }
-        }
-
-        if let Some(name) = self.metadata().name.as_ref() {
-            if !name.is_empty() {
-                return SharedString::from(name);
-            }
-        }
-
-        SharedString::from(shorten_pubkey(self.public_key(), 4))
-    }
-}
-
 pub trait RenderedTimestamp {
     fn to_human_time(&self) -> SharedString;
     fn to_ago(&self) -> SharedString;
@@ -125,14 +93,4 @@ impl<T: AsRef<str>> TextUtils for T {
             svg.into_bytes(),
         )))
     }
-}
-
-pub fn shorten_pubkey(public_key: PublicKey, len: usize) -> String {
-    let Ok(pubkey) = public_key.to_bech32();
-
-    format!(
-        "{}:{}",
-        &pubkey[0..(len + 1)],
-        &pubkey[pubkey.len() - len..]
-    )
 }

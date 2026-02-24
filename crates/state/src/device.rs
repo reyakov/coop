@@ -9,6 +9,20 @@ pub enum DeviceState {
     Set,
 }
 
+impl DeviceState {
+    pub fn idle(&self) -> bool {
+        matches!(self, DeviceState::Idle)
+    }
+
+    pub fn requesting(&self) -> bool {
+        matches!(self, DeviceState::Requesting)
+    }
+
+    pub fn set(&self) -> bool {
+        matches!(self, DeviceState::Set)
+    }
+}
+
 /// Announcement
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Announcement {

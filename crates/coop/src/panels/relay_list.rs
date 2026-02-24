@@ -234,6 +234,7 @@ impl RelayListPanel {
                 }
                 Err(e) => {
                     this.update_in(cx, |this, window, cx| {
+                        this.set_updating(false, cx);
                         this.set_error(e.to_string(), window, cx);
                     })?;
                 }

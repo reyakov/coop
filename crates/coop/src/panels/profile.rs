@@ -2,7 +2,6 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use anyhow::{anyhow, Error};
-use common::shorten_pubkey;
 use gpui::{
     div, rems, AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter,
     FocusHandle, Focusable, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
@@ -10,7 +9,7 @@ use gpui::{
 };
 use gpui_tokio::Tokio;
 use nostr_sdk::prelude::*;
-use person::{Person, PersonRegistry};
+use person::{shorten_pubkey, Person, PersonRegistry};
 use settings::AppSettings;
 use smol::fs;
 use state::{nostr_upload, NostrRegistry};

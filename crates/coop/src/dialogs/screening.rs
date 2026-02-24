@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Error};
-use common::{shorten_pubkey, RenderedTimestamp};
+use common::RenderedTimestamp;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, px, relative, rems, uniform_list, App, AppContext, Context, Div, Entity,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window,
 };
 use nostr_sdk::prelude::*;
-use person::{Person, PersonRegistry};
+use person::{shorten_pubkey, Person, PersonRegistry};
 use smallvec::{smallvec, SmallVec};
 use state::{NostrAddress, NostrRegistry, BOOTSTRAP_RELAYS, TIMEOUT};
 use theme::ActiveTheme;

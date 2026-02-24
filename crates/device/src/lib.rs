@@ -25,11 +25,11 @@ impl Global for GlobalDeviceRegistry {}
 /// NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
 #[derive(Debug)]
 pub struct DeviceRegistry {
+    /// Request for encryption key from other devices
+    pub requests: Vec<Event>,
+
     /// Device state
     state: DeviceState,
-
-    /// Device requests
-    requests: Entity<HashSet<Event>>,
 
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
@@ -52,8 +52,6 @@ impl DeviceRegistry {
     /// Create a new device registry instance
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let nostr = NostrRegistry::global(cx);
-        let requests = cx.new(|_| HashSet::default());
-
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
@@ -77,7 +75,7 @@ impl DeviceRegistry {
         });
 
         Self {
-            requests,
+            requests: vec![],
             state: DeviceState::default(),
             tasks: vec![],
             _subscriptions: subscriptions,
@@ -89,7 +87,7 @@ impl DeviceRegistry {
         let client = nostr.read(cx).client();
         let (tx, rx) = flume::bounded::<Event>(100);
 
-        cx.background_spawn(async move {
+        self.tasks.push(cx.background_spawn(async move {
             let mut notifications = client.notifications();
             let mut processed_events = HashSet::new();
 
@@ -107,20 +105,21 @@ impl DeviceRegistry {
                     match event.kind {
                         Kind::Custom(4454) => {
                             if verify_author(&client, event.as_ref()).await {
-                                tx.send_async(event.into_owned()).await.ok();
+                                tx.send_async(event.into_owned()).await?;
                             }
                         }
                         Kind::Custom(4455) => {
                             if verify_author(&client, event.as_ref()).await {
-                                tx.send_async(event.into_owned()).await.ok();
+                                tx.send_async(event.into_owned()).await?;
                             }
                         }
                         _ => {}
                     }
                 }
             }
-        })
-        .detach();
+
+            Ok(())
+        }));
 
         self.tasks.push(
             // Update GPUI states
@@ -147,8 +146,8 @@ impl DeviceRegistry {
     }
 
     /// Get the device state
-    pub fn state(&self) -> &DeviceState {
-        &self.state
+    pub fn state(&self) -> DeviceState {
+        self.state.clone()
     }
 
     /// Set the device state
@@ -181,19 +180,25 @@ impl DeviceRegistry {
     /// Reset the device state
     fn reset(&mut self, cx: &mut Context<Self>) {
         self.state = DeviceState::Idle;
-        self.requests.update(cx, |this, cx| {
-            this.clear();
-            cx.notify();
-        });
+        self.requests.clear();
         cx.notify();
     }
 
     /// Add a request for device keys
     fn add_request(&mut self, request: Event, cx: &mut Context<Self>) {
-        self.requests.update(cx, |this, cx| {
-            this.insert(request);
-            cx.notify();
-        });
+        self.requests.push(request);
+        cx.notify();
+    }
+
+    /// Remove a request for device keys
+    pub fn remove_request(&mut self, id: &EventId, cx: &mut Context<Self>) {
+        self.requests.retain(|r| r.id != *id);
+        cx.notify();
+    }
+
+    /// Check if there are any pending requests
+    pub fn has_requests(&self) -> bool {
+        !self.requests.is_empty()
     }
 
     /// Get all messages for encryption keys
@@ -290,12 +295,12 @@ impl DeviceRegistry {
             match task.await {
                 Ok(event) => {
                     this.update(cx, |this, cx| {
-                        this.init_device_signer(&event, cx);
+                        this.new_signer(&event, cx);
                     })?;
                 }
                 Err(_) => {
                     this.update(cx, |this, cx| {
-                        this.announce_device(cx);
+                        this.announce(cx);
                     })?;
                 }
             }
@@ -305,13 +310,15 @@ impl DeviceRegistry {
     }
 
     /// Create a new device signer and announce it
-    fn announce_device(&mut self, cx: &mut Context<Self>) {
+    fn announce(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
+        // Get current user
         let signer = nostr.read(cx).signer();
         let public_key = signer.public_key().unwrap();
 
+        // Get user's write relays
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
         let keys = Keys::generate();
@@ -338,20 +345,20 @@ impl DeviceRegistry {
             Ok(())
         });
 
-        cx.spawn(async move |this, cx| {
+        self.tasks.push(cx.spawn(async move |this, cx| {
             if task.await.is_ok() {
                 this.update(cx, |this, cx| {
                     this.set_signer(keys, cx);
-                    this.listen_device_request(cx);
-                })
-                .ok();
+                    this.listen_request(cx);
+                })?;
             }
-        })
-        .detach();
+
+            Ok(())
+        }));
     }
 
     /// Initialize device signer (decoupled encryption key) for the current user
-    fn init_device_signer(&mut self, event: &Event, cx: &mut Context<Self>) {
+    fn new_signer(&mut self, event: &Event, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -375,14 +382,14 @@ impl DeviceRegistry {
                 Ok(keys) => {
                     this.update(cx, |this, cx| {
                         this.set_signer(keys, cx);
-                        this.listen_device_request(cx);
+                        this.listen_request(cx);
                     })
                     .ok();
                 }
                 Err(e) => {
                     this.update(cx, |this, cx| {
-                        this.request_device_keys(cx);
-                        this.listen_device_approval(cx);
+                        this.request(cx);
+                        this.listen_approval(cx);
                     })
                     .ok();
 
@@ -394,7 +401,7 @@ impl DeviceRegistry {
     }
 
     /// Listen for device key requests on user's write relays
-    fn listen_device_request(&mut self, cx: &mut Context<Self>) {
+    fn listen_request(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -426,7 +433,7 @@ impl DeviceRegistry {
     }
 
     /// Listen for device key approvals on user's write relays
-    fn listen_device_approval(&mut self, cx: &mut Context<Self>) {
+    fn listen_approval(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -435,7 +442,7 @@ impl DeviceRegistry {
 
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
-        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
+        self.tasks.push(cx.background_spawn(async move {
             let urls = write_relays.await;
 
             // Construct a filter for device key requests
@@ -452,13 +459,11 @@ impl DeviceRegistry {
             client.subscribe(target).await?;
 
             Ok(())
-        });
-
-        task.detach();
+        }));
     }
 
     /// Request encryption keys from other device
-    fn request_device_keys(&mut self, cx: &mut Context<Self>) {
+    fn request(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -559,34 +564,32 @@ impl DeviceRegistry {
             Ok(keys)
         });
 
-        cx.spawn(async move |this, cx| {
-            match task.await {
-                Ok(keys) => {
-                    this.update(cx, |this, cx| {
-                        this.set_signer(keys, cx);
-                    })
-                    .ok();
-                }
-                Err(e) => {
-                    log::error!("Error: {e}")
-                }
-            };
-        })
-        .detach();
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let keys = task.await?;
+
+            // Update signer
+            this.update(cx, |this, cx| {
+                this.set_signer(keys, cx);
+            })?;
+
+            Ok(())
+        }));
     }
 
     /// Approve requests for device keys from other devices
-    #[allow(dead_code)]
-    fn approve(&mut self, event: Event, cx: &mut Context<Self>) {
+    pub fn approve(&self, event: &Event, cx: &App) -> Task<Result<(), Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
+        // Get current user
         let signer = nostr.read(cx).signer();
         let public_key = signer.public_key().unwrap();
 
+        // Get user's write relays
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
+        let event = event.clone();
 
-        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
+        cx.background_spawn(async move {
             let urls = write_relays.await;
 
             // Get device keys
@@ -619,9 +622,7 @@ impl DeviceRegistry {
             client.send_event(&event).to(urls).await?;
 
             Ok(())
-        });
-
-        task.detach();
+        })
     }
 }
 

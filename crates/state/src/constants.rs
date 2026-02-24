@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 pub const CLIENT_NAME: &str = "Coop";
 
 /// COOP's public key
-pub const COOP_PUBKEY: &str = "npub126kl5fruqan90py77gf6pvfvygefl2mu2ukew6xdx5pc5uqscwgsnkgarv";
+pub const COOP_PUBKEY: &str = "npub1j3rz3ndl902lya6ywxvy5c983lxs8mpukqnx4pa4lt5wrykwl5ys7wpw3x";
 
 /// App ID
 pub const APP_ID: &str = "su.reya.coop";

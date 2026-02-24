@@ -182,14 +182,19 @@ impl Workspace {
     fn on_command(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) {
         match command {
             Command::OpenEncryptionPanel => {
-                self.dock.update(cx, |this, cx| {
-                    this.add_panel(
-                        Arc::new(encryption_key::init(window, cx)),
-                        DockPlacement::Right,
-                        window,
-                        cx,
-                    );
-                });
+                let nostr = NostrRegistry::global(cx);
+                let signer = nostr.read(cx).signer();
+
+                if let Some(public_key) = signer.public_key() {
+                    self.dock.update(cx, |this, cx| {
+                        this.add_panel(
+                            Arc::new(encryption_key::init(public_key, window, cx)),
+                            DockPlacement::Right,
+                            window,
+                            cx,
+                        );
+                    });
+                }
             }
             Command::OpenInboxPanel => {
                 self.dock.update(cx, |this, cx| {
