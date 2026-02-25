@@ -1073,7 +1073,7 @@ impl PopupMenu {
 
         let selected = self.selected_index == Some(ix);
         const EDGE_PADDING: Pixels = px(4.);
-        const INNER_PADDING: Pixels = px(8.);
+        const INNER_PADDING: Pixels = px(4.);
 
         let is_submenu = matches!(item, PopupMenuItem::Submenu { .. });
         let group_name = format!("{}:item-{}", cx.entity().entity_id(), ix);
@@ -1143,7 +1143,7 @@ impl PopupMenu {
                         .flex_1()
                         .min_h(item_height)
                         .items_center()
-                        .gap_x_1()
+                        .gap_x_2()
                         .children(Self::render_icon(
                             has_left_icon,
                             is_left_check,

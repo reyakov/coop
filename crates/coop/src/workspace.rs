@@ -20,7 +20,7 @@ use ui::dock_area::{ClosePanel, DockArea, DockItem};
 use ui::menu::DropdownMenu;
 use ui::{h_flex, v_flex, IconName, Root, Sizable, WindowExtension};
 
-use crate::panels::{encryption_key, greeter, messaging_relays, relay_list};
+use crate::panels::{backup, encryption_key, greeter, messaging_relays, profile, relay_list};
 use crate::sidebar;
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Workspace> {
@@ -30,11 +30,17 @@ pub fn init(window: &mut Window, cx: &mut App) -> Entity<Workspace> {
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = workspace, no_json)]
 enum Command {
-    ReloadRelayList,
-    OpenRelayPanel,
-    ReloadInbox,
-    OpenInboxPanel,
-    OpenEncryptionPanel,
+    ToggleTheme,
+
+    RefreshRelayList,
+    RefreshMessagingRelays,
+
+    ShowRelayList,
+    ShowMessaging,
+    ShowEncryption,
+    ShowProfile,
+    ShowSettings,
+    ShowBackup,
 }
 
 pub struct Workspace {
@@ -181,7 +187,32 @@ impl Workspace {
 
     fn on_command(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) {
         match command {
-            Command::OpenEncryptionPanel => {
+            Command::ShowProfile => {
+                let nostr = NostrRegistry::global(cx);
+                let signer = nostr.read(cx).signer();
+
+                if let Some(public_key) = signer.public_key() {
+                    self.dock.update(cx, |this, cx| {
+                        this.add_panel(
+                            Arc::new(profile::init(public_key, window, cx)),
+                            DockPlacement::Right,
+                            window,
+                            cx,
+                        );
+                    });
+                }
+            }
+            Command::ShowBackup => {
+                self.dock.update(cx, |this, cx| {
+                    this.add_panel(
+                        Arc::new(backup::init(window, cx)),
+                        DockPlacement::Right,
+                        window,
+                        cx,
+                    );
+                });
+            }
+            Command::ShowEncryption => {
                 let nostr = NostrRegistry::global(cx);
                 let signer = nostr.read(cx).signer();
 
@@ -196,7 +227,7 @@ impl Workspace {
                     });
                 }
             }
-            Command::OpenInboxPanel => {
+            Command::ShowMessaging => {
                 self.dock.update(cx, |this, cx| {
                     this.add_panel(
                         Arc::new(messaging_relays::init(window, cx)),
@@ -206,7 +237,7 @@ impl Workspace {
                     );
                 });
             }
-            Command::OpenRelayPanel => {
+            Command::ShowRelayList => {
                 self.dock.update(cx, |this, cx| {
                     this.add_panel(
                         Arc::new(relay_list::init(window, cx)),
@@ -216,18 +247,19 @@ impl Workspace {
                     );
                 });
             }
-            Command::ReloadInbox => {
+            Command::RefreshRelayList => {
                 let nostr = NostrRegistry::global(cx);
                 nostr.update(cx, |this, cx| {
                     this.ensure_relay_list(cx);
                 });
             }
-            Command::ReloadRelayList => {
+            Command::RefreshMessagingRelays => {
                 let chat = ChatRegistry::global(cx);
                 chat.update(cx, |this, cx| {
                     this.ensure_messaging_relays(cx);
                 });
             }
+            _ => {}
         }
     }
 
@@ -252,12 +284,29 @@ impl Workspace {
                         .compact()
                         .transparent()
                         .dropdown_menu(move |this, _window, _cx| {
-                            this.label(profile.name())
+                            this.min_w(px(256.))
+                                .label(profile.name())
                                 .separator()
-                                .menu("Profile", Box::new(ClosePanel))
-                                .menu("Backup", Box::new(ClosePanel))
-                                .menu("Themes", Box::new(ClosePanel))
-                                .menu("Settings", Box::new(ClosePanel))
+                                .menu_with_icon(
+                                    "Profile",
+                                    IconName::Profile,
+                                    Box::new(Command::ShowProfile),
+                                )
+                                .menu_with_icon(
+                                    "Backup",
+                                    IconName::UserKey,
+                                    Box::new(Command::ShowBackup),
+                                )
+                                .menu_with_icon(
+                                    "Themes",
+                                    IconName::Sun,
+                                    Box::new(Command::ToggleTheme),
+                                )
+                                .menu_with_icon(
+                                    "Settings",
+                                    IconName::Settings,
+                                    Box::new(Command::ShowSettings),
+                                )
                         }),
                 )
             })
@@ -298,7 +347,7 @@ impl Workspace {
                     .small()
                     .ghost()
                     .on_click(|_ev, window, cx| {
-                        window.dispatch_action(Box::new(Command::OpenEncryptionPanel), cx);
+                        window.dispatch_action(Box::new(Command::ShowEncryption), cx);
                     }),
             )
             .child(
@@ -333,7 +382,7 @@ impl Workspace {
                                 this.min_w(px(260.))
                                     .label("Messaging Relays")
                                     .menu_element_with_disabled(
-                                        Box::new(Command::OpenRelayPanel),
+                                        Box::new(Command::ShowRelayList),
                                         true,
                                         move |_window, cx| {
                                             let persons = PersonRegistry::global(cx);
@@ -380,12 +429,12 @@ impl Workspace {
                                     .menu_with_icon(
                                         "Reload",
                                         IconName::Refresh,
-                                        Box::new(Command::ReloadInbox),
+                                        Box::new(Command::RefreshMessagingRelays),
                                     )
                                     .menu_with_icon(
                                         "Update relays",
                                         IconName::Settings,
-                                        Box::new(Command::OpenInboxPanel),
+                                        Box::new(Command::ShowMessaging),
                                     )
                             }),
                     ),
@@ -421,7 +470,7 @@ impl Workspace {
                                 this.min_w(px(260.))
                                     .label("Relays")
                                     .menu_element_with_disabled(
-                                        Box::new(Command::OpenRelayPanel),
+                                        Box::new(Command::ShowRelayList),
                                         true,
                                         move |_window, cx| {
                                             let nostr = NostrRegistry::global(cx);
@@ -465,12 +514,12 @@ impl Workspace {
                                     .menu_with_icon(
                                         "Reload",
                                         IconName::Refresh,
-                                        Box::new(Command::ReloadRelayList),
+                                        Box::new(Command::RefreshRelayList),
                                     )
                                     .menu_with_icon(
                                         "Update relay list",
                                         IconName::Settings,
-                                        Box::new(Command::OpenRelayPanel),
+                                        Box::new(Command::ShowRelayList),
                                     )
                             }),
                     ),

@@ -544,16 +544,12 @@ impl InputState {
     /// Set the text of the input field.
     ///
     /// And the selection_range will be reset to 0..0.
-    pub fn set_value(
-        &mut self,
-        value: impl Into<SharedString>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn set_value<T>(&mut self, value: T, window: &mut Window, cx: &mut Context<Self>)
+    where
+        T: Into<SharedString>,
+    {
         self.history.ignore = true;
-        let was_disabled = self.disabled;
         self.replace_text(value, window, cx);
-        self.disabled = was_disabled;
         self.history.ignore = false;
 
         // Ensure cursor to start when set text
@@ -565,48 +561,50 @@ impl InputState {
 
         // Move scroll to top
         self.scroll_handle.set_offset(point(px(0.), px(0.)));
-
         cx.notify();
     }
 
     /// Insert text at the current cursor position.
     ///
     /// And the cursor will be moved to the end of inserted text.
-    pub fn insert(
-        &mut self,
-        text: impl Into<SharedString>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn insert<T>(&mut self, text: T, window: &mut Window, cx: &mut Context<Self>)
+    where
+        T: Into<SharedString>,
+    {
+        let was_disabled = self.disabled;
+        self.disabled = false;
         let text: SharedString = text.into();
         let range_utf16 = self.range_to_utf16(&(self.cursor()..self.cursor()));
         self.replace_text_in_range_silent(Some(range_utf16), &text, window, cx);
         self.selected_range = (self.selected_range.end..self.selected_range.end).into();
+        self.disabled = was_disabled;
     }
 
     /// Replace text at the current cursor position.
     ///
     /// And the cursor will be moved to the end of replaced text.
-    pub fn replace(
-        &mut self,
-        text: impl Into<SharedString>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn replace<T>(&mut self, text: T, window: &mut Window, cx: &mut Context<Self>)
+    where
+        T: Into<SharedString>,
+    {
+        let was_disabled = self.disabled;
+        self.disabled = false;
         let text: SharedString = text.into();
         self.replace_text_in_range_silent(None, &text, window, cx);
         self.selected_range = (self.selected_range.end..self.selected_range.end).into();
+        self.disabled = was_disabled;
     }
 
-    fn replace_text(
-        &mut self,
-        text: impl Into<SharedString>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn replace_text<T>(&mut self, text: T, window: &mut Window, cx: &mut Context<Self>)
+    where
+        T: Into<SharedString>,
+    {
+        let was_disabled = self.disabled;
+        self.disabled = false;
         let text: SharedString = text.into();
         let range = 0..self.text.chars().map(|c| c.len_utf16()).sum();
         self.replace_text_in_range_silent(Some(range), &text, window, cx);
+        self.disabled = was_disabled;
     }
 
     /// Set with password masked state.

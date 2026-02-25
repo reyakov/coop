@@ -144,16 +144,17 @@ impl MessagingRelayPanel {
         self.error = Some(error.into());
         cx.notify();
 
-        cx.spawn_in(window, async move |this, cx| {
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(2)).await;
+
             // Clear the error message after a delay
             this.update(cx, |this, cx| {
                 this.error = None;
                 cx.notify();
-            })
-            .ok();
-        })
-        .detach();
+            })?;
+
+            Ok(())
+        }));
     }
 
     fn set_updating(&mut self, updating: bool, cx: &mut Context<Self>) {

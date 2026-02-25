@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod connect;
 pub mod encryption_key;
 pub mod greeter;
