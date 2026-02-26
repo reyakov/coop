@@ -1,15 +1,17 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
+use std::rc::Rc;
 
 use anyhow::{anyhow, Error};
 use common::config_dir;
-use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
+use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task, Window};
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
+use theme::{Theme, ThemeFamily, ThemeMode};
 
-pub fn init(cx: &mut App) {
-    AppSettings::set_global(cx.new(AppSettings::new), cx)
+pub fn init(window: &mut Window, cx: &mut App) {
+    AppSettings::set_global(cx.new(|cx| AppSettings::new(window, cx)), cx)
 }
 
 macro_rules! setting_accessors {
@@ -34,6 +36,8 @@ macro_rules! setting_accessors {
 }
 
 setting_accessors! {
+    pub theme: Option<String>,
+    pub theme_mode: ThemeMode,
     pub hide_avatar: bool,
     pub screening: bool,
     pub auth_mode: AuthMode,
@@ -53,7 +57,7 @@ pub enum AuthMode {
 impl Display for AuthMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AuthMode::Auto => write!(f, "Auto authentication"),
+            AuthMode::Auto => write!(f, "Auto"),
             AuthMode::Manual => write!(f, "Ask every time"),
         }
     }
@@ -114,6 +118,12 @@ impl RoomConfig {
 /// Settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
+    /// Theme
+    pub theme: Option<String>,
+
+    /// Theme mode
+    pub theme_mode: ThemeMode,
+
     /// Hide user avatars
     pub hide_avatar: bool,
 
@@ -136,6 +146,8 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            theme: None,
+            theme_mode: ThemeMode::default(),
             hide_avatar: false,
             screening: true,
             auth_mode: AuthMode::default(),
@@ -176,7 +188,7 @@ impl AppSettings {
         cx.set_global(GlobalAppSettings(state));
     }
 
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
@@ -186,12 +198,9 @@ impl AppSettings {
             }),
         );
 
-        cx.defer(|cx| {
-            let settings = AppSettings::global(cx);
-
-            settings.update(cx, |this, cx| {
-                this.load(cx);
-            });
+        // Run at the end of current cycle
+        cx.defer_in(window, |this, window, cx| {
+            this.load(window, cx);
         });
 
         Self {
@@ -207,7 +216,7 @@ impl AppSettings {
     }
 
     /// Load settings
-    fn load(&mut self, cx: &mut Context<Self>) {
+    fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let task: Task<Result<Settings, Error>> = cx.background_spawn(async move {
             let path = config_dir().join(".settings");
 
@@ -218,12 +227,13 @@ impl AppSettings {
             }
         });
 
-        cx.spawn(async move |this, cx| {
+        cx.spawn_in(window, async move |this, cx| {
             let settings = task.await.unwrap_or(Settings::default());
 
             // Update settings
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, window, cx| {
                 this.set_settings(settings, cx);
+                this.apply_theme(window, cx);
             })
             .ok();
         })
@@ -245,6 +255,36 @@ impl AppSettings {
         });
 
         task.detach();
+    }
+
+    /// Set theme
+    pub fn set_theme<T>(&mut self, theme: T, window: &mut Window, cx: &mut Context<Self>)
+    where
+        T: Into<String>,
+    {
+        // Update settings
+        self.values.theme = Some(theme.into());
+        cx.notify();
+
+        // Apply the new theme
+        self.apply_theme(window, cx);
+    }
+
+    /// Apply theme
+    pub fn apply_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(name) = self.values.theme.as_ref() {
+            if let Ok(new_theme) = ThemeFamily::from_assets(name) {
+                Theme::apply_theme(Rc::new(new_theme), Some(window), cx);
+            }
+        } else {
+            Theme::apply_theme(Rc::new(ThemeFamily::default()), Some(window), cx);
+        }
+    }
+
+    /// Reset theme
+    pub fn reset_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.values.theme = None;
+        self.apply_theme(window, cx);
     }
 
     /// Check if the given relay is already authenticated

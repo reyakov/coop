@@ -5,6 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+theme = { path = "../theme" }
 common = { path = "../common" }
 
 nostr-sdk.workspace = true

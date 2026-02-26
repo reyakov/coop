@@ -4,7 +4,7 @@ use gpui::{
     Styled, Window,
 };
 use settings::{AppSettings, AuthMode};
-use theme::ActiveTheme;
+use theme::{ActiveTheme, ThemeMode};
 use ui::button::{Button, ButtonVariants};
 use ui::group_box::{GroupBox, GroupBoxVariants};
 use ui::input::{InputState, TextInput};
@@ -53,11 +53,15 @@ impl Render for Preferences {
             "When opening a request, a popup will appear to help you identify the sender.";
         const AVATAR: &str =
             "Hide all avatar pictures to improve performance and protect your privacy.";
-        const AUTH: &str = "Authentication before send events for some relays.";
+        const MODE: &str =
+            "Choose whether to use the selected light or dark theme, or to follow the OS.";
+        const AUTH: &str = "Choose the authentication behavior for relays.";
+        const RESET: &str = "Reset the theme to the default one.";
 
         let screening = AppSettings::get_screening(cx);
         let hide_avatar = AppSettings::get_hide_avatar(cx);
         let auth_mode = AppSettings::get_auth_mode(cx);
+        let theme_mode = AppSettings::get_theme_mode(cx);
 
         v_flex()
             .gap_4()
@@ -127,6 +131,78 @@ impl Render for Preferences {
                                                     );
                                                 },
                                             ))
+                                    }),
+                            ),
+                    ),
+            )
+            .child(
+                GroupBox::new()
+                    .id("appearance")
+                    .title("Appearance")
+                    .fill()
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .justify_between()
+                            .child(
+                                v_flex()
+                                    .child(div().text_sm().child(SharedString::from("Mode")))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().text_muted)
+                                            .child(SharedString::from(MODE)),
+                                    ),
+                            )
+                            .child(
+                                Button::new("theme-mode")
+                                    .label(theme_mode.name())
+                                    .ghost_alt()
+                                    .small()
+                                    .dropdown_menu(|this, _window, _cx| {
+                                        this.min_w(px(256.))
+                                            .item(PopupMenuItem::new("Light").on_click(
+                                                |_ev, _window, cx| {
+                                                    AppSettings::update_theme_mode(
+                                                        ThemeMode::Light,
+                                                        cx,
+                                                    );
+                                                },
+                                            ))
+                                            .item(PopupMenuItem::new("Dark").on_click(
+                                                |_ev, _window, cx| {
+                                                    AppSettings::update_theme_mode(
+                                                        ThemeMode::Dark,
+                                                        cx,
+                                                    );
+                                                },
+                                            ))
+                                    }),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .justify_between()
+                            .child(
+                                v_flex()
+                                    .child(div().text_sm().child(SharedString::from("Reset theme")))
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().text_muted)
+                                            .child(SharedString::from(RESET)),
+                                    ),
+                            )
+                            .child(
+                                Button::new("reset")
+                                    .label("Reset")
+                                    .ghost_alt()
+                                    .small()
+                                    .on_click(move |_ev, window, cx| {
+                                        AppSettings::global(cx).update(cx, |this, cx| {
+                                            this.reset_theme(window, cx);
+                                        })
                                     }),
                             ),
                     ),

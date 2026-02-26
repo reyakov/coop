@@ -88,7 +88,7 @@ fn main() {
                     device::init(window, cx);
 
                     // Initialize settings
-                    settings::init(cx);
+                    settings::init(window, cx);
 
                     // Initialize relay auth registry
                     relay_auth::init(window, cx);

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ThemeColors;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, PartialOrd, Eq, Hash, Deserialize, Serialize)]
 pub enum ThemeMode {
     #[default]
     Light,
@@ -18,11 +18,11 @@ impl ThemeMode {
         matches!(self, Self::Dark)
     }
 
-    /// Return lower_case theme name: `light`, `dark`.
+    /// Return theme name: `light`, `dark`.
     pub fn name(&self) -> &'static str {
         match self {
-            ThemeMode::Light => "light",
-            ThemeMode::Dark => "dark",
+            ThemeMode::Light => "Light",
+            ThemeMode::Dark => "Dark",
         }
     }
 }
@@ -153,14 +153,14 @@ impl ThemeFamily {
     ///
     /// # fn main() -> anyhow::Result<()> {
     /// // Assuming the file exists at `assets/themes/my-theme.json`
-    /// let theme = ThemeFamily::from_assets("my-theme")?;
+    /// let theme = ThemeFamily::from_assets("themes/my-theme.json")?;
     ///
     /// println!("Loaded theme: {}", theme.name);
     /// # Ok(())
     /// # }
     /// ```
-    pub fn from_assets(name: &str) -> anyhow::Result<Self> {
-        let path = format!("assets/themes/{}.json", name);
+    pub fn from_assets(target: &str) -> anyhow::Result<Self> {
+        let path = format!("assets/{target}");
         Self::from_file(path)
     }
 }

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use ::settings::AppSettings;
 use chat::{ChatEvent, ChatRegistry, InboxState};
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -10,7 +11,7 @@ use person::PersonRegistry;
 use serde::Deserialize;
 use smallvec::{smallvec, SmallVec};
 use state::{NostrRegistry, RelayState};
-use theme::{ActiveTheme, Theme, SIDEBAR_WIDTH};
+use theme::{ActiveTheme, Theme, ThemeRegistry, SIDEBAR_WIDTH};
 use title_bar::TitleBar;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
@@ -271,8 +272,89 @@ impl Workspace {
                     this.ensure_messaging_relays(cx);
                 });
             }
-            Command::ToggleTheme => {}
+            Command::ToggleTheme => {
+                self.theme_selector(window, cx);
+            }
         }
+    }
+
+    fn theme_selector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.open_modal(cx, move |this, _window, cx| {
+            let registry = ThemeRegistry::global(cx);
+            let themes = registry.read(cx).themes();
+
+            this.width(px(520.))
+                .show_close(true)
+                .title("Select theme")
+                .pb_4()
+                .child(v_flex().gap_2().w_full().children({
+                    let mut items = vec![];
+
+                    for (ix, (path, theme)) in themes.iter().enumerate() {
+                        items.push(
+                            h_flex()
+                                .group("")
+                                .px_2()
+                                .h_8()
+                                .w_full()
+                                .justify_between()
+                                .rounded(cx.theme().radius)
+                                .hover(|this| this.bg(cx.theme().elevated_surface_background))
+                                .child(
+                                    h_flex()
+                                        .gap_1p5()
+                                        .flex_1()
+                                        .text_sm()
+                                        .child(theme.name.clone())
+                                        .child(
+                                            div()
+                                                .text_xs()
+                                                .italic()
+                                                .text_color(cx.theme().text_muted)
+                                                .child(theme.author.clone()),
+                                        ),
+                                )
+                                .child(
+                                    h_flex()
+                                        .gap_1()
+                                        .invisible()
+                                        .group_hover("", |this| this.visible())
+                                        .child(
+                                            Button::new(format!("url-{ix}"))
+                                                .icon(IconName::Link)
+                                                .ghost()
+                                                .small()
+                                                .on_click({
+                                                    let theme = theme.clone();
+                                                    move |_ev, _window, cx| {
+                                                        cx.open_url(&theme.url);
+                                                    }
+                                                }),
+                                        )
+                                        .child(
+                                            Button::new(format!("set-{ix}"))
+                                                .icon(IconName::Check)
+                                                .primary()
+                                                .small()
+                                                .on_click({
+                                                    let path = path.clone();
+                                                    move |_ev, window, cx| {
+                                                        let settings = AppSettings::global(cx);
+                                                        let path = path.clone();
+
+                                                        settings.update(cx, |this, cx| {
+                                                            this.set_theme(path, window, cx);
+                                                        })
+                                                    }
+                                                }),
+                                        ),
+                                ),
+                        );
+                    }
+
+                    items
+                }))
+        });
     }
 
     fn titlebar_left(&mut self, _window: &mut Window, cx: &Context<Self>) -> impl IntoElement {
