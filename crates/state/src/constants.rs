@@ -13,7 +13,7 @@ pub const APP_ID: &str = "su.reya.coop";
 pub const KEYRING: &str = "Coop Safe Storage";
 
 /// Default timeout for subscription
-pub const TIMEOUT: u64 = 3;
+pub const TIMEOUT: u64 = 2;
 
 /// Default delay for searching
 pub const FIND_DELAY: u64 = 600;

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use ::settings::AppSettings;
 use chat::{ChatEvent, ChatRegistry, InboxState};
+use device::DeviceRegistry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, px, rems, Action, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement,
@@ -36,6 +37,7 @@ enum Command {
 
     RefreshRelayList,
     RefreshMessagingRelays,
+    RefreshEncryption,
 
     ShowRelayList,
     ShowMessaging,
@@ -260,6 +262,12 @@ impl Workspace {
                     );
                 });
             }
+            Command::RefreshEncryption => {
+                let device = DeviceRegistry::global(cx);
+                device.update(cx, |this, cx| {
+                    this.get_announcement(cx);
+                });
+            }
             Command::RefreshRelayList => {
                 let nostr = NostrRegistry::global(cx);
                 nostr.update(cx, |this, cx| {
@@ -440,8 +448,19 @@ impl Workspace {
                     .tooltip("Decoupled encryption key")
                     .small()
                     .ghost()
-                    .on_click(|_ev, window, cx| {
-                        window.dispatch_action(Box::new(Command::ShowEncryption), cx);
+                    .dropdown_menu(|this, _window, _cx| {
+                        this.min_w(px(260.))
+                            .label("Encryption")
+                            .menu_with_icon(
+                                "Reload",
+                                IconName::Refresh,
+                                Box::new(Command::RefreshEncryption),
+                            )
+                            .menu_with_icon(
+                                "View encryption",
+                                IconName::Settings,
+                                Box::new(Command::ShowEncryption),
+                            )
                     }),
             )
             .child(

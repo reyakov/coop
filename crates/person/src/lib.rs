@@ -198,7 +198,7 @@ impl PersonRegistry {
         loop {
             match flume::Selector::new()
                 .recv(rx, |result| result.ok())
-                .wait_timeout(Duration::from_secs(2))
+                .wait_timeout(Duration::from_secs(TIMEOUT))
             {
                 Ok(Some(public_key)) => {
                     batch.insert(public_key);
@@ -307,16 +307,22 @@ where
         .timeout(Some(Duration::from_secs(TIMEOUT)));
 
     // Construct the filter for metadata
-    let filter = Filter::new()
+    let metadata = Filter::new()
         .kind(Kind::Metadata)
+        .authors(authors.clone())
+        .limit(limit);
+
+    // Construct the filter for relay list
+    let gossip = Filter::new()
+        .kind(Kind::RelayList)
         .authors(authors)
         .limit(limit);
 
     // Construct target for subscription
-    let target = BOOTSTRAP_RELAYS
+    let target: HashMap<&str, Vec<Filter>> = BOOTSTRAP_RELAYS
         .into_iter()
-        .map(|relay| (relay, vec![filter.clone()]))
-        .collect::<HashMap<_, _>>();
+        .map(|relay| (relay, vec![metadata.clone(), gossip.clone()]))
+        .collect();
 
     client.subscribe(target).close_on(opts).await?;
 
