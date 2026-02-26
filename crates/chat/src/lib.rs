@@ -285,17 +285,24 @@ impl ChatRegistry {
 
         let signer = nostr.read(cx).signer();
         let public_key = signer.public_key().unwrap();
+        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
         cx.background_spawn(async move {
+            let urls = write_relays.await;
+
             // Construct filter for inbox relays
             let filter = Filter::new()
                 .kind(Kind::InboxRelays)
                 .author(public_key)
                 .limit(1);
 
+            // Construct target for subscription
+            let target: HashMap<&RelayUrl, Filter> =
+                urls.iter().map(|relay| (relay, filter.clone())).collect();
+
             // Stream events from user's write relays
             let mut stream = client
-                .stream_events(filter)
+                .stream_events(target)
                 .timeout(Duration::from_secs(TIMEOUT))
                 .await?;
 

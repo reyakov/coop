@@ -11,7 +11,6 @@ nostr.workspace = true
 nostr-sdk.workspace = true
 nostr-lmdb.workspace = true
 nostr-connect.workspace = true
-nostr-gossip-sqlite.workspace = true
 nostr-blossom.workspace = true
 
 gpui.workspace = true
