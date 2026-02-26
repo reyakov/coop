@@ -157,7 +157,7 @@ impl DeviceRegistry {
     }
 
     /// Set the decoupled encryption key for the current user
-    pub fn set_signer<S>(&mut self, new: S, cx: &mut Context<Self>)
+    fn set_signer<S>(&mut self, new: S, cx: &mut Context<Self>)
     where
         S: NostrSigner + 'static,
     {
@@ -248,7 +248,7 @@ impl DeviceRegistry {
     }
 
     /// Get device announcement for current user
-    pub fn get_announcement(&mut self, cx: &mut Context<Self>) {
+    fn get_announcement(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -309,7 +309,8 @@ impl DeviceRegistry {
         }));
     }
 
-    pub fn create_encryption(&self, cx: &App) -> Task<Result<Keys, Error>> {
+    /// Create a new device signer and announce it
+    fn announce(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -324,7 +325,7 @@ impl DeviceRegistry {
         let secret = keys.secret_key().to_secret_hex();
         let n = keys.public_key();
 
-        cx.background_spawn(async move {
+        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             let urls = write_relays.await;
 
             // Construct an announcement event
@@ -341,26 +342,17 @@ impl DeviceRegistry {
             // Save device keys to the database
             set_keys(&client, &secret).await?;
 
-            Ok(keys)
-        })
-    }
-
-    /// Create a new device signer and announce it
-    fn announce(&mut self, cx: &mut Context<Self>) {
-        let task = self.create_encryption(cx);
+            Ok(())
+        });
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            match task.await {
-                Ok(keys) => {
-                    this.update(cx, |this, cx| {
-                        this.set_signer(keys, cx);
-                        this.listen_request(cx);
-                    })?;
-                }
-                Err(e) => {
-                    log::error!("Failed to create encryption key: {}", e);
-                }
+            if task.await.is_ok() {
+                this.update(cx, |this, cx| {
+                    this.set_signer(keys, cx);
+                    this.listen_request(cx);
+                })?;
             }
+
             Ok(())
         }));
     }
@@ -409,7 +401,7 @@ impl DeviceRegistry {
     }
 
     /// Listen for device key requests on user's write relays
-    pub fn listen_request(&mut self, cx: &mut Context<Self>) {
+    fn listen_request(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -678,8 +670,6 @@ async fn get_keys(client: &Client) -> Result<Keys, Error> {
         let content = signer.nip44_decrypt(&public_key, &event.content).await?;
         let secret = SecretKey::parse(&content)?;
         let keys = Keys::new(secret);
-
-        log::info!("Encryption keys retrieved successfully");
 
         Ok(keys)
     } else {

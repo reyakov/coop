@@ -36,9 +36,6 @@ pub struct EncryptionPanel {
     /// Whether the panel is loading
     loading: bool,
 
-    /// Whether the encryption is resetting
-    resetting: bool,
-
     /// Tasks
     tasks: Vec<Task<Result<(), Error>>>,
 }
@@ -50,7 +47,6 @@ impl EncryptionPanel {
             focus_handle: cx.focus_handle(),
             public_key,
             loading: false,
-            resetting: false,
             tasks: vec![],
         }
     }
@@ -86,42 +82,6 @@ impl EncryptionPanel {
                 Err(e) => {
                     this.update_in(cx, |this, window, cx| {
                         this.set_loading(false, cx);
-                        window.push_notification(Notification::error(e.to_string()), cx);
-                    })?;
-                }
-            }
-
-            Ok(())
-        }));
-    }
-
-    fn set_resetting(&mut self, status: bool, cx: &mut Context<Self>) {
-        self.resetting = status;
-        cx.notify();
-    }
-
-    fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let device = DeviceRegistry::global(cx);
-        let task = device.read(cx).create_encryption(cx);
-
-        // Update the reset status
-        self.set_resetting(true, cx);
-
-        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            match task.await {
-                Ok(keys) => {
-                    this.update_in(cx, |this, _window, cx| {
-                        this.set_resetting(false, cx);
-
-                        device.update(cx, |this, cx| {
-                            this.set_signer(keys, cx);
-                            this.listen_request(cx);
-                        });
-                    })?;
-                }
-                Err(e) => {
-                    this.update_in(cx, |this, window, cx| {
-                        this.set_resetting(false, cx);
                         window.push_notification(Notification::error(e.to_string()), cx);
                     })?;
                 }
@@ -309,27 +269,26 @@ impl Render for EncryptionPanel {
                         )),
                 )
             })
-            .child(
-                v_flex()
-                    .gap_1()
-                    .child(
-                        Button::new("reset")
-                            .icon(IconName::Reset)
-                            .label("Reset")
-                            .warning()
-                            .small()
-                            .font_semibold()
-                            .on_click(
-                                cx.listener(move |this, _ev, window, cx| this.reset(window, cx)),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .italic()
-                            .text_size(px(10.))
-                            .text_color(cx.theme().text_muted)
-                            .child(SharedString::from(NOTICE)),
-                    ),
-            )
+            .when(state.set(), |this| {
+                this.child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            Button::new("reset")
+                                .icon(IconName::Reset)
+                                .label("Reset")
+                                .warning()
+                                .small()
+                                .font_semibold(),
+                        )
+                        .child(
+                            div()
+                                .italic()
+                                .text_size(px(10.))
+                                .text_color(cx.theme().text_muted)
+                                .child(SharedString::from(NOTICE)),
+                        ),
+                )
+            })
     }
 }

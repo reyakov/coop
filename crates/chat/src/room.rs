@@ -350,23 +350,26 @@ impl Room {
                         ));
                     }
 
-                    // Construct filters for inbox
-                    let inbox = Filter::new()
+                    // Construct filters for inbox and announcement
+                    let inbox_filter = Filter::new()
                         .kind(Kind::InboxRelays)
                         .author(member)
                         .limit(1);
-
-                    // Construct filters for announcement
-                    let announcement = Filter::new()
+                    let announcement_filter = Filter::new()
                         .kind(Kind::Custom(10044))
                         .author(member)
                         .limit(1);
 
                     // Create subscription targets
-                    let target: HashMap<RelayUrl, Vec<Filter>> = urls
+                    let target = urls
                         .into_iter()
-                        .map(|relay| (relay, vec![inbox.clone(), announcement.clone()]))
-                        .collect();
+                        .map(|relay| {
+                            (
+                                relay,
+                                vec![inbox_filter.clone(), announcement_filter.clone()],
+                            )
+                        })
+                        .collect::<HashMap<_, _>>();
 
                     // Stream events from user's write relays
                     let mut stream = client
