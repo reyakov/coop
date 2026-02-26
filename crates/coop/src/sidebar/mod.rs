@@ -499,7 +499,7 @@ impl Render for Sidebar {
                 h_flex()
                     .h(TABBAR_HEIGHT)
                     .border_b_1()
-                    .border_color(cx.theme().border_variant)
+                    .border_color(cx.theme().border)
                     .bg(cx.theme().elevated_surface_background)
                     .child(
                         TextInput::new(&self.find_input)
