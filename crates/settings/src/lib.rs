@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::fmt::Display;
 
 use anyhow::{anyhow, Error};
 use common::config_dir;
@@ -47,6 +48,15 @@ pub enum AuthMode {
     #[default]
     Auto,
     Manual,
+}
+
+impl Display for AuthMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthMode::Auto => write!(f, "Auto authentication"),
+            AuthMode::Manual => write!(f, "Ask every time"),
+        }
+    }
 }
 
 /// Signer kind

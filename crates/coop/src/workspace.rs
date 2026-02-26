@@ -20,6 +20,7 @@ use ui::dock_area::{ClosePanel, DockArea, DockItem};
 use ui::menu::DropdownMenu;
 use ui::{h_flex, v_flex, IconName, Root, Sizable, WindowExtension};
 
+use crate::dialogs::settings;
 use crate::panels::{backup, encryption_key, greeter, messaging_relays, profile, relay_list};
 use crate::sidebar;
 
@@ -187,6 +188,17 @@ impl Workspace {
 
     fn on_command(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) {
         match command {
+            Command::ShowSettings => {
+                let view = settings::init(window, cx);
+
+                window.open_modal(cx, move |this, _window, _cx| {
+                    this.width(px(520.))
+                        .show_close(true)
+                        .pb_4()
+                        .title("Preferences")
+                        .child(view.clone())
+                });
+            }
             Command::ShowProfile => {
                 let nostr = NostrRegistry::global(cx);
                 let signer = nostr.read(cx).signer();
@@ -259,7 +271,7 @@ impl Workspace {
                     this.ensure_messaging_relays(cx);
                 });
             }
-            _ => {}
+            Command::ToggleTheme => {}
         }
     }
 

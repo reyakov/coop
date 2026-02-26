@@ -19,6 +19,7 @@ pub mod button;
 pub mod checkbox;
 pub mod divider;
 pub mod dock_area;
+pub mod group_box;
 pub mod history;
 pub mod indicator;
 pub mod input;
