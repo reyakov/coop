@@ -41,7 +41,7 @@ pub struct BackupPanel {
 impl BackupPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let npub_input = cx.new(|cx| InputState::new(window, cx).disabled(true));
-        let nsec_input = cx.new(|cx| InputState::new(window, cx).disabled(true));
+        let nsec_input = cx.new(|cx| InputState::new(window, cx).disabled(true).masked(true));
 
         // Run at the end of current cycle
         cx.defer_in(window, |this, window, cx| {
@@ -81,11 +81,14 @@ impl BackupPanel {
         }));
     }
 
-    fn copy_secret_key(&mut self, cx: &mut Context<Self>) {
+    fn copy_secret(&mut self, cx: &mut Context<Self>) {
         let value = self.nsec_input.read(cx).value();
         let item = ClipboardItem::new_string(value.to_string());
 
-        // Copy to clipboard
+        #[cfg(target_os = "linux")]
+        cx.write_to_primary(item);
+
+        #[cfg(not(target_os = "linux"))]
         cx.write_to_clipboard(item);
 
         // Set the copied status to true
@@ -157,7 +160,12 @@ impl Render for BackupPanel {
                                     .text_color(cx.theme().text_muted)
                                     .child(SharedString::from("Public Key:")),
                             )
-                            .child(TextInput::new(&self.npub_input).small().bordered(false)),
+                            .child(
+                                TextInput::new(&self.npub_input)
+                                    .small()
+                                    .bordered(false)
+                                    .disabled(true),
+                            ),
                     )
                     .child(
                         v_flex()
@@ -170,7 +178,12 @@ impl Render for BackupPanel {
                                     .text_color(cx.theme().text_muted)
                                     .child(SharedString::from("Secret Key:")),
                             )
-                            .child(TextInput::new(&self.nsec_input).small().bordered(false)),
+                            .child(
+                                TextInput::new(&self.nsec_input)
+                                    .small()
+                                    .bordered(false)
+                                    .disabled(true),
+                            ),
                     )
                     .child(
                         Button::new("copy")
@@ -186,7 +199,7 @@ impl Render for BackupPanel {
                             .small()
                             .font_semibold()
                             .on_click(cx.listener(move |this, _ev, _window, cx| {
-                                this.copy_secret_key(cx);
+                                this.copy_secret(cx);
                             })),
                     ),
             )

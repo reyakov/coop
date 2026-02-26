@@ -648,13 +648,20 @@ impl ChatPanel {
             .w_full()
             .py_2()
             .px_3()
-            .bg(cx.theme().warning_background)
             .child(
                 h_flex()
                     .gap_3()
                     .text_sm()
-                    .text_color(cx.theme().warning_foreground)
-                    .child(Avatar::new("brand/system.png").size(rems(2.)))
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .size_8()
+                            .justify_center()
+                            .rounded_full()
+                            .bg(cx.theme().warning_background)
+                            .text_color(cx.theme().warning_foreground)
+                            .child(Icon::new(IconName::Warning).small()),
+                    )
                     .child(content),
             )
             .child(
