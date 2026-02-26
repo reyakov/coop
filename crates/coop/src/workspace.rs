@@ -582,47 +582,6 @@ impl Workspace {
                             .dropdown_menu(move |this, _window, _cx| {
                                 this.min_w(px(260.))
                                     .label("Relays")
-                                    .menu_element_with_disabled(
-                                        Box::new(Command::ShowRelayList),
-                                        true,
-                                        move |_window, cx| {
-                                            let nostr = NostrRegistry::global(cx);
-                                            let urls = nostr.read(cx).read_only_relays(&pkey, cx);
-
-                                            v_flex()
-                                                .gap_1()
-                                                .w_full()
-                                                .items_start()
-                                                .justify_start()
-                                                .children({
-                                                    let mut items = vec![];
-
-                                                    for url in urls.into_iter() {
-                                                        items.push(
-                                                            h_flex()
-                                                                .h_6()
-                                                                .w_full()
-                                                                .gap_2()
-                                                                .px_2()
-                                                                .text_xs()
-                                                                .bg(cx
-                                                                    .theme()
-                                                                    .elevated_surface_background)
-                                                                .rounded(cx.theme().radius)
-                                                                .child(
-                                                                    div()
-                                                                        .size_1()
-                                                                        .rounded_full()
-                                                                        .bg(gpui::green()),
-                                                                )
-                                                                .child(url),
-                                                        );
-                                                    }
-
-                                                    items
-                                                })
-                                        },
-                                    )
                                     .separator()
                                     .menu_with_icon(
                                         "Reload",

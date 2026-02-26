@@ -1,26 +1,25 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context as AnyhowContext, Error};
 use common::config_dir;
-use gpui::{App, AppContext, Context, Entity, Global, SharedString, Task, Window};
+use gpui::{App, AppContext, Context, Entity, Global, Task, Window};
 use nostr_connect::prelude::*;
+use nostr_gossip_sqlite::prelude::*;
 use nostr_lmdb::prelude::*;
 use nostr_sdk::prelude::*;
 
 mod blossom;
 mod constants;
 mod device;
-mod gossip;
 mod nip05;
 mod signer;
 
 pub use blossom::*;
 pub use constants::*;
 pub use device::*;
-pub use gossip::*;
 pub use nip05::*;
 pub use signer::*;
 
@@ -56,9 +55,6 @@ pub struct NostrRegistry {
     /// Used for Nostr Connect and NIP-4e operations
     app_keys: Keys,
 
-    /// Custom gossip implementation
-    gossip: Entity<Gossip>,
-
     /// Relay list state
     relay_list_state: RelayState,
 
@@ -89,9 +85,6 @@ impl NostrRegistry {
         let app_keys = get_or_init_app_keys().unwrap_or(Keys::generate());
         let signer = Arc::new(CoopSigner::new(app_keys.clone()));
 
-        // Construct the gossip entity
-        let gossip = cx.new(|_| Gossip::default());
-
         // Construct the nostr lmdb instance
         let lmdb = cx.foreground_executor().block_on(async move {
             NostrLmdb::open(config_dir().join("nostr"))
@@ -99,13 +92,21 @@ impl NostrRegistry {
                 .expect("Failed to initialize database")
         });
 
+        // Construct the nostr gossip instance
+        let gossip = cx.foreground_executor().block_on(async move {
+            NostrGossipSqlite::open(config_dir().join("gossip"))
+                .await
+                .expect("Failed to initialize gossip database")
+        });
+
         // Construct the nostr client
         let client = ClientBuilder::default()
             .signer(signer.clone())
             .database(lmdb)
+            .gossip(gossip)
             .automatic_authentication(false)
             .verify_subscriptions(false)
-            .connect_timeout(Duration::from_secs(TIMEOUT))
+            .connect_timeout(Duration::from_secs(5))
             .sleep_when_idle(SleepWhenIdle::Enabled {
                 timeout: Duration::from_secs(600),
             })
@@ -114,14 +115,12 @@ impl NostrRegistry {
         // Run at the end of current cycle
         cx.defer_in(window, |this, _window, cx| {
             this.connect(cx);
-            this.handle_notifications(cx);
         });
 
         Self {
             client,
             signer,
             app_keys,
-            gossip,
             relay_list_state: RelayState::Idle,
             connected: false,
             creating: false,
@@ -146,10 +145,7 @@ impl NostrRegistry {
                     }
 
                     // Connect to all added relays
-                    client
-                        .connect()
-                        .and_wait(Duration::from_secs(TIMEOUT))
-                        .await;
+                    client.connect().and_wait(Duration::from_secs(5)).await;
                 })
                 .await;
 
@@ -158,60 +154,6 @@ impl NostrRegistry {
                 this.set_connected(cx);
                 this.get_signer(cx);
             })?;
-
-            Ok(())
-        }));
-    }
-
-    /// Handle nostr notifications
-    fn handle_notifications(&mut self, cx: &mut Context<Self>) {
-        let client = self.client();
-        let gossip = self.gossip.downgrade();
-
-        // Channel for communication between nostr and gpui
-        let (tx, rx) = flume::bounded::<Event>(2048);
-
-        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            // Handle nostr notifications
-            let mut notifications = client.notifications();
-            let mut processed_events = HashSet::new();
-
-            while let Some(notification) = notifications.next().await {
-                if let ClientNotification::Message {
-                    message: RelayMessage::Event { event, .. },
-                    ..
-                } = notification
-                {
-                    // Skip if the event has already been processed
-                    if processed_events.insert(event.id) {
-                        match event.kind {
-                            Kind::RelayList => {
-                                tx.send_async(event.into_owned()).await?;
-                            }
-                            Kind::InboxRelays => {
-                                tx.send_async(event.into_owned()).await?;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-
-            Ok(())
-        });
-
-        // Run task in the background
-        task.detach();
-
-        self.tasks.push(cx.spawn(async move |_this, cx| {
-            while let Ok(event) = rx.recv_async().await {
-                if let Kind::RelayList = event.kind {
-                    gossip.update(cx, |this, cx| {
-                        this.insert_relays(&event);
-                        cx.notify();
-                    })?;
-                }
-            }
 
             Ok(())
         }));
@@ -245,41 +187,6 @@ impl NostrRegistry {
     /// Get the relay list state
     pub fn relay_list_state(&self) -> RelayState {
         self.relay_list_state.clone()
-    }
-
-    /// Get all relays for a given public key without ensuring connections
-    pub fn read_only_relays(&self, public_key: &PublicKey, cx: &App) -> Vec<SharedString> {
-        self.gossip.read(cx).read_only_relays(public_key)
-    }
-
-    /// Get a list of write relays for a given public key
-    pub fn write_relays(&self, public_key: &PublicKey, cx: &App) -> Task<Vec<RelayUrl>> {
-        let client = self.client();
-        let relays = self.gossip.read(cx).write_relays(public_key);
-
-        cx.background_spawn(async move {
-            // Ensure relay connections
-            for url in relays.iter() {
-                client.add_relay(url).and_connect().await.ok();
-            }
-
-            relays
-        })
-    }
-
-    /// Get a list of read relays for a given public key
-    pub fn read_relays(&self, public_key: &PublicKey, cx: &App) -> Task<Vec<RelayUrl>> {
-        let client = self.client();
-        let relays = self.gossip.read(cx).read_relays(public_key);
-
-        cx.background_spawn(async move {
-            // Ensure relay connections
-            for url in relays.iter() {
-                client.add_relay(url).and_connect().await.ok();
-            }
-
-            relays
-        })
     }
 
     /// Set the connected status of the client
@@ -488,16 +395,24 @@ impl NostrRegistry {
         cx.notify();
     }
 
+    /// Set relay list state
+    fn set_relay_list_state(&mut self, state: RelayState, cx: &mut Context<Self>) {
+        self.relay_list_state = state;
+        cx.notify();
+    }
+
     pub fn ensure_relay_list(&mut self, cx: &mut Context<Self>) {
         let task = self.verify_relay_list(cx);
+
+        // Reset state
+        self.set_relay_list_state(RelayState::default(), cx);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             let result = task.await?;
 
             // Update state
             this.update(cx, |this, cx| {
-                this.relay_list_state = result;
-                cx.notify();
+                this.set_relay_list_state(result, cx);
             })?;
 
             Ok(())

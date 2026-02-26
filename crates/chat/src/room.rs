@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
-use anyhow::{anyhow, Error};
+use anyhow::Error;
 use common::EventUtils;
 use gpui::{App, AppContext, Context, EventEmitter, SharedString, Task};
 use itertools::Itertools;
@@ -323,6 +323,7 @@ impl Room {
     /// Get gossip relays for each member
     pub fn connect(&self, cx: &App) -> HashMap<PublicKey, Task<Result<(bool, bool), Error>>> {
         let nostr = NostrRegistry::global(cx);
+
         let signer = nostr.read(cx).signer();
         let public_key = signer.public_key().unwrap();
 
@@ -330,25 +331,18 @@ impl Room {
         let mut tasks = HashMap::new();
 
         for member in members.into_iter() {
+            let client = nostr.read(cx).client();
+
             // Skip if member is the current user
             if member == public_key {
                 continue;
             }
 
-            let client = nostr.read(cx).client();
-            let write_relays = nostr.read(cx).write_relays(&member, cx);
-
             tasks.insert(
                 member,
                 cx.background_spawn(async move {
-                    let urls = write_relays.await;
-
-                    // Return if no relays are available
-                    if urls.is_empty() {
-                        return Err(anyhow!(
-                            "User has not set up any relays. You cannot send messages to them."
-                        ));
-                    }
+                    let mut has_inbox = false;
+                    let mut has_announcement = false;
 
                     // Construct filters for inbox
                     let inbox = Filter::new()
@@ -362,20 +356,11 @@ impl Room {
                         .author(member)
                         .limit(1);
 
-                    // Create subscription targets
-                    let target: HashMap<RelayUrl, Vec<Filter>> = urls
-                        .into_iter()
-                        .map(|relay| (relay, vec![inbox.clone(), announcement.clone()]))
-                        .collect();
-
                     // Stream events from user's write relays
                     let mut stream = client
-                        .stream_events(target)
+                        .stream_events(vec![inbox.clone(), announcement.clone()])
                         .timeout(Duration::from_secs(TIMEOUT))
                         .await?;
-
-                    let mut has_inbox = false;
-                    let mut has_announcement = false;
 
                     while let Some((_url, res)) = stream.next().await {
                         let event = res?;

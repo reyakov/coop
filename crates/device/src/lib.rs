@@ -255,24 +255,16 @@ impl DeviceRegistry {
         let signer = nostr.read(cx).signer();
         let public_key = signer.public_key().unwrap();
 
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
-
         let task: Task<Result<Event, Error>> = cx.background_spawn(async move {
-            let urls = write_relays.await;
-
             // Construct the filter for the device announcement event
             let filter = Filter::new()
                 .kind(Kind::Custom(10044))
                 .author(public_key)
                 .limit(1);
 
-            // Construct target for subscription
-            let target: HashMap<&RelayUrl, Filter> =
-                urls.iter().map(|relay| (relay, filter.clone())).collect();
-
             // Stream events from user's write relays
             let mut stream = client
-                .stream_events(target)
+                .stream_events(filter)
                 .timeout(Duration::from_secs(TIMEOUT))
                 .await?;
 
@@ -313,20 +305,12 @@ impl DeviceRegistry {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
-        // Get current user
-        let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
-
-        // Get user's write relays
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
-
+        // Generate encryption keys
         let keys = Keys::generate();
         let secret = keys.secret_key().to_secret_hex();
         let n = keys.public_key();
 
         cx.background_spawn(async move {
-            let urls = write_relays.await;
-
             // Construct an announcement event
             let event = client
                 .sign_event_builder(EventBuilder::new(Kind::Custom(10044), "").tags(vec![
@@ -336,7 +320,11 @@ impl DeviceRegistry {
                 .await?;
 
             // Publish announcement
-            client.send_event(&event).to(urls).await?;
+            client
+                .send_event(&event)
+                .to_nip65()
+                .ok_timeout(Duration::from_secs(TIMEOUT))
+                .await?;
 
             // Save device keys to the database
             set_keys(&client, &secret).await?;
@@ -416,23 +404,15 @@ impl DeviceRegistry {
         let signer = nostr.read(cx).signer();
         let public_key = signer.public_key().unwrap();
 
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
-
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let urls = write_relays.await;
-
             // Construct a filter for device key requests
             let filter = Filter::new()
                 .kind(Kind::Custom(4454))
                 .author(public_key)
                 .since(Timestamp::now());
 
-            // Construct target for subscription
-            let target: HashMap<&RelayUrl, Filter> =
-                urls.iter().map(|relay| (relay, filter.clone())).collect();
-
             // Subscribe to the device key requests on user's write relays
-            client.subscribe(target).await?;
+            client.subscribe(filter).await?;
 
             Ok(())
         });
@@ -448,23 +428,15 @@ impl DeviceRegistry {
         let signer = nostr.read(cx).signer();
         let public_key = signer.public_key().unwrap();
 
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
-
         self.tasks.push(cx.background_spawn(async move {
-            let urls = write_relays.await;
-
             // Construct a filter for device key requests
             let filter = Filter::new()
                 .kind(Kind::Custom(4455))
                 .author(public_key)
                 .since(Timestamp::now());
 
-            // Construct target for subscription
-            let target: HashMap<&RelayUrl, Filter> =
-                urls.iter().map(|relay| (relay, filter.clone())).collect();
-
             // Subscribe to the device key requests on user's write relays
-            client.subscribe(target).await?;
+            client.subscribe(filter).await?;
 
             Ok(())
         }));
@@ -474,11 +446,7 @@ impl DeviceRegistry {
     fn request(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
-
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
         let app_keys = nostr.read(cx).app_keys().clone();
         let app_pubkey = app_keys.public_key();
@@ -510,18 +478,20 @@ impl DeviceRegistry {
                     Ok(Some(keys))
                 }
                 None => {
-                    let urls = write_relays.await;
-
                     // Construct an event for device key request
                     let event = client
                         .sign_event_builder(EventBuilder::new(Kind::Custom(4454), "").tags(vec![
-                            Tag::client(app_name()),
                             Tag::custom(TagKind::custom("P"), vec![app_pubkey]),
+                            Tag::client(app_name()),
                         ]))
                         .await?;
 
                     // Send the event to write relays
-                    client.send_event(&event).to(urls).await?;
+                    client
+                        .send_event(&event)
+                        .to_nip65()
+                        .ok_timeout(Duration::from_secs(TIMEOUT))
+                        .await?;
 
                     Ok(None)
                 }
@@ -588,18 +558,12 @@ impl DeviceRegistry {
     pub fn approve(&self, event: &Event, cx: &App) -> Task<Result<(), Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
-        // Get current user
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
 
         // Get user's write relays
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
         let event = event.clone();
 
         cx.background_spawn(async move {
-            let urls = write_relays.await;
-
             // Get device keys
             let keys = get_keys(&client).await?;
             let secret = keys.secret_key().to_secret_hex();
@@ -627,7 +591,11 @@ impl DeviceRegistry {
                 .await?;
 
             // Send the response event to the user's relay list
-            client.send_event(&event).to(urls).await?;
+            client
+                .send_event(&event)
+                .to_nip65()
+                .ok_timeout(Duration::from_secs(TIMEOUT))
+                .await?;
 
             Ok(())
         })
