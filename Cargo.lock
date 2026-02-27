@@ -238,7 +238,7 @@ dependencies = [
 
 [[package]]
 name = "assets"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "gpui",
@@ -535,7 +535,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "auto_update"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "common",
@@ -977,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "chat"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "common",
@@ -1000,7 +1000,7 @@ dependencies = [
 
 [[package]]
 name = "chat_ui"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "chat",
@@ -1229,7 +1229,7 @@ dependencies = [
 
 [[package]]
 name = "common"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1300,7 +1300,7 @@ checksum = "6245d59a3e82a7fc217c5828a6692dbc6dfb63a0c8c90495621f7b9d79704a0e"
 
 [[package]]
 name = "coop"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "assets",
@@ -1645,7 +1645,7 @@ dependencies = [
 
 [[package]]
 name = "device"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "common",
@@ -4558,7 +4558,7 @@ dependencies = [
 
 [[package]]
 name = "person"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "common",
@@ -5260,7 +5260,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "relay_auth"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "common",
@@ -5918,7 +5918,7 @@ dependencies = [
 
 [[package]]
 name = "settings"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "common",
@@ -6159,7 +6159,7 @@ dependencies = [
 
 [[package]]
 name = "state"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "common",
@@ -6496,7 +6496,7 @@ dependencies = [
 
 [[package]]
 name = "theme"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6633,7 +6633,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "title_bar"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "common",
@@ -6991,7 +6991,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "0.3.0"
+version = "1.0.0-beta"
 dependencies = [
  "anyhow",
  "common",
