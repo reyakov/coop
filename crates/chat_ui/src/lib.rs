@@ -40,10 +40,13 @@ use crate::text::RenderedText;
 mod actions;
 mod text;
 
+const ANNOUNCEMENT: &str =
+    "This conversation is private. Only members can see each other's messages.";
 const NO_INBOX: &str = "has not set up messaging relays. \
-    They will not receive your messages.";
+    They will not receive messages you send.";
 const NO_ANNOUNCEMENT: &str = "has not set up an encryption key. \
-    You cannot send messages encrypted with an encryption key to them yet.";
+    You cannot send messages encrypted with an encryption key to them yet. \
+    Coop automatically uses your identity to encrypt messages.";
 
 pub fn init(room: WeakEntity<Room>, window: &mut Window, cx: &mut App) -> Entity<ChatPanel> {
     cx.new(|cx| ChatPanel::new(room, window, cx))
@@ -169,9 +172,9 @@ impl ChatPanel {
         // Run the connect task in background
         self.tasks.push(connect);
 
-        // Spawn another task to verify after 2 seconds
+        // Spawn another task to verify after 3 seconds
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor().timer(Duration::from_secs(2)).await;
+            cx.background_executor().timer(Duration::from_secs(3)).await;
 
             // Verify the connection
             this.update_in(cx, |this, _window, cx| {
@@ -632,9 +635,6 @@ impl ChatPanel {
     }
 
     fn render_announcement(&self, ix: usize, cx: &Context<Self>) -> AnyElement {
-        const MSG: &str =
-            "This conversation is private. Only members can see each other's messages.";
-
         v_flex()
             .id(ix)
             .h_40()
@@ -653,19 +653,19 @@ impl ChatPanel {
                     .size_12()
                     .text_color(cx.theme().ghost_element_active),
             )
-            .child(SharedString::from(MSG))
+            .child(SharedString::from(ANNOUNCEMENT))
             .into_any_element()
     }
 
     fn render_warning(&self, ix: usize, content: SharedString, cx: &Context<Self>) -> AnyElement {
         div()
             .id(ix)
-            .relative()
             .w_full()
             .py_2()
             .px_3()
             .child(
                 h_flex()
+                    .w_full()
                     .gap_3()
                     .text_sm()
                     .child(
@@ -679,22 +679,13 @@ impl ChatPanel {
                             .child(Icon::new(IconName::Warning).small()),
                     )
                     .child(
-                        h_flex()
+                        div()
                             .flex_1()
                             .w_full()
                             .flex_initial()
                             .overflow_hidden()
                             .child(content),
                     ),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .w(px(2.))
-                    .h_full()
-                    .bg(cx.theme().warning_active),
             )
             .into_any_element()
     }
@@ -1223,10 +1214,11 @@ impl ChatPanel {
                 (this.config().backup(), this.config().signer_kind().clone())
             })
             .ok()
-            .unwrap_or_default();
+            .unwrap_or((true, SignerKind::default()));
 
         Button::new("encryption")
-            .icon(IconName::Settings)
+            .icon(IconName::Settings2)
+            .tooltip("Configuration")
             .ghost()
             .large()
             .dropdown_menu(move |this, _window, _cx| {
