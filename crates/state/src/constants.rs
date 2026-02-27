@@ -13,7 +13,7 @@ pub const APP_ID: &str = "su.reya.coop";
 pub const KEYRING: &str = "Coop Safe Storage";
 
 /// Default timeout for subscription
-pub const TIMEOUT: u64 = 3;
+pub const TIMEOUT: u64 = 2;
 
 /// Default delay for searching
 pub const FIND_DELAY: u64 = 600;
@@ -37,12 +37,13 @@ pub const USER_GIFTWRAP: &str = "user-gift-wraps";
 pub const WOT_RELAYS: [&str; 1] = ["wss://relay.vertexlab.io"];
 
 /// Default search relays
-pub const SEARCH_RELAYS: [&str; 1] = ["wss://antiprimal.net"];
+pub const SEARCH_RELAYS: [&str; 2] = ["wss://antiprimal.net", "wss://search.nos.today"];
 
 /// Default bootstrap relays
-pub const BOOTSTRAP_RELAYS: [&str; 3] = [
-    "wss://relay.damus.io",
+pub const BOOTSTRAP_RELAYS: [&str; 4] = [
     "wss://nos.lol",
+    "wss://relay.damus.io",
+    "wss://relay.primal.net",
     "wss://user.kindpag.es",
 ];
 

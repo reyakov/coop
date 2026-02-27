@@ -67,7 +67,7 @@ pub struct RelayAuth {
     pending_events: HashSet<(EventId, RelayUrl)>,
 
     /// Tasks for asynchronous operations
-    tasks: SmallVec<[Task<()>; 2]>,
+    _tasks: SmallVec<[Task<()>; 2]>,
 }
 
 impl RelayAuth {
@@ -83,26 +83,15 @@ impl RelayAuth {
 
     /// Create a new relay auth instance
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        cx.defer_in(window, |this, window, cx| {
-            this.handle_notifications(window, cx);
-        });
-
-        Self {
-            pending_events: HashSet::default(),
-            tasks: smallvec![],
-        }
-    }
-
-    /// Handle nostr notifications
-    fn handle_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
+
+        let mut tasks = smallvec![];
 
         // Channel for communication between nostr and gpui
         let (tx, rx) = flume::bounded::<Signal>(256);
 
-        self.tasks.push(cx.background_spawn(async move {
-            log::info!("Started handling nostr notifications");
+        tasks.push(cx.background_spawn(async move {
             let mut notifications = client.notifications();
             let mut challenges: HashSet<Cow<'_, str>> = HashSet::default();
 
@@ -115,6 +104,22 @@ impl RelayAuth {
                                 let signal = Signal::Auth(request);
 
                                 tx.send_async(signal).await.ok();
+                            }
+                        }
+                        RelayMessage::Closed {
+                            subscription_id,
+                            message,
+                        } => {
+                            let msg = MachineReadablePrefix::parse(&message);
+
+                            if let Some(MachineReadablePrefix::AuthRequired) = msg {
+                                if let Ok(Some(relay)) = client.relay(&relay_url).await {
+                                    // Send close message to relay
+                                    relay
+                                        .send_msg(ClientMessage::Close(subscription_id))
+                                        .await
+                                        .ok();
+                                }
                             }
                         }
                         RelayMessage::Ok {
@@ -134,7 +139,7 @@ impl RelayAuth {
             }
         }));
 
-        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+        tasks.push(cx.spawn_in(window, async move |this, cx| {
             while let Ok(signal) = rx.recv_async().await {
                 match signal {
                     Signal::Auth(req) => {
@@ -152,6 +157,11 @@ impl RelayAuth {
                 }
             }
         }));
+
+        Self {
+            pending_events: HashSet::default(),
+            _tasks: tasks,
+        }
     }
 
     /// Insert a pending event waiting for resend after authentication
@@ -162,15 +172,12 @@ impl RelayAuth {
 
     /// Get all pending events for a specific relay,
     fn get_pending_events(&self, relay: &RelayUrl, _cx: &App) -> Vec<EventId> {
-        let pending_events: Vec<EventId> = self
-            .pending_events
+        self.pending_events
             .iter()
             .filter(|(_, pending_relay)| pending_relay == relay)
             .map(|(id, _relay)| id)
             .cloned()
-            .collect();
-
-        pending_events
+            .collect()
     }
 
     /// Clear all pending events for a specific relay,
@@ -282,10 +289,12 @@ impl RelayAuth {
                     Ok(_) => {
                         // Clear pending events for the authenticated relay
                         this.clear_pending_events(url, cx);
+
                         // Save the authenticated relay to automatically authenticate future requests
                         settings.update(cx, |this, cx| {
                             this.add_trusted_relay(url, cx);
                         });
+
                         window.push_notification(format!("{} has been authenticated", url), cx);
                     }
                     Err(e) => {

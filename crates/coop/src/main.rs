@@ -79,16 +79,14 @@ fn main() {
                     // Initialize theme registry
                     theme::init(cx);
 
+                    // Initialize settings
+                    settings::init(window, cx);
+
                     // Initialize the nostr client
                     state::init(window, cx);
 
-                    // Initialize device signer
-                    //
-                    // NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
-                    device::init(window, cx);
-
-                    // Initialize settings
-                    settings::init(window, cx);
+                    // Initialize person registry
+                    person::init(cx);
 
                     // Initialize relay auth registry
                     relay_auth::init(window, cx);
@@ -96,8 +94,10 @@ fn main() {
                     // Initialize app registry
                     chat::init(window, cx);
 
-                    // Initialize person registry
-                    person::init(cx);
+                    // Initialize device signer
+                    //
+                    // NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
+                    device::init(window, cx);
 
                     // Initialize auto update
                     auto_update::init(window, cx);

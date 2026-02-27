@@ -336,68 +336,65 @@ impl Room {
             }
 
             let client = nostr.read(cx).client();
-            let write_relays = nostr.read(cx).write_relays(&member, cx);
+            let ensure_write_relays = nostr.read(cx).ensure_write_relays(&member, cx);
 
-            tasks.insert(
-                member,
-                cx.background_spawn(async move {
-                    let urls = write_relays.await;
+            let task = cx.background_spawn(async move {
+                let mut has_inbox = false;
+                let mut has_announcement = false;
 
-                    // Return if no relays are available
-                    if urls.is_empty() {
-                        return Err(anyhow!(
-                            "User has not set up any relays. You cannot send messages to them."
-                        ));
+                // Get user's write relays
+                let urls = ensure_write_relays.await;
+
+                // Return if no relays are available
+                if urls.is_empty() {
+                    return Err(anyhow!(
+                        "User has not set up any relays. You cannot send messages to them."
+                    ));
+                }
+
+                // Construct filters for inbox relays
+                let inbox = Filter::new()
+                    .kind(Kind::InboxRelays)
+                    .author(member)
+                    .limit(1);
+
+                // Construct filters for announcement
+                let announcement = Filter::new()
+                    .kind(Kind::Custom(10044))
+                    .author(member)
+                    .limit(1);
+
+                // Create subscription targets
+                let target: HashMap<RelayUrl, Vec<Filter>> = urls
+                    .into_iter()
+                    .map(|relay| (relay, vec![inbox.clone(), announcement.clone()]))
+                    .collect();
+
+                // Stream events from user's write relays
+                let mut stream = client
+                    .stream_events(target)
+                    .timeout(Duration::from_secs(TIMEOUT))
+                    .await?;
+
+                while let Some((_url, res)) = stream.next().await {
+                    let event = res?;
+
+                    match event.kind {
+                        Kind::InboxRelays => has_inbox = true,
+                        Kind::Custom(10044) => has_announcement = true,
+                        _ => {}
                     }
 
-                    // Construct filters for inbox and announcement
-                    let inbox_filter = Filter::new()
-                        .kind(Kind::InboxRelays)
-                        .author(member)
-                        .limit(1);
-                    let announcement_filter = Filter::new()
-                        .kind(Kind::Custom(10044))
-                        .author(member)
-                        .limit(1);
-
-                    // Create subscription targets
-                    let target = urls
-                        .into_iter()
-                        .map(|relay| {
-                            (
-                                relay,
-                                vec![inbox_filter.clone(), announcement_filter.clone()],
-                            )
-                        })
-                        .collect::<HashMap<_, _>>();
-
-                    // Stream events from user's write relays
-                    let mut stream = client
-                        .stream_events(target)
-                        .timeout(Duration::from_secs(TIMEOUT))
-                        .await?;
-
-                    let mut has_inbox = false;
-                    let mut has_announcement = false;
-
-                    while let Some((_url, res)) = stream.next().await {
-                        let event = res?;
-
-                        match event.kind {
-                            Kind::InboxRelays => has_inbox = true,
-                            Kind::Custom(10044) => has_announcement = true,
-                            _ => {}
-                        }
-
-                        // Early exit if both flags are found
-                        if has_inbox && has_announcement {
-                            break;
-                        }
+                    // Early exit if both flags are found
+                    if has_inbox && has_announcement {
+                        break;
                     }
+                }
 
-                    Ok((has_inbox, has_announcement))
-                }),
-            );
+                Ok((has_inbox, has_announcement))
+            });
+
+            tasks.insert(member, task);
         }
 
         tasks

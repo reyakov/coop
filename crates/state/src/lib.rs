@@ -146,10 +146,7 @@ impl NostrRegistry {
                     }
 
                     // Connect to all added relays
-                    client
-                        .connect()
-                        .and_wait(Duration::from_secs(TIMEOUT))
-                        .await;
+                    client.connect().and_wait(Duration::from_secs(5)).await;
                 })
                 .await;
 
@@ -250,6 +247,63 @@ impl NostrRegistry {
     /// Get all relays for a given public key without ensuring connections
     pub fn read_only_relays(&self, public_key: &PublicKey, cx: &App) -> Vec<SharedString> {
         self.gossip.read(cx).read_only_relays(public_key)
+    }
+
+    /// Ensure write relays for a given public key
+    pub fn ensure_write_relays(&self, public_key: &PublicKey, cx: &App) -> Task<Vec<RelayUrl>> {
+        let client = self.client();
+        let public_key = *public_key;
+
+        cx.background_spawn(async move {
+            let mut relays = vec![];
+
+            let filter = Filter::new()
+                .kind(Kind::RelayList)
+                .author(public_key)
+                .limit(1);
+
+            // Construct target for subscription
+            let target: HashMap<&str, Vec<Filter>> = BOOTSTRAP_RELAYS
+                .into_iter()
+                .map(|relay| (relay, vec![filter.clone()]))
+                .collect();
+
+            if let Ok(mut stream) = client
+                .stream_events(target)
+                .timeout(Duration::from_secs(TIMEOUT))
+                .await
+            {
+                while let Some((_url, res)) = stream.next().await {
+                    match res {
+                        Ok(event) => {
+                            // Extract relay urls
+                            relays.extend(nip65::extract_owned_relay_list(event).filter_map(
+                                |(url, metadata)| {
+                                    if metadata.is_none() || metadata == Some(RelayMetadata::Write)
+                                    {
+                                        Some(url)
+                                    } else {
+                                        None
+                                    }
+                                },
+                            ));
+
+                            // Ensure connections
+                            for url in relays.iter() {
+                                client.add_relay(url).and_connect().await.ok();
+                            }
+
+                            return relays;
+                        }
+                        Err(e) => {
+                            log::error!("Failed to receive relay list event: {e}");
+                        }
+                    }
+                }
+            }
+
+            relays
+        })
     }
 
     /// Get a list of write relays for a given public key
@@ -423,7 +477,6 @@ impl NostrRegistry {
             let event = EventBuilder::relay_list(relay_list).sign(&signer).await?;
             client
                 .send_event(&event)
-                .broadcast()
                 .ok_timeout(Duration::from_secs(TIMEOUT))
                 .await?;
 
@@ -447,7 +500,6 @@ impl NostrRegistry {
             let event = EventBuilder::contact_list(contacts).sign(&signer).await?;
             client
                 .send_event(&event)
-                .broadcast()
                 .ok_timeout(Duration::from_secs(TIMEOUT))
                 .ack_policy(AckPolicy::none())
                 .await?;
@@ -488,8 +540,17 @@ impl NostrRegistry {
         cx.notify();
     }
 
+    /// Set the state of the relay list
+    fn set_relay_state(&mut self, state: RelayState, cx: &mut Context<Self>) {
+        self.relay_list_state = state;
+        cx.notify();
+    }
+
     pub fn ensure_relay_list(&mut self, cx: &mut Context<Self>) {
         let task = self.verify_relay_list(cx);
+
+        // Set the state to idle before starting the task
+        self.set_relay_state(RelayState::default(), cx);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             let result = task.await?;
@@ -517,9 +578,15 @@ impl NostrRegistry {
                 .author(public_key)
                 .limit(1);
 
+            // Construct target for subscription
+            let target: HashMap<&str, Vec<Filter>> = BOOTSTRAP_RELAYS
+                .into_iter()
+                .map(|relay| (relay, vec![filter.clone()]))
+                .collect();
+
             // Stream events from the bootstrap relays
             let mut stream = client
-                .stream_events(filter)
+                .stream_events(target)
                 .timeout(Duration::from_secs(TIMEOUT))
                 .await?;
 
@@ -601,10 +668,10 @@ impl NostrRegistry {
                 .limit(1);
 
             // Construct target for subscription
-            let target = BOOTSTRAP_RELAYS
+            let target: HashMap<&str, Vec<Filter>> = BOOTSTRAP_RELAYS
                 .into_iter()
                 .map(|relay| (relay, vec![filter.clone()]))
-                .collect::<HashMap<_, _>>();
+                .collect();
 
             client.subscribe(target).close_on(opts).await?;
 
@@ -648,10 +715,10 @@ impl NostrRegistry {
                 .limit(FIND_LIMIT);
 
             // Construct target for subscription
-            let target = SEARCH_RELAYS
+            let target: HashMap<&str, Vec<Filter>> = SEARCH_RELAYS
                 .into_iter()
                 .map(|relay| (relay, vec![filter.clone()]))
-                .collect::<HashMap<_, _>>();
+                .collect();
 
             // Stream events from the search relays
             let mut stream = client
@@ -784,6 +851,10 @@ fn default_relay_list() -> Vec<(RelayUrl, Option<RelayMetadata>)> {
             RelayUrl::parse("wss://nos.lol").unwrap(),
             Some(RelayMetadata::Read),
         ),
+        (
+            RelayUrl::parse("wss://nostr.superfriends.online").unwrap(),
+            None,
+        ),
     ]
 }
 
@@ -791,6 +862,7 @@ fn default_messaging_relays() -> Vec<RelayUrl> {
     vec![
         RelayUrl::parse("wss://nos.lol").unwrap(),
         RelayUrl::parse("wss://nip17.com").unwrap(),
+        RelayUrl::parse("wss://relay.0xchat.com").unwrap(),
     ]
 }
 

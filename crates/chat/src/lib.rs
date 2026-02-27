@@ -122,6 +122,9 @@ impl ChatRegistry {
                     }
                     _ => {}
                 }
+
+                // Load rooms on every state change
+                this.get_rooms(cx);
             }),
         );
 
@@ -137,13 +140,8 @@ impl ChatRegistry {
 
         // Run at the end of the current cycle
         cx.defer_in(window, |this, _window, cx| {
-            // Load chat rooms
             this.get_rooms(cx);
-
-            // Handle nostr notifications
             this.handle_notifications(cx);
-
-            // Track unwrap gift wrap progress
             this.tracking(cx);
         });
 
@@ -248,7 +246,7 @@ impl ChatRegistry {
         let status = self.tracking_flag.clone();
 
         self.tasks.push(cx.background_spawn(async move {
-            let loop_duration = Duration::from_secs(10);
+            let loop_duration = Duration::from_secs(15);
 
             loop {
                 if status.load(Ordering::Acquire) {
