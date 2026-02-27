@@ -3,14 +3,14 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
-use anyhow::{anyhow, Error};
+use anyhow::Error;
 use common::EventUtils;
 use gpui::{App, AppContext, Context, EventEmitter, SharedString, Task};
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
 use settings::{RoomConfig, SignerKind};
-use state::{NostrRegistry, TIMEOUT};
+use state::{NostrRegistry, BOOTSTRAP_RELAYS, TIMEOUT};
 
 use crate::NewMessage;
 
@@ -153,7 +153,7 @@ impl From<&UnsignedEvent> for Room {
             subject,
             members,
             kind: RoomKind::default(),
-            config: RoomConfig::default(),
+            config: RoomConfig::new(),
         }
     }
 }
@@ -229,6 +229,12 @@ impl Room {
     /// Updates the signer kind config for the room
     pub fn set_signer_kind(&mut self, kind: &SignerKind, cx: &mut Context<Self>) {
         self.config.set_signer_kind(kind);
+        cx.notify();
+    }
+
+    /// Updates the backup config for the room
+    pub fn set_backup(&mut self, cx: &mut Context<Self>) {
+        self.config.toggle_backup();
         cx.notify();
     }
 
@@ -319,85 +325,53 @@ impl Room {
         cx.emit(RoomEvent::Reload);
     }
 
-    #[allow(clippy::type_complexity)]
     /// Get gossip relays for each member
-    pub fn connect(&self, cx: &App) -> HashMap<PublicKey, Task<Result<(bool, bool), Error>>> {
+    pub fn connect(&self, cx: &App) -> Task<Result<(), Error>> {
         let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
+        let sender = signer.public_key().unwrap();
 
-        let members = self.members();
-        let mut tasks = HashMap::new();
+        // Get room's id
+        let id = self.id;
 
-        for member in members.into_iter() {
-            // Skip if member is the current user
-            if member == public_key {
-                continue;
-            }
+        // Get all members, excluding the sender
+        let members: Vec<PublicKey> = self
+            .members
+            .iter()
+            .filter(|public_key| public_key != &&sender)
+            .copied()
+            .collect();
 
-            let client = nostr.read(cx).client();
-            let ensure_write_relays = nostr.read(cx).ensure_write_relays(&member, cx);
+        cx.background_spawn(async move {
+            let id = SubscriptionId::new(format!("room-{id}"));
+            let opts = SubscribeAutoCloseOptions::default()
+                .exit_policy(ReqExitPolicy::ExitOnEOSE)
+                .timeout(Some(Duration::from_secs(TIMEOUT)));
 
-            let task = cx.background_spawn(async move {
-                let mut has_inbox = false;
-                let mut has_announcement = false;
+            // Construct filters for each member
+            let filters: Vec<Filter> = members
+                .into_iter()
+                .map(|public_key| {
+                    Filter::new()
+                        .author(public_key)
+                        .kind(Kind::RelayList)
+                        .limit(1)
+                })
+                .collect();
 
-                // Get user's write relays
-                let urls = ensure_write_relays.await;
+            // Construct target for subscription
+            let target: HashMap<&str, Vec<Filter>> = BOOTSTRAP_RELAYS
+                .into_iter()
+                .map(|relay| (relay, filters.clone()))
+                .collect();
 
-                // Return if no relays are available
-                if urls.is_empty() {
-                    return Err(anyhow!(
-                        "User has not set up any relays. You cannot send messages to them."
-                    ));
-                }
+            // Subscribe to the target
+            client.subscribe(target).close_on(opts).with_id(id).await?;
 
-                // Construct filters for inbox relays
-                let inbox = Filter::new()
-                    .kind(Kind::InboxRelays)
-                    .author(member)
-                    .limit(1);
-
-                // Construct filters for announcement
-                let announcement = Filter::new()
-                    .kind(Kind::Custom(10044))
-                    .author(member)
-                    .limit(1);
-
-                // Create subscription targets
-                let target: HashMap<RelayUrl, Vec<Filter>> = urls
-                    .into_iter()
-                    .map(|relay| (relay, vec![inbox.clone(), announcement.clone()]))
-                    .collect();
-
-                // Stream events from user's write relays
-                let mut stream = client
-                    .stream_events(target)
-                    .timeout(Duration::from_secs(TIMEOUT))
-                    .await?;
-
-                while let Some((_url, res)) = stream.next().await {
-                    let event = res?;
-
-                    match event.kind {
-                        Kind::InboxRelays => has_inbox = true,
-                        Kind::Custom(10044) => has_announcement = true,
-                        _ => {}
-                    }
-
-                    // Early exit if both flags are found
-                    if has_inbox && has_announcement {
-                        break;
-                    }
-                }
-
-                Ok((has_inbox, has_announcement))
-            });
-
-            tasks.insert(member, task);
-        }
-
-        tasks
+            Ok(())
+        })
     }
 
     /// Get all messages belonging to the room
@@ -440,7 +414,7 @@ impl Room {
         // Get current user's public key
         let sender = nostr.read(cx).signer().public_key()?;
 
-        // Get all members
+        // Get all members, excluding the sender
         let members: Vec<Person> = self
             .members
             .iter()
@@ -567,7 +541,9 @@ impl Room {
                         reports.push(report);
                         sents += 1;
                     }
-                    Err(report) => reports.push(report),
+                    Err(report) => {
+                        reports.push(report);
+                    }
                 }
             }
 

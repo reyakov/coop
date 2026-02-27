@@ -168,14 +168,18 @@ impl NostrRegistry {
         // Channel for communication between nostr and gpui
         let (tx, rx) = flume::bounded::<Event>(2048);
 
-        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
+        self.tasks.push(cx.background_spawn(async move {
             // Handle nostr notifications
             let mut notifications = client.notifications();
             let mut processed_events = HashSet::new();
 
             while let Some(notification) = notifications.next().await {
                 if let ClientNotification::Message {
-                    message: RelayMessage::Event { event, .. },
+                    message:
+                        RelayMessage::Event {
+                            event,
+                            subscription_id,
+                        },
                     ..
                 } = notification
                 {
@@ -183,6 +187,9 @@ impl NostrRegistry {
                     if processed_events.insert(event.id) {
                         match event.kind {
                             Kind::RelayList => {
+                                if subscription_id.as_str().contains("room-") {
+                                    get_events_for_room(&client, &event).await.ok();
+                                }
                                 tx.send_async(event.into_owned()).await?;
                             }
                             Kind::InboxRelays => {
@@ -195,10 +202,7 @@ impl NostrRegistry {
             }
 
             Ok(())
-        });
-
-        // Run task in the background
-        task.detach();
+        }));
 
         self.tasks.push(cx.spawn(async move |_this, cx| {
             while let Ok(event) = rx.recv_async().await {
@@ -763,10 +767,10 @@ impl NostrRegistry {
                 .event(output.id().to_owned());
 
             // Construct target for subscription
-            let target = WOT_RELAYS
+            let target: HashMap<&str, Vec<Filter>> = WOT_RELAYS
                 .into_iter()
                 .map(|relay| (relay, vec![filter.clone()]))
-                .collect::<HashMap<_, _>>();
+                .collect();
 
             // Stream events from the wot relays
             let mut stream = client
@@ -831,6 +835,52 @@ fn get_or_init_app_keys() -> Result<Keys, Error> {
     let keys = Keys::new(secret_key);
 
     Ok(keys)
+}
+
+async fn get_events_for_room(client: &Client, nip65: &Event) -> Result<(), Error> {
+    // Subscription options
+    let opts = SubscribeAutoCloseOptions::default()
+        .timeout(Some(Duration::from_secs(TIMEOUT)))
+        .exit_policy(ReqExitPolicy::ExitOnEOSE);
+
+    // Extract write relays from event
+    let write_relays: Vec<&RelayUrl> = nip65::extract_relay_list(nip65)
+        .filter_map(|(url, metadata)| {
+            if metadata.is_none() || metadata == &Some(RelayMetadata::Write) {
+                Some(url)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Ensure relay connections
+    for url in write_relays.iter() {
+        client.add_relay(*url).and_connect().await.ok();
+    }
+
+    // Construct filter for inbox relays
+    let inbox = Filter::new()
+        .kind(Kind::InboxRelays)
+        .author(nip65.pubkey)
+        .limit(1);
+
+    // Construct filter for encryption announcement
+    let announcement = Filter::new()
+        .kind(Kind::Custom(10044))
+        .author(nip65.pubkey)
+        .limit(1);
+
+    // Construct target for subscription
+    let target: HashMap<&RelayUrl, Vec<Filter>> = write_relays
+        .into_iter()
+        .map(|relay| (relay, vec![inbox.clone(), announcement.clone()]))
+        .collect();
+
+    // Subscribe to inbox relays and encryption announcements
+    client.subscribe(target).close_on(opts).await?;
+
+    Ok(())
 }
 
 fn default_relay_list() -> Vec<(RelayUrl, Option<RelayMetadata>)> {

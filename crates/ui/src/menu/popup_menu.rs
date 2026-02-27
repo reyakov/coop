@@ -1026,7 +1026,7 @@ impl PopupMenu {
         } else if checked {
             Icon::new(IconName::Check)
         } else {
-            return None;
+            Icon::empty()
         };
 
         Some(icon.small())

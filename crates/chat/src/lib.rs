@@ -701,7 +701,7 @@ async fn try_unwrap(
 
     // Try with the user's signer
     let user_signer = client.signer().context("Signer not found")?;
-    let unwrapped = UnwrappedGift::from_gift_wrap(user_signer, gift_wrap).await?;
+    let unwrapped = try_unwrap_with(gift_wrap, user_signer).await?;
 
     Ok(unwrapped)
 }

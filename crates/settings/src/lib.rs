@@ -94,19 +94,26 @@ pub struct RoomConfig {
 }
 
 impl RoomConfig {
+    pub fn new() -> Self {
+        Self {
+            backup: true,
+            signer_kind: SignerKind::Auto,
+        }
+    }
+
     /// Get backup config
     pub fn backup(&self) -> bool {
         self.backup
     }
 
+    /// Set backup config
+    pub fn toggle_backup(&mut self) {
+        self.backup = !self.backup;
+    }
+
     /// Get signer kind config
     pub fn signer_kind(&self) -> &SignerKind {
         &self.signer_kind
-    }
-
-    /// Set backup config
-    pub fn set_backup(&mut self, backup: bool) {
-        self.backup = backup;
     }
 
     /// Set signer kind config

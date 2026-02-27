@@ -57,14 +57,8 @@ impl DeviceRegistry {
         subscriptions.push(
             // Observe the NIP-65 state
             cx.observe(&nostr, |this, state, cx| {
-                match state.read(cx).relay_list_state() {
-                    RelayState::Idle => {
-                        this.reset(cx);
-                    }
-                    RelayState::Configured => {
-                        this.get_announcement(cx);
-                    }
-                    _ => {}
+                if state.read(cx).relay_list_state() == RelayState::Configured {
+                    this.get_announcement(cx);
                 };
             }),
         );
@@ -255,6 +249,10 @@ impl DeviceRegistry {
         let signer = nostr.read(cx).signer();
         let public_key = signer.public_key().unwrap();
 
+        // Reset state before fetching announcement
+        self.reset(cx);
+
+        // Get user's write relays
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
         let task: Task<Result<Event, Error>> = cx.background_spawn(async move {
@@ -664,7 +662,8 @@ async fn get_keys(client: &Client) -> Result<Keys, Error> {
 
     let filter = Filter::new()
         .kind(Kind::ApplicationSpecificData)
-        .identifier(IDENTIFIER);
+        .identifier(IDENTIFIER)
+        .author(public_key);
 
     if let Some(event) = client.database().query(filter).await?.first() {
         let content = signer.nip44_decrypt(&public_key, &event.content).await?;

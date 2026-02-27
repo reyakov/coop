@@ -75,6 +75,11 @@ impl Person {
         self.metadata.clone()
     }
 
+    /// Set profile metadata
+    pub fn set_metadata(&mut self, metadata: Metadata) {
+        self.metadata = metadata;
+    }
+
     /// Get profile encryption keys announcement
     pub fn announcement(&self) -> Option<Announcement> {
         self.announcement.clone()
@@ -83,7 +88,6 @@ impl Person {
     /// Set profile encryption keys announcement
     pub fn set_announcement(&mut self, announcement: Announcement) {
         self.announcement = Some(announcement);
-        log::info!("Updated announcement for: {}", self.public_key());
     }
 
     /// Get profile messaging relays
@@ -102,7 +106,6 @@ impl Person {
         I: IntoIterator<Item = RelayUrl>,
     {
         self.messaging_relays = relays.into_iter().collect();
-        log::info!("Updated messaging relays for: {}", self.public_key());
     }
 
     /// Get profile avatar

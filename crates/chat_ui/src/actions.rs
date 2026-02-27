@@ -9,6 +9,7 @@ pub enum Command {
     Insert(&'static str),
     ChangeSubject(&'static str),
     ChangeSigner(SignerKind),
+    ToggleBackup,
 }
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]

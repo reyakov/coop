@@ -6,7 +6,8 @@ use common::RenderedTimestamp;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, px, relative, rems, uniform_list, App, AppContext, Context, Div, Entity,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
+    Task, Window,
 };
 use nostr_sdk::prelude::*;
 use person::{shorten_pubkey, Person, PersonRegistry};
@@ -41,10 +42,20 @@ pub struct Screening {
 
     /// Async tasks
     tasks: SmallVec<[Task<()>; 3]>,
+
+    /// Subscriptions
+    _subscriptions: SmallVec<[Subscription; 1]>,
 }
 
 impl Screening {
     pub fn new(public_key: PublicKey, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut subscriptions = smallvec![];
+
+        subscriptions.push(cx.on_release_in(window, move |this, window, cx| {
+            this.tasks.clear();
+            window.close_all_modals(cx);
+        }));
+
         cx.defer_in(window, move |this, _window, cx| {
             this.check_contact(cx);
             this.check_wot(cx);
@@ -59,6 +70,7 @@ impl Screening {
             last_active: None,
             mutual_contacts: vec![],
             tasks: smallvec![],
+            _subscriptions: subscriptions,
         }
     }
 
@@ -137,10 +149,10 @@ impl Screening {
             let mut activity: Option<Timestamp> = None;
 
             // Construct target for subscription
-            let target = BOOTSTRAP_RELAYS
+            let target: HashMap<&str, Vec<Filter>> = BOOTSTRAP_RELAYS
                 .into_iter()
                 .map(|relay| (relay, vec![filter.clone()]))
-                .collect::<HashMap<_, _>>();
+                .collect();
 
             if let Ok(mut stream) = client
                 .stream_events(target)
@@ -279,11 +291,21 @@ impl Screening {
 
 impl Render for Screening {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        const CONTACT: &str = "This person is one of your contacts.";
+        const NOT_CONTACT: &str = "This person is not one of your contacts.";
+        const NO_ACTIVITY: &str = "This person hasn't had any activity.";
+        const RELAY_INFO: &str = "Only checked on public relays; may be inaccurate.";
+        const NO_MUTUAL: &str = "You don't have any mutual contacts.";
+        const NIP05_MATCH: &str = "The address matches the user's public key.";
+        const NIP05_NOT_MATCH: &str = "The address does not match the user's public key.";
+        const NO_NIP05: &str = "This person has not set up their friendly address";
+
         let profile = self.profile(cx);
         let shorten_pubkey = shorten_pubkey(self.public_key, 8);
 
-        let total_mutuals = self.mutual_contacts.len();
         let last_active = self.last_active.map(|_| true);
+        let mutuals = self.mutual_contacts.len();
+        let mutuals_str = format!("You have {} mutual contacts with this person.", mutuals);
 
         v_flex()
             .gap_4()
@@ -336,6 +358,7 @@ impl Render for Screening {
                                 Button::new("report")
                                     .tooltip("Report as a scam or impostor")
                                     .icon(IconName::Boom)
+                                    .small()
                                     .danger()
                                     .rounded()
                                     .on_click(cx.listener(move |this, _e, window, cx| {
@@ -363,9 +386,9 @@ impl Render for Screening {
                                             .text_color(cx.theme().text_muted)
                                             .child({
                                                 if self.followed {
-                                                    SharedString::from("This person is one of your contacts.")
+                                                    SharedString::from(CONTACT)
                                                 } else {
-                                                    SharedString::from("This person is not one of your contacts.")
+                                                    SharedString::from(NOT_CONTACT)
                                                 }
                                             }),
                                     ),
@@ -390,7 +413,7 @@ impl Render for Screening {
                                                     .xsmall()
                                                     .ghost()
                                                     .rounded()
-                                                    .tooltip("This may be inaccurate if the user only publishes to their private relays."),
+                                                    .tooltip(RELAY_INFO),
                                             ),
                                     )
                                     .child(
@@ -399,13 +422,13 @@ impl Render for Screening {
                                             .line_clamp(1)
                                             .text_color(cx.theme().text_muted)
                                             .map(|this| {
-                                                if let Some(date) = self.last_active {
+                                                if let Some(t) = self.last_active {
                                                     this.child(SharedString::from(format!(
                                                         "Last active: {}.",
-                                                        date.to_human_time()
+                                                        t.to_human_time()
                                                     )))
                                                 } else {
-                                                    this.child(SharedString::from("This person hasn't had any activity."))
+                                                    this.child(SharedString::from(NO_ACTIVITY))
                                                 }
                                             }),
                                     ),
@@ -423,7 +446,9 @@ impl Render for Screening {
                                         if let Some(addr) = self.address(cx) {
                                             SharedString::from(format!("{} validation", addr))
                                         } else {
-                                            SharedString::from("Friendly Address (NIP-05) validation")
+                                            SharedString::from(
+                                                "Friendly Address (NIP-05) validation",
+                                            )
                                         }
                                     })
                                     .child(
@@ -433,12 +458,12 @@ impl Render for Screening {
                                             .child({
                                                 if self.address(cx).is_some() {
                                                     if self.verified {
-                                                        SharedString::from("The address matches the user's public key.")
+                                                        SharedString::from(NIP05_MATCH)
                                                     } else {
-                                                        SharedString::from("The address does not match the user's public key.")
+                                                        SharedString::from(NIP05_NOT_MATCH)
                                                     }
                                                 } else {
-                                                    SharedString::from("This person has not set up their friendly address")
+                                                    SharedString::from(NO_NIP05)
                                                 }
                                             }),
                                     ),
@@ -448,7 +473,7 @@ impl Render for Screening {
                         h_flex()
                             .items_start()
                             .gap_2()
-                            .child(status_badge(Some(total_mutuals > 0), cx))
+                            .child(status_badge(Some(mutuals > 0), cx))
                             .child(
                                 v_flex()
                                     .text_sm()
@@ -474,13 +499,10 @@ impl Render for Screening {
                                             .line_clamp(1)
                                             .text_color(cx.theme().text_muted)
                                             .child({
-                                                if total_mutuals > 0 {
-                                                    SharedString::from(format!(
-                                                        "You have {} mutual contacts with this person.",
-                                                        total_mutuals
-                                                    ))
+                                                if mutuals > 0 {
+                                                    SharedString::from(mutuals_str)
                                                 } else {
-                                                    SharedString::from("You don't have any mutual contacts with this person.")
+                                                    SharedString::from(NO_MUTUAL)
                                                 }
                                             }),
                                     ),

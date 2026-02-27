@@ -253,7 +253,7 @@ impl PersonRegistry {
         match self.persons.get(&public_key) {
             Some(this) => {
                 this.update(cx, |this, cx| {
-                    *this = person;
+                    this.set_metadata(person.metadata());
                     cx.notify();
                 });
             }
@@ -313,10 +313,10 @@ where
         .limit(limit);
 
     // Construct target for subscription
-    let target = BOOTSTRAP_RELAYS
+    let target: HashMap<&str, Vec<Filter>> = BOOTSTRAP_RELAYS
         .into_iter()
         .map(|relay| (relay, vec![filter.clone()]))
-        .collect::<HashMap<_, _>>();
+        .collect();
 
     client.subscribe(target).close_on(opts).await?;
 
