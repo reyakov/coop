@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use ::settings::AppSettings;
 use chat::{ChatEvent, ChatRegistry, InboxState};
+use device::DeviceRegistry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, px, Action, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement,
@@ -19,13 +20,19 @@ use ui::dock_area::dock::DockPlacement;
 use ui::dock_area::panel::PanelView;
 use ui::dock_area::{ClosePanel, DockArea, DockItem};
 use ui::menu::{DropdownMenu, PopupMenuItem};
+use ui::notification::Notification;
 use ui::{h_flex, v_flex, IconName, Root, Sizable, WindowExtension};
 
 use crate::dialogs::settings;
-use crate::panels::{
-    backup, contact_list, encryption_key, greeter, messaging_relays, profile, relay_list,
-};
+use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list};
 use crate::sidebar;
+
+const ENC_MSG: &str =
+    "Encryption Key is a special key that used to encrypt and decrypt your messages. \
+     Your identity is completely decoupled from all encryption processes to protect your privacy.";
+
+const ENC_WARN: &str = "By resetting your encryption key, you will lose access to \
+                        all your encrypted messages before. This action cannot be undone.";
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Workspace> {
     cx.new(|cx| Workspace::new(window, cx))
@@ -36,12 +43,13 @@ pub fn init(window: &mut Window, cx: &mut App) -> Entity<Workspace> {
 enum Command {
     ToggleTheme,
 
+    RefreshEncryption,
     RefreshRelayList,
     RefreshMessagingRelays,
+    ResetEncryption,
 
     ShowRelayList,
     ShowMessaging,
-    ShowEncryption,
     ShowProfile,
     ShowSettings,
     ShowBackup,
@@ -238,21 +246,6 @@ impl Workspace {
                     );
                 });
             }
-            Command::ShowEncryption => {
-                let nostr = NostrRegistry::global(cx);
-                let signer = nostr.read(cx).signer();
-
-                if let Some(public_key) = signer.public_key() {
-                    self.dock.update(cx, |this, cx| {
-                        this.add_panel(
-                            Arc::new(encryption_key::init(public_key, window, cx)),
-                            DockPlacement::Right,
-                            window,
-                            cx,
-                        );
-                    });
-                }
-            }
             Command::ShowMessaging => {
                 self.dock.update(cx, |this, cx| {
                     this.add_panel(
@@ -273,11 +266,20 @@ impl Workspace {
                     );
                 });
             }
+            Command::RefreshEncryption => {
+                let device = DeviceRegistry::global(cx);
+                device.update(cx, |this, cx| {
+                    this.get_announcement(cx);
+                });
+            }
             Command::RefreshRelayList => {
                 let nostr = NostrRegistry::global(cx);
                 nostr.update(cx, |this, cx| {
                     this.ensure_relay_list(cx);
                 });
+            }
+            Command::ResetEncryption => {
+                self.confirm_reset_encryption(window, cx);
             }
             Command::RefreshMessagingRelays => {
                 let chat = ChatRegistry::global(cx);
@@ -289,6 +291,54 @@ impl Workspace {
                 self.theme_selector(window, cx);
             }
         }
+    }
+
+    fn confirm_reset_encryption(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        window.open_modal(cx, |this, _window, cx| {
+            this.confirm()
+                .show_close(true)
+                .title("Reset Encryption Keys")
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .text_sm()
+                        .child(SharedString::from(ENC_MSG))
+                        .child(
+                            div()
+                                .italic()
+                                .text_color(cx.theme().warning_active)
+                                .child(SharedString::from(ENC_WARN)),
+                        ),
+                )
+                .on_ok(move |_ev, window, cx| {
+                    let device = DeviceRegistry::global(cx);
+                    let task = device.read(cx).create_encryption(cx);
+
+                    window
+                        .spawn(cx, async move |cx| {
+                            let result = task.await;
+
+                            cx.update(|window, cx| match result {
+                                Ok(keys) => {
+                                    device.update(cx, |this, cx| {
+                                        this.set_signer(keys, cx);
+                                        this.listen_request(cx);
+                                    });
+                                    window.close_modal(cx);
+                                }
+                                Err(e) => {
+                                    window
+                                        .push_notification(Notification::error(e.to_string()), cx);
+                                }
+                            })
+                            .ok();
+                        })
+                        .detach();
+
+                    // false to keep modal open
+                    false
+                })
+        });
     }
 
     fn theme_selector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -471,8 +521,39 @@ impl Workspace {
                     .tooltip("Decoupled encryption key")
                     .small()
                     .ghost()
-                    .on_click(|_ev, window, cx| {
-                        window.dispatch_action(Box::new(Command::ShowEncryption), cx);
+                    .dropdown_menu(move |this, _window, cx| {
+                        let device = DeviceRegistry::global(cx);
+                        let state = device.read(cx).state();
+
+                        this.min_w(px(260.))
+                            .item(PopupMenuItem::element(move |_window, _cx| {
+                                h_flex()
+                                    .px_1()
+                                    .w_full()
+                                    .gap_2()
+                                    .text_sm()
+                                    .child(
+                                        div()
+                                            .size_1p5()
+                                            .rounded_full()
+                                            .when(state.set(), |this| this.bg(gpui::green()))
+                                            .when(state.requesting(), |this| {
+                                                this.bg(gpui::yellow())
+                                            }),
+                                    )
+                                    .child(SharedString::from(state.to_string()))
+                            }))
+                            .separator()
+                            .menu_with_icon(
+                                "Reload",
+                                IconName::Refresh,
+                                Box::new(Command::RefreshEncryption),
+                            )
+                            .menu_with_icon(
+                                "Reset",
+                                IconName::Warning,
+                                Box::new(Command::ResetEncryption),
+                            )
                     }),
             )
             .child(

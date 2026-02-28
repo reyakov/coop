@@ -343,8 +343,8 @@ impl RelayAuth {
                             .px_1p5()
                             .rounded_sm()
                             .text_xs()
-                            .bg(cx.theme().warning_background)
-                            .text_color(cx.theme().warning_foreground)
+                            .bg(cx.theme().elevated_surface_background)
+                            .text_color(cx.theme().text_accent)
                             .child(url.clone()),
                     )
                     .into_any_element()
@@ -361,11 +361,9 @@ impl RelayAuth {
                     .disabled(loading.get())
                     .on_click({
                         let loading = Rc::clone(&loading);
-
                         move |_ev, window, cx| {
                             // Set loading state to true
                             loading.set(true);
-
                             // Process to approve the request
                             view.update(cx, |this, cx| {
                                 this.response(&req, window, cx);

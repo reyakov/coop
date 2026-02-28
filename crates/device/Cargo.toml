@@ -8,6 +8,8 @@ publish.workspace = true
 common = { path = "../common" }
 state = { path = "../state" }
 person = { path = "../person" }
+ui = { path = "../ui" }
+theme = { path = "../theme" }
 
 gpui.workspace = true
 nostr-sdk.workspace = true

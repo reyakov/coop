@@ -1,7 +1,6 @@
 pub mod backup;
 pub mod connect;
 pub mod contact_list;
-pub mod encryption_key;
 pub mod greeter;
 pub mod import;
 pub mod messaging_relays;

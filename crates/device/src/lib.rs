@@ -1,16 +1,28 @@
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context as AnyhowContext, Error};
-use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task, Window};
+use gpui::{
+    div, App, AppContext, Context, Entity, Global, IntoElement, ParentElement, SharedString,
+    Styled, Subscription, Task, Window,
+};
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use smallvec::{smallvec, SmallVec};
 use state::{
     app_name, Announcement, DeviceState, NostrRegistry, RelayState, DEVICE_GIFTWRAP, TIMEOUT,
 };
+use theme::ActiveTheme;
+use ui::avatar::Avatar;
+use ui::button::{Button, ButtonVariants};
+use ui::notification::Notification;
+use ui::{h_flex, v_flex, Disableable, IconName, Sizable, WindowExtension};
 
 const IDENTIFIER: &str = "coop:device";
+const MSG: &str = "You've requested an encryption key from another device. \
+                   Approve to allow Coop to share with it.";
 
 pub fn init(window: &mut Window, cx: &mut App) {
     DeviceRegistry::set_global(cx.new(|cx| DeviceRegistry::new(window, cx)), cx);
@@ -25,9 +37,6 @@ impl Global for GlobalDeviceRegistry {}
 /// NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
 #[derive(Debug)]
 pub struct DeviceRegistry {
-    /// Request for encryption key from other devices
-    pub requests: Vec<Event>,
-
     /// Device state
     state: DeviceState,
 
@@ -64,19 +73,18 @@ impl DeviceRegistry {
         );
 
         // Run at the end of current cycle
-        cx.defer_in(window, |this, _window, cx| {
-            this.handle_notifications(cx);
+        cx.defer_in(window, |this, window, cx| {
+            this.handle_notifications(window, cx);
         });
 
         Self {
-            requests: vec![],
             state: DeviceState::default(),
             tasks: vec![],
             _subscriptions: subscriptions,
         }
     }
 
-    fn handle_notifications(&mut self, cx: &mut Context<Self>) {
+    fn handle_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let (tx, rx) = flume::bounded::<Event>(100);
@@ -117,17 +125,19 @@ impl DeviceRegistry {
 
         self.tasks.push(
             // Update GPUI states
-            cx.spawn(async move |this, cx| {
+            cx.spawn_in(window, async move |this, cx| {
                 while let Ok(event) = rx.recv_async().await {
                     match event.kind {
+                        // New request event
                         Kind::Custom(4454) => {
-                            this.update(cx, |this, cx| {
-                                this.add_request(event, cx);
+                            this.update_in(cx, |this, window, cx| {
+                                this.ask_for_approval(event, window, cx);
                             })?;
                         }
+                        // New response event
                         Kind::Custom(4455) => {
                             this.update(cx, |this, cx| {
-                                this.parse_response(event, cx);
+                                this.extract_encryption(event, cx);
                             })?;
                         }
                         _ => {}
@@ -151,7 +161,7 @@ impl DeviceRegistry {
     }
 
     /// Set the decoupled encryption key for the current user
-    fn set_signer<S>(&mut self, new: S, cx: &mut Context<Self>)
+    pub fn set_signer<S>(&mut self, new: S, cx: &mut Context<Self>)
     where
         S: NostrSigner + 'static,
     {
@@ -174,25 +184,7 @@ impl DeviceRegistry {
     /// Reset the device state
     fn reset(&mut self, cx: &mut Context<Self>) {
         self.state = DeviceState::Idle;
-        self.requests.clear();
         cx.notify();
-    }
-
-    /// Add a request for device keys
-    fn add_request(&mut self, request: Event, cx: &mut Context<Self>) {
-        self.requests.push(request);
-        cx.notify();
-    }
-
-    /// Remove a request for device keys
-    pub fn remove_request(&mut self, id: &EventId, cx: &mut Context<Self>) {
-        self.requests.retain(|r| r.id != *id);
-        cx.notify();
-    }
-
-    /// Check if there are any pending requests
-    pub fn has_requests(&self) -> bool {
-        !self.requests.is_empty()
     }
 
     /// Get all messages for encryption keys
@@ -242,7 +234,7 @@ impl DeviceRegistry {
     }
 
     /// Get device announcement for current user
-    fn get_announcement(&mut self, cx: &mut Context<Self>) {
+    pub fn get_announcement(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -307,8 +299,8 @@ impl DeviceRegistry {
         }));
     }
 
-    /// Create a new device signer and announce it
-    fn announce(&mut self, cx: &mut Context<Self>) {
+    /// Create new encryption keys
+    pub fn create_encryption(&self, cx: &App) -> Task<Result<Keys, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -323,7 +315,7 @@ impl DeviceRegistry {
         let secret = keys.secret_key().to_secret_hex();
         let n = keys.public_key();
 
-        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
+        cx.background_spawn(async move {
             let urls = write_relays.await;
 
             // Construct an announcement event
@@ -340,23 +332,29 @@ impl DeviceRegistry {
             // Save device keys to the database
             set_keys(&client, &secret).await?;
 
-            Ok(())
-        });
+            Ok(keys)
+        })
+    }
+
+    /// Create a new device signer and announce it
+    fn announce(&mut self, cx: &mut Context<Self>) {
+        let task = self.create_encryption(cx);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            if task.await.is_ok() {
-                this.update(cx, |this, cx| {
-                    this.set_signer(keys, cx);
-                    this.listen_request(cx);
-                })?;
-            }
+            let keys = task.await?;
+
+            // Update signer
+            this.update(cx, |this, cx| {
+                this.set_signer(keys, cx);
+                this.listen_request(cx);
+            })?;
 
             Ok(())
         }));
     }
 
     /// Initialize device signer (decoupled encryption key) for the current user
-    fn new_signer(&mut self, event: &Event, cx: &mut Context<Self>) {
+    pub fn new_signer(&mut self, event: &Event, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -375,31 +373,29 @@ impl DeviceRegistry {
             }
         });
 
-        cx.spawn(async move |this, cx| {
+        self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
                 Ok(keys) => {
                     this.update(cx, |this, cx| {
                         this.set_signer(keys, cx);
                         this.listen_request(cx);
-                    })
-                    .ok();
+                    })?;
                 }
                 Err(e) => {
+                    log::warn!("Failed to initialize device signer: {e}");
                     this.update(cx, |this, cx| {
                         this.request(cx);
                         this.listen_approval(cx);
-                    })
-                    .ok();
-
-                    log::warn!("Failed to initialize device signer: {e}");
+                    })?;
                 }
             };
-        })
-        .detach();
+
+            Ok(())
+        }));
     }
 
     /// Listen for device key requests on user's write relays
-    fn listen_request(&mut self, cx: &mut Context<Self>) {
+    pub fn listen_request(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -518,30 +514,29 @@ impl DeviceRegistry {
             }
         });
 
-        cx.spawn(async move |this, cx| {
+        self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
                 Ok(Some(keys)) => {
                     this.update(cx, |this, cx| {
                         this.set_signer(keys, cx);
-                    })
-                    .ok();
+                    })?;
                 }
                 Ok(None) => {
                     this.update(cx, |this, cx| {
                         this.set_state(DeviceState::Requesting, cx);
-                    })
-                    .ok();
+                    })?;
                 }
                 Err(e) => {
                     log::error!("Failed to request the encryption key: {e}");
                 }
             };
-        })
-        .detach();
+
+            Ok(())
+        }));
     }
 
     /// Parse the response event for device keys from other devices
-    fn parse_response(&mut self, event: Event, cx: &mut Context<Self>) {
+    fn extract_encryption(&mut self, event: Event, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let app_keys = nostr.read(cx).app_keys().clone();
 
@@ -575,7 +570,7 @@ impl DeviceRegistry {
     }
 
     /// Approve requests for device keys from other devices
-    pub fn approve(&self, event: &Event, cx: &App) -> Task<Result<(), Error>> {
+    fn approve(&mut self, event: &Event, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -586,8 +581,9 @@ impl DeviceRegistry {
         // Get user's write relays
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
         let event = event.clone();
+        let id: SharedString = event.id.to_hex().into();
 
-        cx.background_spawn(async move {
+        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             let urls = write_relays.await;
 
             // Get device keys
@@ -609,18 +605,145 @@ impl DeviceRegistry {
             //
             // P tag: the current device's public key
             // p tag: the requester's public key
-            let event = client
-                .sign_event_builder(EventBuilder::new(Kind::Custom(4455), payload).tags(vec![
-                    Tag::custom(TagKind::custom("P"), vec![keys.public_key()]),
-                    Tag::public_key(target),
-                ]))
-                .await?;
+            let builder = EventBuilder::new(Kind::Custom(4455), payload).tags(vec![
+                Tag::custom(TagKind::custom("P"), vec![keys.public_key()]),
+                Tag::public_key(target),
+            ]);
+
+            // Sign the builder
+            let event = client.sign_event_builder(builder).await?;
 
             // Send the response event to the user's relay list
             client.send_event(&event).to(urls).await?;
 
             Ok(())
+        });
+
+        cx.spawn_in(window, async move |_this, cx| {
+            match task.await {
+                Ok(_) => {
+                    cx.update(|window, cx| {
+                        window.clear_notification(id, cx);
+                    })
+                    .ok();
+                }
+                Err(e) => {
+                    cx.update(|window, cx| {
+                        window.push_notification(Notification::error(e.to_string()), cx);
+                    })
+                    .ok();
+                }
+            };
         })
+        .detach();
+    }
+
+    /// Handle encryption request
+    fn ask_for_approval(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
+        let notification = self.notification(event, cx);
+
+        cx.spawn_in(window, async move |_this, cx| {
+            cx.update(|window, cx| {
+                window.push_notification(notification, cx);
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Build a notification for the encryption request.
+    fn notification(&self, event: Event, cx: &Context<Self>) -> Notification {
+        let request = Announcement::from(&event);
+        let persons = PersonRegistry::global(cx);
+        let profile = persons.read(cx).get(&request.public_key(), cx);
+
+        let entity = cx.entity().downgrade();
+        let loading = Rc::new(Cell::new(false));
+
+        Notification::new()
+            .custom_id(SharedString::from(event.id.to_hex()))
+            .autohide(false)
+            .icon(IconName::UserKey)
+            .title(SharedString::from("New request"))
+            .content(move |_window, cx| {
+                v_flex()
+                    .gap_2()
+                    .text_sm()
+                    .child(SharedString::from(MSG))
+                    .child(
+                        v_flex()
+                            .gap_2()
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .text_sm()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().text_muted)
+                                            .child(SharedString::from("Requester:")),
+                                    )
+                                    .child(
+                                        div()
+                                            .h_7()
+                                            .w_full()
+                                            .px_2()
+                                            .rounded(cx.theme().radius)
+                                            .bg(cx.theme().elevated_surface_background)
+                                            .child(
+                                                h_flex()
+                                                    .gap_2()
+                                                    .child(Avatar::new(profile.avatar()).xsmall())
+                                                    .child(profile.name()),
+                                            ),
+                                    ),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_1()
+                                    .text_sm()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().text_muted)
+                                            .child(SharedString::from("Client:")),
+                                    )
+                                    .child(
+                                        div()
+                                            .h_7()
+                                            .w_full()
+                                            .px_2()
+                                            .rounded(cx.theme().radius)
+                                            .bg(cx.theme().elevated_surface_background)
+                                            .child(request.client_name()),
+                                    ),
+                            ),
+                    )
+                    .into_any_element()
+            })
+            .action(move |_window, _cx| {
+                let view = entity.clone();
+                let event = event.clone();
+
+                Button::new("approve")
+                    .label("Approve")
+                    .small()
+                    .primary()
+                    .loading(loading.get())
+                    .disabled(loading.get())
+                    .on_click({
+                        let loading = Rc::clone(&loading);
+                        move |_ev, window, cx| {
+                            // Set loading state to true
+                            loading.set(true);
+                            // Process to approve the request
+                            view.update(cx, |this, cx| {
+                                this.approve(&event, window, cx);
+                            })
+                            .ok();
+                        }
+                    })
+            })
     }
 }
 

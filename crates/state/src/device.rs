@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use gpui::SharedString;
 use nostr_sdk::prelude::*;
 
@@ -7,6 +9,16 @@ pub enum DeviceState {
     Idle,
     Requesting,
     Set,
+}
+
+impl Display for DeviceState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeviceState::Idle => write!(f, "Idle"),
+            DeviceState::Requesting => write!(f, "Wait for approval"),
+            DeviceState::Set => write!(f, "Encryption Key is ready"),
+        }
+    }
 }
 
 impl DeviceState {
