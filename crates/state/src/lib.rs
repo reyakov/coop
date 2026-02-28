@@ -51,6 +51,9 @@ pub struct NostrRegistry {
     /// Nostr signer
     signer: Arc<CoopSigner>,
 
+    /// Local public keys
+    npubs: Entity<HashSet<PublicKey>>,
+
     /// App keys
     ///
     /// Used for Nostr Connect and NIP-4e operations
@@ -89,6 +92,9 @@ impl NostrRegistry {
         let app_keys = get_or_init_app_keys().unwrap_or(Keys::generate());
         let signer = Arc::new(CoopSigner::new(app_keys.clone()));
 
+        // Construct the nostr npubs entity
+        let npubs = cx.new(|_| HashSet::new());
+
         // Construct the gossip entity
         let gossip = cx.new(|_| Gossip::default());
 
@@ -115,11 +121,13 @@ impl NostrRegistry {
         cx.defer_in(window, |this, _window, cx| {
             this.connect(cx);
             this.handle_notifications(cx);
+            this.get_npubs(cx);
         });
 
         Self {
             client,
             signer,
+            npubs,
             app_keys,
             gossip,
             relay_list_state: RelayState::Idle,
@@ -127,6 +135,43 @@ impl NostrRegistry {
             creating: false,
             tasks: vec![],
         }
+    }
+
+    /// Get all used npubs
+    fn get_npubs(&mut self, cx: &mut Context<Self>) {
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let task: Result<HashSet<PublicKey>, Error> = cx
+                .background_executor()
+                .await_on_background(async move {
+                    let dir = config_dir().join("keys");
+                    // Ensure keys directory exists
+                    smol::fs::create_dir_all(&dir).await?;
+
+                    let mut files = smol::fs::read_dir(&dir).await?;
+                    let mut npubs: HashSet<PublicKey> = HashSet::new();
+
+                    while let Some(Ok(entry)) = files.next().await {
+                        let name = entry.file_name().into_string().unwrap();
+                        let public_key = PublicKey::parse(&name)?;
+
+                        npubs.insert(public_key);
+                    }
+
+                    Ok(npubs)
+                })
+                .await;
+
+            if let Ok(npubs) = task {
+                this.update(cx, |this, cx| {
+                    this.npubs.update(cx, |this, cx| {
+                        this.extend(npubs);
+                        cx.notify();
+                    });
+                })?;
+            }
+
+            Ok(())
+        }));
     }
 
     fn connect(&mut self, cx: &mut Context<Self>) {
@@ -422,27 +467,38 @@ impl NostrRegistry {
         let signer = self.signer();
 
         // Create a task to update the signer and verify the public key
-        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            // Update signer
+        let task: Task<Result<PublicKey, Error>> = cx.background_spawn(async move {
+            // Update signer and unsubscribe
             signer.switch(new, owned).await;
-
-            // Unsubscribe from all subscriptions
             client.unsubscribe_all().await?;
 
-            // Verify signer
+            // Verify and save public key
             let signer = client.signer().context("Signer not found")?;
             let public_key = signer.get_public_key().await?;
-            log::info!("Signer's public key: {}", public_key);
 
-            Ok(())
+            let npub = public_key.to_bech32().unwrap();
+            let keys_dir = config_dir().join("keys");
+
+            // Ensure keys directory exists
+            smol::fs::create_dir_all(&keys_dir).await?;
+
+            let key_path = keys_dir.join(format!("{}.npub", npub));
+            smol::fs::write(key_path, "").await?;
+
+            log::info!("Signer's public key: {}", public_key);
+            Ok(public_key)
         });
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             // set signer
-            task.await?;
+            let public_key = task.await?;
 
             // Update states
             this.update(cx, |this, cx| {
+                this.npubs.update(cx, |this, cx| {
+                    this.insert(public_key);
+                    cx.notify();
+                });
                 this.ensure_relay_list(cx);
             })?;
 
