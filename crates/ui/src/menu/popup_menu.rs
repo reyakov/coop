@@ -1112,25 +1112,17 @@ impl PopupMenu {
                 .border_color(cx.theme().border)
                 .disabled(true),
             PopupMenuItem::Label(label) => this.disabled(true).cursor_default().child(
-                h_flex()
-                    .cursor_default()
-                    .items_center()
-                    .gap_x_1()
-                    .children(Self::render_icon(has_left_icon, false, None, window, cx))
-                    .child(
-                        div()
-                            .flex_1()
-                            .text_xs()
-                            .font_semibold()
-                            .text_color(cx.theme().text_muted)
-                            .child(label.clone()),
-                    ),
+                h_flex().cursor_default().items_center().gap_x_1().child(
+                    div()
+                        .flex_1()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(cx.theme().text_muted)
+                        .child(label.clone()),
+                ),
             ),
             PopupMenuItem::ElementItem {
-                render,
-                icon,
-                disabled,
-                ..
+                render, disabled, ..
             } => this
                 .when(!disabled, |this| {
                     this.on_click(
@@ -1144,13 +1136,6 @@ impl PopupMenu {
                         .min_h(item_height)
                         .items_center()
                         .gap_x_2()
-                        .children(Self::render_icon(
-                            has_left_icon,
-                            is_left_check,
-                            icon.clone(),
-                            window,
-                            cx,
-                        ))
                         .child((render)(window, cx))
                         .children(right_check_icon.map(|icon| icon.ml_3())),
                 ),

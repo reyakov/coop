@@ -18,7 +18,7 @@ use ui::button::{Button, ButtonVariants};
 use ui::dock_area::dock::DockPlacement;
 use ui::dock_area::panel::PanelView;
 use ui::dock_area::{ClosePanel, DockArea, DockItem};
-use ui::menu::DropdownMenu;
+use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::{h_flex, v_flex, IconName, Root, Sizable, WindowExtension};
 
 use crate::dialogs::settings;
@@ -382,17 +382,29 @@ impl Workspace {
             .when_some(current_user.as_ref(), |this, public_key| {
                 let persons = PersonRegistry::global(cx);
                 let profile = persons.read(cx).get(public_key, cx);
+                let avatar = profile.avatar();
+                let name = profile.name();
 
                 this.child(
                     Button::new("current-user")
-                        .child(Avatar::new(profile.avatar()).xsmall())
+                        .child(Avatar::new(avatar.clone()).xsmall())
                         .small()
                         .caret()
                         .compact()
                         .transparent()
                         .dropdown_menu(move |this, _window, _cx| {
+                            let avatar = avatar.clone();
+                            let name = name.clone();
+
                             this.min_w(px(256.))
-                                .label(profile.name())
+                                .item(PopupMenuItem::element(move |_window, cx| {
+                                    h_flex()
+                                        .gap_1p5()
+                                        .text_xs()
+                                        .text_color(cx.theme().text_muted)
+                                        .child(Avatar::new(avatar.clone()).xsmall())
+                                        .child(name.clone())
+                                }))
                                 .separator()
                                 .menu_with_icon(
                                     "Profile",
@@ -491,54 +503,35 @@ impl Workspace {
                             .small()
                             .ghost()
                             .when(inbox_state.subscribing(), |this| this.indicator())
-                            .dropdown_menu(move |this, _window, _cx| {
-                                this.min_w(px(260.))
-                                    .label("Messaging Relays")
-                                    .menu_element_with_disabled(
-                                        Box::new(Command::ShowRelayList),
-                                        true,
-                                        move |_window, cx| {
-                                            let persons = PersonRegistry::global(cx);
-                                            let profile = persons.read(cx).get(&pkey, cx);
-                                            let urls = profile.messaging_relays();
+                            .dropdown_menu(move |this, _window, cx| {
+                                let persons = PersonRegistry::global(cx);
+                                let profile = persons.read(cx).get(&pkey, cx);
+                                let urls: Vec<SharedString> = profile
+                                    .messaging_relays()
+                                    .iter()
+                                    .map(|url| SharedString::from(url.to_string()))
+                                    .collect();
 
-                                            v_flex()
-                                                .gap_1()
-                                                .w_full()
-                                                .items_start()
-                                                .justify_start()
-                                                .children({
-                                                    let mut items = vec![];
+                                // Header
+                                let menu = this.min_w(px(260.)).label("Messaging Relays");
 
-                                                    for url in urls.iter() {
-                                                        items.push(
-                                                            h_flex()
-                                                                .h_6()
-                                                                .w_full()
-                                                                .gap_2()
-                                                                .px_2()
-                                                                .text_xs()
-                                                                .bg(cx
-                                                                    .theme()
-                                                                    .elevated_surface_background)
-                                                                .rounded(cx.theme().radius)
-                                                                .child(
-                                                                    div()
-                                                                        .size_1()
-                                                                        .rounded_full()
-                                                                        .bg(gpui::green()),
-                                                                )
-                                                                .child(SharedString::from(
-                                                                    url.to_string(),
-                                                                )),
-                                                        );
-                                                    }
+                                // Content
+                                let menu = urls.into_iter().fold(menu, |this, url| {
+                                    this.item(PopupMenuItem::element(move |_window, _cx| {
+                                        h_flex()
+                                            .px_1()
+                                            .w_full()
+                                            .gap_2()
+                                            .text_sm()
+                                            .child(
+                                                div().size_1p5().rounded_full().bg(gpui::green()),
+                                            )
+                                            .child(url.clone())
+                                    }))
+                                });
 
-                                                    items
-                                                })
-                                        },
-                                    )
-                                    .separator()
+                                // Footer
+                                menu.separator()
                                     .menu_with_icon(
                                         "Reload",
                                         IconName::Refresh,
@@ -579,51 +572,30 @@ impl Workspace {
                             .small()
                             .ghost()
                             .when(relay_list.configured(), |this| this.indicator())
-                            .dropdown_menu(move |this, _window, _cx| {
-                                this.min_w(px(260.))
-                                    .label("Relays")
-                                    .menu_element_with_disabled(
-                                        Box::new(Command::ShowRelayList),
-                                        true,
-                                        move |_window, cx| {
-                                            let nostr = NostrRegistry::global(cx);
-                                            let urls = nostr.read(cx).read_only_relays(&pkey, cx);
+                            .dropdown_menu(move |this, _window, cx| {
+                                let nostr = NostrRegistry::global(cx);
+                                let urls = nostr.read(cx).read_only_relays(&pkey, cx);
 
-                                            v_flex()
-                                                .gap_1()
-                                                .w_full()
-                                                .items_start()
-                                                .justify_start()
-                                                .children({
-                                                    let mut items = vec![];
+                                // Header
+                                let menu = this.min_w(px(260.)).label("Relays");
 
-                                                    for url in urls.into_iter() {
-                                                        items.push(
-                                                            h_flex()
-                                                                .h_6()
-                                                                .w_full()
-                                                                .gap_2()
-                                                                .px_2()
-                                                                .text_xs()
-                                                                .bg(cx
-                                                                    .theme()
-                                                                    .elevated_surface_background)
-                                                                .rounded(cx.theme().radius)
-                                                                .child(
-                                                                    div()
-                                                                        .size_1()
-                                                                        .rounded_full()
-                                                                        .bg(gpui::green()),
-                                                                )
-                                                                .child(url),
-                                                        );
-                                                    }
+                                // Content
+                                let menu = urls.into_iter().fold(menu, |this, url| {
+                                    this.item(PopupMenuItem::element(move |_window, _cx| {
+                                        h_flex()
+                                            .px_1()
+                                            .w_full()
+                                            .gap_2()
+                                            .text_sm()
+                                            .child(
+                                                div().size_1p5().rounded_full().bg(gpui::green()),
+                                            )
+                                            .child(url.clone())
+                                    }))
+                                });
 
-                                                    items
-                                                })
-                                        },
-                                    )
-                                    .separator()
+                                // Footer
+                                menu.separator()
                                     .menu_with_icon(
                                         "Reload",
                                         IconName::Refresh,
