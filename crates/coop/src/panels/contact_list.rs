@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as AnyhowContext, Error};
+use anyhow::{Context as AnyhowContext, Error};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     div, rems, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -9,27 +9,26 @@ use gpui::{
     Task, TextAlign, Window,
 };
 use nostr_sdk::prelude::*;
+use person::PersonRegistry;
 use smallvec::{smallvec, SmallVec};
 use state::NostrRegistry;
 use theme::ActiveTheme;
+use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock_area::panel::{Panel, PanelEvent};
 use ui::input::{InputEvent, InputState, TextInput};
-use ui::{divider, h_flex, v_flex, Disableable, IconName, Sizable, StyledExt, WindowExtension};
+use ui::{h_flex, v_flex, Disableable, IconName, Sizable, StyledExt, WindowExtension};
 
-const MSG: &str = "Messaging Relays are relays that hosted all your messages. \
-                   Other users will find your relays and send messages to it.";
-
-pub fn init(window: &mut Window, cx: &mut App) -> Entity<MessagingRelayPanel> {
-    cx.new(|cx| MessagingRelayPanel::new(window, cx))
+pub fn init(window: &mut Window, cx: &mut App) -> Entity<ContactListPanel> {
+    cx.new(|cx| ContactListPanel::new(window, cx))
 }
 
 #[derive(Debug)]
-pub struct MessagingRelayPanel {
+pub struct ContactListPanel {
     name: SharedString,
     focus_handle: FocusHandle,
 
-    /// Relay URL input
+    /// Npub input
     input: Entity<InputState>,
 
     /// Whether the panel is updating
@@ -38,8 +37,8 @@ pub struct MessagingRelayPanel {
     /// Error message
     error: Option<SharedString>,
 
-    /// All relays
-    relays: HashSet<RelayUrl>,
+    /// All contacts
+    contacts: HashSet<PublicKey>,
 
     /// Event subscriptions
     _subscriptions: SmallVec<[Subscription; 1]>,
@@ -48,9 +47,9 @@ pub struct MessagingRelayPanel {
     tasks: Vec<Task<Result<(), Error>>>,
 }
 
-impl MessagingRelayPanel {
+impl ContactListPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let input = cx.new(|cx| InputState::new(window, cx).placeholder("wss://example.com"));
+        let input = cx.new(|cx| InputState::new(window, cx).placeholder("npub1..."));
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
@@ -68,11 +67,11 @@ impl MessagingRelayPanel {
         });
 
         Self {
-            name: "Update Messaging Relays".into(),
+            name: "Contact List".into(),
             focus_handle: cx.focus_handle(),
             input,
             updating: false,
-            relays: HashSet::new(),
+            contacts: HashSet::new(),
             error: None,
             _subscriptions: subscriptions,
             tasks: vec![],
@@ -83,28 +82,20 @@ impl MessagingRelayPanel {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
-        let task: Task<Result<Vec<RelayUrl>, Error>> = cx.background_spawn(async move {
+        let task: Task<Result<HashSet<PublicKey>, Error>> = cx.background_spawn(async move {
             let signer = client.signer().context("Signer not found")?;
             let public_key = signer.get_public_key().await?;
+            let contact_list = client.database().contacts_public_keys(public_key).await?;
 
-            let filter = Filter::new()
-                .kind(Kind::InboxRelays)
-                .author(public_key)
-                .limit(1);
-
-            if let Some(event) = client.database().query(filter).await?.first_owned() {
-                Ok(nip17::extract_owned_relay_list(event).collect())
-            } else {
-                Err(anyhow!("Not found."))
-            }
+            Ok(contact_list)
         });
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            let relays = task.await?;
+            let public_keys = task.await?;
 
             // Update state
             this.update(cx, |this, cx| {
-                this.relays.extend(relays);
+                this.contacts.extend(public_keys);
                 cx.notify();
             })?;
 
@@ -115,25 +106,20 @@ impl MessagingRelayPanel {
     fn add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let value = self.input.read(cx).value().to_string();
 
-        if !value.starts_with("ws") {
-            self.set_error("Relay URl is invalid", window, cx);
-            return;
-        }
-
-        if let Ok(url) = RelayUrl::parse(&value) {
-            if self.relays.insert(url) {
+        if let Ok(public_key) = PublicKey::parse(&value) {
+            if self.contacts.insert(public_key) {
                 self.input.update(cx, |this, cx| {
                     this.set_value("", window, cx);
                 });
                 cx.notify();
             }
         } else {
-            self.set_error("Relay URl is invalid", window, cx);
+            self.set_error("Public Key is invalid", window, cx);
         }
     }
 
-    fn remove(&mut self, url: &RelayUrl, cx: &mut Context<Self>) {
-        self.relays.remove(url);
+    fn remove(&mut self, public_key: &PublicKey, cx: &mut Context<Self>) {
+        self.contacts.remove(public_key);
         cx.notify();
     }
 
@@ -162,9 +148,9 @@ impl MessagingRelayPanel {
         cx.notify();
     }
 
-    pub fn set_relays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.relays.is_empty() {
-            self.set_error("You need to add at least 1 relay", window, cx);
+    pub fn update(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.contacts.is_empty() {
+            self.set_error("You need to add at least 1 contact", window, cx);
             return;
         };
 
@@ -180,11 +166,11 @@ impl MessagingRelayPanel {
         // Get user's write relays
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
-        // Construct event tags
-        let tags: Vec<Tag> = self
-            .relays
+        // Get contacts
+        let contacts: Vec<Contact> = self
+            .contacts
             .iter()
-            .map(|relay| Tag::relay(relay.clone()))
+            .map(|public_key| Contact::new(*public_key))
             .collect();
 
         // Set updating state
@@ -193,11 +179,11 @@ impl MessagingRelayPanel {
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             let urls = write_relays.await;
 
-            // Construct nip17 event builder
-            let builder = EventBuilder::new(Kind::InboxRelays, "").tags(tags);
+            // Construct contact list event builder
+            let builder = EventBuilder::contact_list(contacts);
             let event = client.sign_event_builder(builder).await?;
 
-            // Set messaging relays
+            // Set contact list
             client.send_event(&event).to(urls).await?;
 
             Ok(())
@@ -226,12 +212,15 @@ impl MessagingRelayPanel {
     }
 
     fn render_list_items(&mut self, cx: &mut Context<Self>) -> Vec<impl IntoElement> {
+        let persons = PersonRegistry::global(cx);
         let mut items = Vec::new();
 
-        for url in self.relays.iter() {
+        for (ix, public_key) in self.contacts.iter().enumerate() {
+            let profile = persons.read(cx).get(public_key, cx);
+
             items.push(
                 h_flex()
-                    .id(SharedString::from(url.to_string()))
+                    .id(ix)
                     .group("")
                     .flex_1()
                     .w_full()
@@ -241,7 +230,13 @@ impl MessagingRelayPanel {
                     .rounded(cx.theme().radius)
                     .bg(cx.theme().secondary_background)
                     .text_color(cx.theme().secondary_foreground)
-                    .child(div().text_sm().child(SharedString::from(url.to_string())))
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .text_sm()
+                            .child(Avatar::new(profile.avatar()).small())
+                            .child(profile.name()),
+                    )
                     .child(
                         Button::new("remove_{ix}")
                             .icon(IconName::Close)
@@ -250,9 +245,9 @@ impl MessagingRelayPanel {
                             .invisible()
                             .group_hover("", |this| this.visible())
                             .on_click({
-                                let url = url.to_owned();
+                                let public_key = public_key.to_owned();
                                 cx.listener(move |this, _ev, _window, cx| {
-                                    this.remove(&url, cx);
+                                    this.remove(&public_key, cx);
                                 })
                             }),
                     ),
@@ -276,7 +271,7 @@ impl MessagingRelayPanel {
     }
 }
 
-impl Panel for MessagingRelayPanel {
+impl Panel for ContactListPanel {
     fn panel_id(&self) -> SharedString {
         self.name.clone()
     }
@@ -286,100 +281,89 @@ impl Panel for MessagingRelayPanel {
     }
 }
 
-impl EventEmitter<PanelEvent> for MessagingRelayPanel {}
+impl EventEmitter<PanelEvent> for ContactListPanel {}
 
-impl Focusable for MessagingRelayPanel {
+impl Focusable for ContactListPanel {
     fn focus_handle(&self, _: &App) -> gpui::FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl Render for MessagingRelayPanel {
+impl Render for ContactListPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex()
-            .p_3()
-            .gap_3()
-            .w_full()
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().text_muted)
-                    .child(SharedString::from(MSG)),
-            )
-            .child(divider(cx))
-            .child(
-                v_flex()
-                    .gap_2()
-                    .flex_1()
-                    .w_full()
-                    .text_sm()
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_semibold()
-                            .text_color(cx.theme().text_muted)
-                            .child(SharedString::from("Relays:")),
-                    )
-                    .child(
-                        v_flex()
-                            .gap_1()
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .w_full()
-                                    .child(
-                                        TextInput::new(&self.input)
-                                            .small()
-                                            .bordered(false)
-                                            .cleanable(),
-                                    )
-                                    .child(
-                                        Button::new("add")
-                                            .icon(IconName::Plus)
-                                            .tooltip("Add relay")
-                                            .ghost()
-                                            .size(rems(2.))
-                                            .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.add(window, cx);
-                                            })),
-                                    ),
-                            )
-                            .when_some(self.error.as_ref(), |this, error| {
-                                this.child(
-                                    div()
-                                        .italic()
-                                        .text_xs()
-                                        .text_color(cx.theme().danger_active)
-                                        .child(error.clone()),
+        v_flex().p_3().gap_3().w_full().child(
+            v_flex()
+                .gap_2()
+                .flex_1()
+                .w_full()
+                .text_sm()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(cx.theme().text_muted)
+                        .child(SharedString::from("New contact:")),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .w_full()
+                                .child(
+                                    TextInput::new(&self.input)
+                                        .small()
+                                        .bordered(false)
+                                        .cleanable(),
                                 )
-                            }),
-                    )
-                    .map(|this| {
-                        if self.relays.is_empty() {
-                            this.child(self.render_empty(window, cx))
-                        } else {
+                                .child(
+                                    Button::new("add")
+                                        .icon(IconName::Plus)
+                                        .tooltip("Add contact")
+                                        .ghost()
+                                        .size(rems(2.))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.add(window, cx);
+                                        })),
+                                ),
+                        )
+                        .when_some(self.error.as_ref(), |this, error| {
                             this.child(
-                                v_flex()
-                                    .gap_1()
-                                    .flex_1()
-                                    .w_full()
-                                    .children(self.render_list_items(cx)),
+                                div()
+                                    .italic()
+                                    .text_xs()
+                                    .text_color(cx.theme().danger_active)
+                                    .child(error.clone()),
                             )
-                        }
-                    })
-                    .child(
-                        Button::new("submit")
-                            .icon(IconName::CheckCircle)
-                            .label("Update")
-                            .primary()
-                            .small()
-                            .font_semibold()
-                            .loading(self.updating)
-                            .disabled(self.updating)
-                            .on_click(cx.listener(move |this, _ev, window, cx| {
-                                this.set_relays(window, cx);
-                            })),
-                    ),
-            )
+                        }),
+                )
+                .map(|this| {
+                    if self.contacts.is_empty() {
+                        this.child(self.render_empty(window, cx))
+                    } else {
+                        this.child(
+                            v_flex()
+                                .gap_1()
+                                .flex_1()
+                                .w_full()
+                                .children(self.render_list_items(cx)),
+                        )
+                    }
+                })
+                .child(
+                    Button::new("submit")
+                        .icon(IconName::CheckCircle)
+                        .label("Update")
+                        .primary()
+                        .small()
+                        .font_semibold()
+                        .loading(self.updating)
+                        .disabled(self.updating)
+                        .on_click(cx.listener(move |this, _ev, window, cx| {
+                            this.update(window, cx);
+                        })),
+                ),
+        )
     }
 }

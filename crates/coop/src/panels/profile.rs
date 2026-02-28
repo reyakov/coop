@@ -3,9 +3,9 @@ use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Error};
 use gpui::{
-    div, rems, AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter,
-    FocusHandle, Focusable, IntoElement, ParentElement, PathPromptOptions, Render, SharedString,
-    Styled, Task, Window,
+    div, AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, IntoElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task,
+    Window,
 };
 use nostr_sdk::prelude::*;
 use person::{shorten_pubkey, Person, PersonRegistry};
@@ -322,7 +322,7 @@ impl Render for ProfilePanel {
                     .items_center()
                     .justify_center()
                     .gap_4()
-                    .child(Avatar::new(avatar).size(rems(4.25)))
+                    .child(Avatar::new(avatar).large())
                     .child(
                         Button::new("upload")
                             .icon(IconName::PlusCircle)

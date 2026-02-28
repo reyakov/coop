@@ -183,20 +183,16 @@ impl NostrRegistry {
                     ..
                 } = notification
                 {
-                    // Skip if the event has already been processed
-                    if processed_events.insert(event.id) {
-                        match event.kind {
-                            Kind::RelayList => {
-                                if subscription_id.as_str().contains("room-") {
-                                    get_events_for_room(&client, &event).await.ok();
-                                }
-                                tx.send_async(event.into_owned()).await?;
-                            }
-                            Kind::InboxRelays => {
-                                tx.send_async(event.into_owned()).await?;
-                            }
-                            _ => {}
+                    if !processed_events.insert(event.id) {
+                        // Skip if the event has already been processed
+                        continue;
+                    }
+
+                    if let Kind::RelayList = event.kind {
+                        if subscription_id.as_str().contains("room-") {
+                            get_events_for_room(&client, &event).await.ok();
                         }
+                        tx.send_async(event.into_owned()).await?;
                     }
                 }
             }

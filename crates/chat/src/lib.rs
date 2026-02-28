@@ -118,6 +118,7 @@ impl ChatRegistry {
                         this.reset(cx);
                     }
                     RelayState::Configured => {
+                        this.get_contact_list(cx);
                         this.ensure_messaging_relays(cx);
                     }
                     _ => {}
@@ -255,6 +256,43 @@ impl ChatRegistry {
                 smol::Timer::after(loop_duration).await;
             }
         }));
+    }
+
+    /// Get contact list from relays
+    pub fn get_contact_list(&mut self, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+
+        let signer = nostr.read(cx).signer();
+        let public_key = signer.public_key().unwrap();
+        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
+
+        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
+            let id = SubscriptionId::new("contact-list");
+            let opts = SubscribeAutoCloseOptions::default()
+                .exit_policy(ReqExitPolicy::ExitOnEOSE)
+                .timeout(Some(Duration::from_secs(TIMEOUT)));
+
+            // Get user's write relays
+            let urls = write_relays.await;
+
+            // Construct filter for inbox relays
+            let filter = Filter::new()
+                .kind(Kind::ContactList)
+                .author(public_key)
+                .limit(1);
+
+            // Construct target for subscription
+            let target: HashMap<&RelayUrl, Filter> =
+                urls.iter().map(|relay| (relay, filter.clone())).collect();
+
+            // Subscribe
+            client.subscribe(target).close_on(opts).with_id(id).await?;
+
+            Ok(())
+        });
+
+        self.tasks.push(task);
     }
 
     /// Ensure messaging relays are set up for the current user.

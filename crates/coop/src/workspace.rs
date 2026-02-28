@@ -4,7 +4,7 @@ use ::settings::AppSettings;
 use chat::{ChatEvent, ChatRegistry, InboxState};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, rems, Action, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement,
+    div, px, Action, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement,
     ParentElement, Render, SharedString, Styled, Subscription, Window,
 };
 use person::PersonRegistry;
@@ -22,7 +22,9 @@ use ui::menu::DropdownMenu;
 use ui::{h_flex, v_flex, IconName, Root, Sizable, WindowExtension};
 
 use crate::dialogs::settings;
-use crate::panels::{backup, encryption_key, greeter, messaging_relays, profile, relay_list};
+use crate::panels::{
+    backup, contact_list, encryption_key, greeter, messaging_relays, profile, relay_list,
+};
 use crate::sidebar;
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Workspace> {
@@ -43,6 +45,7 @@ enum Command {
     ShowProfile,
     ShowSettings,
     ShowBackup,
+    ShowContactList,
 }
 
 pub struct Workspace {
@@ -215,6 +218,16 @@ impl Workspace {
                     });
                 }
             }
+            Command::ShowContactList => {
+                self.dock.update(cx, |this, cx| {
+                    this.add_panel(
+                        Arc::new(contact_list::init(window, cx)),
+                        DockPlacement::Right,
+                        window,
+                        cx,
+                    );
+                });
+            }
             Command::ShowBackup => {
                 self.dock.update(cx, |this, cx| {
                     this.add_panel(
@@ -372,7 +385,7 @@ impl Workspace {
 
                 this.child(
                     Button::new("current-user")
-                        .child(Avatar::new(profile.avatar()).size(rems(1.25)))
+                        .child(Avatar::new(profile.avatar()).xsmall())
                         .small()
                         .caret()
                         .compact()
@@ -387,6 +400,11 @@ impl Workspace {
                                     Box::new(Command::ShowProfile),
                                 )
                                 .menu_with_icon(
+                                    "Contact List",
+                                    IconName::Book,
+                                    Box::new(Command::ShowContactList),
+                                )
+                                .menu_with_icon(
                                     "Backup",
                                     IconName::UserKey,
                                     Box::new(Command::ShowBackup),
@@ -396,6 +414,7 @@ impl Workspace {
                                     IconName::Sun,
                                     Box::new(Command::ToggleTheme),
                                 )
+                                .separator()
                                 .menu_with_icon(
                                     "Settings",
                                     IconName::Settings,

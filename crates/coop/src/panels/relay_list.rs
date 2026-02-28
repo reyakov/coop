@@ -408,7 +408,7 @@ impl Render for RelayListPanel {
                                     div()
                                         .italic()
                                         .text_xs()
-                                        .text_color(cx.theme().danger_foreground)
+                                        .text_color(cx.theme().danger_active)
                                         .child(error.clone()),
                                 )
                             }),

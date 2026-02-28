@@ -269,26 +269,24 @@ impl Render for EncryptionPanel {
                         )),
                 )
             })
-            .when(state.set(), |this| {
-                this.child(
-                    v_flex()
-                        .gap_1()
-                        .child(
-                            Button::new("reset")
-                                .icon(IconName::Reset)
-                                .label("Reset")
-                                .warning()
-                                .small()
-                                .font_semibold(),
-                        )
-                        .child(
-                            div()
-                                .italic()
-                                .text_size(px(10.))
-                                .text_color(cx.theme().text_muted)
-                                .child(SharedString::from(NOTICE)),
-                        ),
-                )
-            })
+            .child(
+                v_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("reset")
+                            .icon(IconName::Reset)
+                            .label("Reset")
+                            .warning()
+                            .small()
+                            .font_semibold(),
+                    )
+                    .child(
+                        div()
+                            .italic()
+                            .text_size(px(10.))
+                            .text_color(cx.theme().text_muted)
+                            .child(SharedString::from(NOTICE)),
+                    ),
+            )
     }
 }

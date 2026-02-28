@@ -1,9 +1,23 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, img, px, rems, AbsoluteLength, App, Hsla, ImageSource, Img, IntoElement, ParentElement,
-    RenderOnce, Styled, StyledImage, Window,
+    div, img, px, AbsoluteLength, App, Div, Hsla, ImageSource, Img, InteractiveElement,
+    Interactivity, IntoElement, ParentElement, RenderOnce, StyleRefinement, Styled, StyledImage,
+    Window,
 };
 use theme::ActiveTheme;
+
+use crate::{Sizable, Size};
+
+/// Returns the size of the avatar based on the given [`Size`].
+pub(super) fn avatar_size(size: Size) -> AbsoluteLength {
+    match size {
+        Size::Large => px(64.).into(),
+        Size::Medium => px(32.).into(),
+        Size::Small => px(24.).into(),
+        Size::XSmall => px(20.).into(),
+        Size::Size(size) => size.into(),
+    }
+}
 
 /// An element that renders a user avatar with customizable appearance options.
 ///
@@ -18,8 +32,10 @@ use theme::ActiveTheme;
 /// ```
 #[derive(IntoElement)]
 pub struct Avatar {
+    base: Div,
     image: Img,
-    size: Option<AbsoluteLength>,
+    style: StyleRefinement,
+    size: Size,
     border_color: Option<Hsla>,
 }
 
@@ -27,8 +43,10 @@ impl Avatar {
     /// Creates a new avatar element with the specified image source.
     pub fn new(src: impl Into<ImageSource>) -> Self {
         Avatar {
+            base: div(),
             image: img(src),
-            size: None,
+            style: StyleRefinement::default(),
+            size: Size::Medium,
             border_color: None,
         }
     }
@@ -56,11 +74,24 @@ impl Avatar {
         self.border_color = Some(color.into());
         self
     }
+}
 
-    /// Size overrides the avatar size. By default they are 1rem.
-    pub fn size<L: Into<AbsoluteLength>>(mut self, size: impl Into<Option<L>>) -> Self {
-        self.size = size.into().map(Into::into);
+impl Sizable for Avatar {
+    fn with_size(mut self, size: impl Into<Size>) -> Self {
+        self.size = size.into();
         self
+    }
+}
+
+impl Styled for Avatar {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl InteractiveElement for Avatar {
+    fn interactivity(&mut self) -> &mut Interactivity {
+        self.base.interactivity()
     }
 }
 
@@ -71,8 +102,7 @@ impl RenderOnce for Avatar {
         } else {
             px(0.)
         };
-
-        let image_size = self.size.unwrap_or_else(|| rems(1.).into());
+        let image_size = avatar_size(self.size);
         let container_size = image_size.to_pixels(window.rem_size()) + border_width * 2.;
 
         div()

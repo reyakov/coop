@@ -3,7 +3,7 @@ use std::rc::Rc;
 use chat::RoomKind;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, rems, App, ClickEvent, InteractiveElement, IntoElement, ParentElement as _, RenderOnce,
+    div, App, ClickEvent, InteractiveElement, IntoElement, ParentElement as _, RenderOnce,
     SharedString, StatefulInteractiveElement, Styled, Window,
 };
 use nostr_sdk::prelude::*;
@@ -106,14 +106,7 @@ impl RenderOnce for RoomEntry {
             .rounded(cx.theme().radius)
             .when(!hide_avatar, |this| {
                 this.when_some(self.avatar, |this, avatar| {
-                    this.child(
-                        div()
-                            .flex_shrink_0()
-                            .size_6()
-                            .rounded_full()
-                            .overflow_hidden()
-                            .child(Avatar::new(avatar).size(rems(1.5))),
-                    )
+                    this.child(Avatar::new(avatar).small().flex_shrink_0())
                 })
             })
             .child(

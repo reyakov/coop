@@ -5,9 +5,8 @@ use anyhow::{Context as AnyhowContext, Error};
 use common::RenderedTimestamp;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, relative, rems, uniform_list, App, AppContext, Context, Div, Entity,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    Task, Window,
+    div, px, relative, uniform_list, App, AppContext, Context, Div, Entity, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, Window,
 };
 use nostr_sdk::prelude::*;
 use person::{shorten_pubkey, Person, PersonRegistry};
@@ -275,7 +274,7 @@ impl Screening {
                                     .rounded(cx.theme().radius)
                                     .text_sm()
                                     .hover(|this| this.bg(cx.theme().elevated_surface_background))
-                                    .child(Avatar::new(profile.avatar()).size(rems(1.75)))
+                                    .child(Avatar::new(profile.avatar()).small())
                                     .child(profile.name()),
                             );
                         }
@@ -315,7 +314,7 @@ impl Render for Screening {
                     .items_center()
                     .justify_center()
                     .text_center()
-                    .child(Avatar::new(profile.avatar()).size(rems(4.)))
+                    .child(Avatar::new(profile.avatar()).large())
                     .child(
                         div()
                             .font_semibold()

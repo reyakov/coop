@@ -8,7 +8,7 @@ use chat::{Message, RenderedMessage, Room, RoomEvent, SendReport};
 use common::RenderedTimestamp;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    deferred, div, img, list, px, red, relative, rems, svg, white, AnyElement, App, AppContext,
+    deferred, div, img, list, px, red, relative, svg, white, AnyElement, App, AppContext,
     ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
     IntoElement, ListAlignment, ListOffset, ListState, MouseButton, ObjectFit, ParentElement,
     PathPromptOptions, Render, SharedString, StatefulInteractiveElement, Styled, StyledImage,
@@ -758,7 +758,7 @@ impl ChatPanel {
                         this.child(
                             div()
                                 .id(SharedString::from(format!("{ix}-avatar")))
-                                .child(Avatar::new(author.avatar()).size(rems(2.)))
+                                .child(Avatar::new(author.avatar()))
                                 .context_menu(move |this, _window, _cx| {
                                     let view = Box::new(OpenPublicKey(public_key));
                                     let copy = Box::new(CopyPublicKey(public_key));
@@ -940,7 +940,7 @@ impl ChatPanel {
                         h_flex()
                             .gap_1()
                             .font_semibold()
-                            .child(Avatar::new(avatar).size(rems(1.25)))
+                            .child(Avatar::new(avatar).small())
                             .child(name.clone()),
                     ),
             )
@@ -1283,7 +1283,7 @@ impl Panel for ChatPanel {
 
                 h_flex()
                     .gap_1p5()
-                    .child(Avatar::new(url).size(rems(1.25)))
+                    .child(Avatar::new(url).small())
                     .child(label)
                     .into_any_element()
             })
