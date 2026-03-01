@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::result::Result;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use nostr_sdk::prelude::*;
@@ -16,11 +15,6 @@ pub struct CoopSigner {
 
     /// Specific signer for encryption purposes
     encryption_signer: RwLock<Option<Arc<dyn NostrSigner>>>,
-
-    /// By default, Coop generates a new signer for new users.
-    ///
-    /// This flag indicates whether the signer is user-owned or Coop-generated.
-    owned: AtomicBool,
 }
 
 impl CoopSigner {
@@ -32,7 +26,6 @@ impl CoopSigner {
             signer: RwLock::new(signer.into_nostr_signer()),
             signer_pkey: RwLock::new(None),
             encryption_signer: RwLock::new(None),
-            owned: AtomicBool::new(false),
         }
     }
 
@@ -47,17 +40,15 @@ impl CoopSigner {
     }
 
     /// Get public key
+    ///
+    /// Ensure to call this method after the signer has been initialized.
+    /// Otherwise, this method will panic.
     pub fn public_key(&self) -> Option<PublicKey> {
-        self.signer_pkey.read_blocking().to_owned()
-    }
-
-    /// Get the flag indicating whether the signer is user-owned.
-    pub fn owned(&self) -> bool {
-        self.owned.load(Ordering::SeqCst)
+        *self.signer_pkey.read_blocking()
     }
 
     /// Switch the current signer to a new signer.
-    pub async fn switch<T>(&self, new: T, owned: bool)
+    pub async fn switch<T>(&self, new: T)
     where
         T: IntoNostrSigner,
     {
@@ -75,9 +66,6 @@ impl CoopSigner {
 
         // Reset the encryption signer
         *encryption_signer = None;
-
-        // Update the owned flag
-        self.owned.store(owned, Ordering::SeqCst);
     }
 
     /// Set the encryption signer.

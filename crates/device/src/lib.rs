@@ -204,9 +204,11 @@ impl DeviceRegistry {
     fn subscribe_to_giftwrap_events(&mut self, cx: &mut Context<Self>) -> Task<Result<(), Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
+
+        let Some(public_key) = signer.public_key() else {
+            return Task::ready(Err(anyhow!("User not found")));
+        };
 
         let persons = PersonRegistry::global(cx);
         let profile = persons.read(cx).get(&public_key, cx);
@@ -237,9 +239,11 @@ impl DeviceRegistry {
     pub fn get_announcement(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
+
+        let Some(public_key) = signer.public_key() else {
+            return;
+        };
 
         // Reset state before fetching announcement
         self.reset(cx);
@@ -303,10 +307,11 @@ impl DeviceRegistry {
     pub fn create_encryption(&self, cx: &App) -> Task<Result<Keys, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
-        // Get current user
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
+
+        let Some(public_key) = signer.public_key() else {
+            return Task::ready(Err(anyhow!("User not found")));
+        };
 
         // Get user's write relays
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
@@ -398,9 +403,11 @@ impl DeviceRegistry {
     pub fn listen_request(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
+
+        let Some(public_key) = signer.public_key() else {
+            return;
+        };
 
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
@@ -430,9 +437,11 @@ impl DeviceRegistry {
     fn listen_approval(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
+
+        let Some(public_key) = signer.public_key() else {
+            return;
+        };
 
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
@@ -460,9 +469,11 @@ impl DeviceRegistry {
     fn request(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
+
+        let Some(public_key) = signer.public_key() else {
+            return;
+        };
 
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
@@ -573,10 +584,11 @@ impl DeviceRegistry {
     fn approve(&mut self, event: &Event, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
-        // Get current user
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
+
+        let Some(public_key) = signer.public_key() else {
+            return;
+        };
 
         // Get user's write relays
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);

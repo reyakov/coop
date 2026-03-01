@@ -11,7 +11,7 @@ use ui::dock_area::dock::DockPlacement;
 use ui::dock_area::panel::{Panel, PanelEvent};
 use ui::{h_flex, v_flex, Icon, IconName, Sizable, StyledExt};
 
-use crate::panels::{connect, import, messaging_relays, profile, relay_list};
+use crate::panels::{messaging_relays, profile, relay_list};
 use crate::workspace::Workspace;
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<GreeterPanel> {
@@ -87,9 +87,6 @@ impl Render for GreeterPanel {
 
         let nostr = NostrRegistry::global(cx);
         let nip65 = nostr.read(cx).relay_list_state();
-
-        let signer = nostr.read(cx).signer();
-        let owned = signer.owned();
 
         let required_actions =
             nip65 == RelayState::NotConfigured || nip17 == InboxState::RelayNotAvailable;
@@ -191,60 +188,48 @@ impl Render for GreeterPanel {
                                 ),
                         )
                     })
-                    .when(!owned, |this| {
-                        this.child(
-                            v_flex()
-                                .gap_2()
-                                .w_full()
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .w_full()
-                                        .text_xs()
-                                        .font_semibold()
-                                        .text_color(cx.theme().text_muted)
-                                        .child(SharedString::from("Use your own identity"))
-                                        .child(div().flex_1().h_px().bg(cx.theme().border)),
-                                )
-                                .child(
-                                    v_flex()
-                                        .gap_2()
-                                        .w_full()
-                                        .child(
-                                            Button::new("connect")
-                                                .icon(Icon::new(IconName::Door))
-                                                .label("Connect account via Nostr Connect")
-                                                .ghost()
-                                                .small()
-                                                .justify_start()
-                                                .on_click(move |_ev, window, cx| {
-                                                    Workspace::add_panel(
-                                                        connect::init(window, cx),
-                                                        DockPlacement::Center,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }),
-                                        )
-                                        .child(
-                                            Button::new("import")
-                                                .icon(Icon::new(IconName::Usb))
-                                                .label("Import a secret key or bunker")
-                                                .ghost()
-                                                .small()
-                                                .justify_start()
-                                                .on_click(move |_ev, window, cx| {
-                                                    Workspace::add_panel(
-                                                        import::init(window, cx),
-                                                        DockPlacement::Center,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }),
-                                        ),
-                                ),
-                        )
-                    })
+                    .child(
+                        v_flex()
+                            .gap_2()
+                            .w_full()
+                            .child(
+                                h_flex()
+                                    .gap_2()
+                                    .w_full()
+                                    .text_xs()
+                                    .font_semibold()
+                                    .text_color(cx.theme().text_muted)
+                                    .child(SharedString::from("Use your own identity"))
+                                    .child(div().flex_1().h_px().bg(cx.theme().border)),
+                            )
+                            .child(
+                                v_flex()
+                                    .gap_2()
+                                    .w_full()
+                                    .child(
+                                        Button::new("connect")
+                                            .icon(Icon::new(IconName::Door))
+                                            .label("Connect account via Nostr Connect")
+                                            .ghost()
+                                            .small()
+                                            .justify_start()
+                                            .on_click(move |_ev, window, cx| {
+                                                //
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("import")
+                                            .icon(Icon::new(IconName::Usb))
+                                            .label("Import a secret key or bunker")
+                                            .ghost()
+                                            .small()
+                                            .justify_start()
+                                            .on_click(move |_ev, window, cx| {
+                                                //
+                                            }),
+                                    ),
+                            ),
+                    )
                     .child(
                         v_flex()
                             .gap_2()

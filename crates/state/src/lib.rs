@@ -52,7 +52,7 @@ pub struct NostrRegistry {
     signer: Arc<CoopSigner>,
 
     /// Local public keys
-    npubs: Entity<HashSet<PublicKey>>,
+    npubs: Entity<Vec<PublicKey>>,
 
     /// App keys
     ///
@@ -93,7 +93,7 @@ impl NostrRegistry {
         let signer = Arc::new(CoopSigner::new(app_keys.clone()));
 
         // Construct the nostr npubs entity
-        let npubs = cx.new(|_| HashSet::new());
+        let npubs = cx.new(|_| vec![]);
 
         // Construct the gossip entity
         let gossip = cx.new(|_| Gossip::default());
@@ -121,7 +121,6 @@ impl NostrRegistry {
         cx.defer_in(window, |this, _window, cx| {
             this.connect(cx);
             this.handle_notifications(cx);
-            this.get_npubs(cx);
         });
 
         Self {
@@ -137,43 +136,48 @@ impl NostrRegistry {
         }
     }
 
-    /// Get all used npubs
-    fn get_npubs(&mut self, cx: &mut Context<Self>) {
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            let task: Result<HashSet<PublicKey>, Error> = cx
-                .background_executor()
-                .await_on_background(async move {
-                    let dir = config_dir().join("keys");
-                    // Ensure keys directory exists
-                    smol::fs::create_dir_all(&dir).await?;
-
-                    let mut files = smol::fs::read_dir(&dir).await?;
-                    let mut npubs: HashSet<PublicKey> = HashSet::new();
-
-                    while let Some(Ok(entry)) = files.next().await {
-                        let name = entry.file_name().into_string().unwrap();
-                        let public_key = PublicKey::parse(&name)?;
-
-                        npubs.insert(public_key);
-                    }
-
-                    Ok(npubs)
-                })
-                .await;
-
-            if let Ok(npubs) = task {
-                this.update(cx, |this, cx| {
-                    this.npubs.update(cx, |this, cx| {
-                        this.extend(npubs);
-                        cx.notify();
-                    });
-                })?;
-            }
-
-            Ok(())
-        }));
+    /// Get the nostr client
+    pub fn client(&self) -> Client {
+        self.client.clone()
     }
 
+    /// Get the nostr signer
+    pub fn signer(&self) -> Arc<CoopSigner> {
+        self.signer.clone()
+    }
+
+    /// Get the app keys
+    pub fn app_keys(&self) -> &Keys {
+        &self.app_keys
+    }
+
+    /// Get the connected status of the client
+    pub fn connected(&self) -> bool {
+        self.connected
+    }
+
+    /// Get the creating status
+    pub fn creating(&self) -> bool {
+        self.creating
+    }
+
+    /// Get the relay list state
+    pub fn relay_list_state(&self) -> RelayState {
+        self.relay_list_state.clone()
+    }
+
+    /// Get all relays for a given public key without ensuring connections
+    pub fn read_only_relays(&self, public_key: &PublicKey, cx: &App) -> Vec<SharedString> {
+        self.gossip.read(cx).read_only_relays(public_key)
+    }
+
+    /// Set the connected status of the client
+    fn set_connected(&mut self, cx: &mut Context<Self>) {
+        self.connected = true;
+        cx.notify();
+    }
+
+    /// Connect to the bootstrapping relays
     fn connect(&mut self, cx: &mut Context<Self>) {
         let client = self.client();
 
@@ -198,7 +202,7 @@ impl NostrRegistry {
             // Update the state
             this.update(cx, |this, cx| {
                 this.set_connected(cx);
-                this.get_signer(cx);
+                this.get_npubs(cx);
             })?;
 
             Ok(())
@@ -259,39 +263,370 @@ impl NostrRegistry {
         }));
     }
 
-    /// Get the nostr client
-    pub fn client(&self) -> Client {
-        self.client.clone()
+    /// Get all used npubs
+    fn get_npubs(&mut self, cx: &mut Context<Self>) {
+        let npubs = self.npubs.downgrade();
+        let task: Task<Result<Vec<PublicKey>, Error>> = cx.background_spawn(async move {
+            let dir = config_dir().join("keys");
+            // Ensure keys directory exists
+            smol::fs::create_dir_all(&dir).await?;
+
+            let mut files = smol::fs::read_dir(&dir).await?;
+            let mut entries = Vec::new();
+
+            while let Some(Ok(entry)) = files.next().await {
+                let metadata = entry.metadata().await?;
+                let modified_time = metadata.modified()?;
+                let name = entry
+                    .file_name()
+                    .into_string()
+                    .unwrap()
+                    .replace(".npub", "");
+
+                entries.push((modified_time, name));
+            }
+
+            // Sort by modification time (most recent first)
+            entries.sort_by(|a, b| b.0.cmp(&a.0));
+
+            let mut npubs = Vec::new();
+
+            for (_, name) in entries {
+                let public_key = PublicKey::parse(&name)?;
+                npubs.push(public_key);
+            }
+
+            Ok(npubs)
+        });
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            match task.await {
+                Ok(public_keys) => match public_keys.is_empty() {
+                    true => {
+                        this.update(cx, |this, cx| {
+                            this.create_new_signer(cx);
+                        })?;
+                    }
+                    false => {
+                        npubs.update(cx, |this, cx| {
+                            this.extend(public_keys);
+                            cx.notify();
+                        })?;
+                    }
+                },
+                Err(e) => {
+                    log::error!("Failed to get npubs: {e}");
+                    this.update(cx, |this, cx| {
+                        this.create_new_signer(cx);
+                    })?;
+                }
+            }
+            Ok(())
+        }));
     }
 
-    /// Get the nostr signer
-    pub fn signer(&self) -> Arc<CoopSigner> {
-        self.signer.clone()
+    /// Set whether Coop is creating a new signer
+    fn set_creating(&mut self, creating: bool, cx: &mut Context<Self>) {
+        self.creating = creating;
+        cx.notify();
     }
 
-    /// Get the app keys
-    pub fn app_keys(&self) -> &Keys {
-        &self.app_keys
+    /// Create a new identity
+    pub fn create_new_signer(&mut self, cx: &mut Context<Self>) {
+        let client = self.client();
+        let keys = Keys::generate();
+        let async_keys = keys.clone();
+
+        let username = keys.public_key().to_bech32().unwrap();
+        let secret = keys.secret_key().to_secret_bytes();
+
+        // Create a write credential task
+        let write_credential = cx.write_credentials(&username, &username, &secret);
+
+        // Set the creating signer status
+        self.set_creating(true, cx);
+
+        // Run async tasks in background
+        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
+            let signer = async_keys.into_nostr_signer();
+
+            // Get default relay list
+            let relay_list = default_relay_list();
+
+            // Publish relay list event
+            let event = EventBuilder::relay_list(relay_list).sign(&signer).await?;
+            client
+                .send_event(&event)
+                .ok_timeout(Duration::from_secs(TIMEOUT))
+                .await?;
+
+            // Construct the default metadata
+            let name = petname::petname(2, "-").unwrap_or("Cooper".to_string());
+            let avatar = Url::parse(&format!("https://avatar.vercel.sh/{name}")).unwrap();
+            let metadata = Metadata::new().display_name(&name).picture(avatar);
+
+            // Publish metadata event
+            let event = EventBuilder::metadata(&metadata).sign(&signer).await?;
+            client
+                .send_event(&event)
+                .ack_policy(AckPolicy::none())
+                .await?;
+
+            // Construct the default contact list
+            let contacts = vec![Contact::new(PublicKey::parse(COOP_PUBKEY).unwrap())];
+
+            // Publish contact list event
+            let event = EventBuilder::contact_list(contacts).sign(&signer).await?;
+            client
+                .send_event(&event)
+                .ack_policy(AckPolicy::none())
+                .await?;
+
+            // Construct the default messaging relay list
+            let relays = default_messaging_relays();
+
+            // Publish messaging relay list event
+            let event = EventBuilder::nip17_relay_list(relays).sign(&signer).await?;
+            client
+                .send_event(&event)
+                .ack_policy(AckPolicy::none())
+                .await?;
+
+            // Write user's credentials to the system keyring
+            write_credential.await?;
+
+            Ok(())
+        });
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            // Wait for the task to complete
+            task.await?;
+
+            this.update(cx, |this, cx| {
+                this.set_creating(false, cx);
+                this.set_signer(keys, cx);
+            })?;
+
+            Ok(())
+        }));
     }
 
-    /// Get the connected status of the client
-    pub fn connected(&self) -> bool {
-        self.connected
+    // Get the signer in keyring by username
+    pub fn get_signer(
+        &mut self,
+        username: &str,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<Arc<dyn NostrSigner>, Error>> {
+        let app_keys = self.app_keys().clone();
+        let read_credential = cx.read_credentials(username);
+
+        cx.spawn(async move |_this, _cx| {
+            let (_, secret) = read_credential
+                .await
+                .map_err(|_| anyhow!("Failed to get signer"))?
+                .ok_or_else(|| anyhow!("Failed to get signer"))?;
+
+            // Try to parse as a direct secret key first
+            if let Ok(secret_key) = SecretKey::from_slice(&secret) {
+                return Ok(Keys::new(secret_key).into_nostr_signer());
+            }
+
+            // Convert the secret into string
+            let sec = String::from_utf8(secret)
+                .map_err(|_| anyhow!("Failed to parse secret as UTF-8"))?;
+
+            // Try to parse as a NIP-46 URI
+            let uri =
+                NostrConnectUri::parse(&sec).map_err(|_| anyhow!("Failed to parse NIP-46 URI"))?;
+
+            let timeout = Duration::from_secs(120);
+            let nip46 = NostrConnect::new(uri, app_keys, timeout, None)?;
+
+            Ok(nip46.into_nostr_signer())
+        })
     }
 
-    /// Get the creating status
-    pub fn creating(&self) -> bool {
-        self.creating
+    /// Set the signer for the nostr client and verify the public key
+    pub fn set_signer<T>(&mut self, new: T, cx: &mut Context<Self>)
+    where
+        T: NostrSigner + 'static,
+    {
+        let client = self.client();
+        let signer = self.signer();
+
+        // Create a task to update the signer and verify the public key
+        let task: Task<Result<PublicKey, Error>> = cx.background_spawn(async move {
+            // Update signer and unsubscribe
+            signer.switch(new).await;
+            client.unsubscribe_all().await?;
+
+            // Verify and save public key
+            let signer = client.signer().context("Signer not found")?;
+            let public_key = signer.get_public_key().await?;
+
+            let npub = public_key.to_bech32().unwrap();
+            let keys_dir = config_dir().join("keys");
+
+            // Ensure keys directory exists
+            smol::fs::create_dir_all(&keys_dir).await?;
+
+            let key_path = keys_dir.join(format!("{}.npub", npub));
+            smol::fs::write(key_path, "").await?;
+
+            log::info!("Signer's public key: {}", public_key);
+            Ok(public_key)
+        });
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            // set signer
+            let public_key = task.await?;
+
+            // Update states
+            this.update(cx, |this, cx| {
+                this.npubs.update(cx, |this, cx| {
+                    if !this.contains(&public_key) {
+                        this.push(public_key);
+                        cx.notify();
+                    }
+                });
+                this.ensure_relay_list(cx);
+            })?;
+
+            Ok(())
+        }));
     }
 
-    /// Get the relay list state
-    pub fn relay_list_state(&self) -> RelayState {
-        self.relay_list_state.clone()
+    /// Add a key signer to keyring
+    pub fn add_key_signer(
+        &mut self,
+        keys: &Keys,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), Error>> {
+        let keys = keys.clone();
+        let username = keys.public_key().to_bech32().unwrap();
+        let secret = keys.secret_key().to_secret_bytes();
+
+        // Write the credential to the keyring
+        let write_credential = cx.write_credentials(&username, &username, &secret);
+
+        cx.spawn(async move |this, cx| {
+            match write_credential.await {
+                Ok(_) => {
+                    this.update(cx, |this, cx| {
+                        this.set_signer(keys, cx);
+                    })?;
+                }
+                Err(e) => return Err(anyhow!("Failed to write credential: {e}")),
+            }
+            Ok(())
+        })
     }
 
-    /// Get all relays for a given public key without ensuring connections
-    pub fn read_only_relays(&self, public_key: &PublicKey, cx: &App) -> Vec<SharedString> {
-        self.gossip.read(cx).read_only_relays(public_key)
+    /// Add a nostr connect signer to keyring
+    pub fn add_nip46_signer(
+        &mut self,
+        nip46: &NostrConnect,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), Error>> {
+        let nip46 = nip46.clone();
+        let async_nip46 = nip46.clone();
+
+        // Connect and verify the remote signer
+        let task: Task<Result<(PublicKey, NostrConnectUri), Error>> =
+            cx.background_spawn(async move {
+                let public_key = async_nip46.get_public_key().await?;
+                let uri = async_nip46.bunker_uri().await?;
+
+                Ok((public_key, uri))
+            });
+
+        cx.spawn(async move |this, cx| {
+            match task.await {
+                Ok((public_key, uri)) => {
+                    let username = public_key.to_bech32().unwrap();
+                    let write_credential = this.read_with(cx, |_this, cx| {
+                        cx.write_credentials(&username, &username, uri.to_string().as_bytes())
+                    })?;
+
+                    match write_credential.await {
+                        Ok(_) => {
+                            this.update(cx, |this, cx| {
+                                this.set_signer(nip46, cx);
+                            })?;
+                        }
+                        Err(e) => return Err(anyhow!("Failed to write credential: {e}")),
+                    }
+                }
+                Err(e) => return Err(anyhow!("Failed to connect to the remote signer: {e}")),
+            }
+            Ok(())
+        })
+    }
+
+    /// Set the state of the relay list
+    fn set_relay_state(&mut self, state: RelayState, cx: &mut Context<Self>) {
+        self.relay_list_state = state;
+        cx.notify();
+    }
+
+    pub fn ensure_relay_list(&mut self, cx: &mut Context<Self>) {
+        let task = self.verify_relay_list(cx);
+
+        // Set the state to idle before starting the task
+        self.set_relay_state(RelayState::default(), cx);
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let result = task.await?;
+
+            // Update state
+            this.update(cx, |this, cx| {
+                this.relay_list_state = result;
+                cx.notify();
+            })?;
+
+            Ok(())
+        }));
+    }
+
+    // Verify relay list for current user
+    fn verify_relay_list(&mut self, cx: &mut Context<Self>) -> Task<Result<RelayState, Error>> {
+        let client = self.client();
+
+        cx.background_spawn(async move {
+            let signer = client.signer().context("Signer not found")?;
+            let public_key = signer.get_public_key().await?;
+
+            let filter = Filter::new()
+                .kind(Kind::RelayList)
+                .author(public_key)
+                .limit(1);
+
+            // Construct target for subscription
+            let target: HashMap<&str, Vec<Filter>> = BOOTSTRAP_RELAYS
+                .into_iter()
+                .map(|relay| (relay, vec![filter.clone()]))
+                .collect();
+
+            // Stream events from the bootstrap relays
+            let mut stream = client
+                .stream_events(target)
+                .timeout(Duration::from_secs(TIMEOUT))
+                .await?;
+
+            while let Some((_url, res)) = stream.next().await {
+                match res {
+                    Ok(event) => {
+                        log::info!("Received relay list event: {event:?}");
+                        return Ok(RelayState::Configured);
+                    }
+                    Err(e) => {
+                        log::error!("Failed to receive relay list event: {e}");
+                    }
+                }
+            }
+
+            Ok(RelayState::NotConfigured)
+        })
     }
 
     /// Ensure write relays for a given public key
@@ -381,289 +716,8 @@ impl NostrRegistry {
         })
     }
 
-    /// Set the connected status of the client
-    fn set_connected(&mut self, cx: &mut Context<Self>) {
-        self.connected = true;
-        cx.notify();
-    }
-
-    /// Get local stored signer
-    fn get_signer(&mut self, cx: &mut Context<Self>) {
-        let read_credential = cx.read_credentials(KEYRING);
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            match read_credential.await {
-                Ok(Some((_user, secret))) => {
-                    let secret = SecretKey::from_slice(&secret)?;
-                    let keys = Keys::new(secret);
-
-                    this.update(cx, |this, cx| {
-                        this.set_signer(keys, false, cx);
-                    })?;
-                }
-                _ => {
-                    this.update(cx, |this, cx| {
-                        this.get_bunker(cx);
-                    })?;
-                }
-            }
-
-            Ok(())
-        }));
-    }
-
-    /// Get local stored bunker connection
-    fn get_bunker(&mut self, cx: &mut Context<Self>) {
-        let client = self.client();
-        let app_keys = self.app_keys().clone();
-        let timeout = Duration::from_secs(NOSTR_CONNECT_TIMEOUT);
-
-        let task: Task<Result<NostrConnect, Error>> = cx.background_spawn(async move {
-            log::info!("Getting bunker connection");
-
-            let filter = Filter::new()
-                .kind(Kind::ApplicationSpecificData)
-                .identifier("coop:account")
-                .limit(1);
-
-            if let Some(event) = client.database().query(filter).await?.first_owned() {
-                let uri = NostrConnectUri::parse(event.content)?;
-                let signer = NostrConnect::new(uri.clone(), app_keys.clone(), timeout, None)?;
-
-                Ok(signer)
-            } else {
-                Err(anyhow!("No account found"))
-            }
-        });
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            match task.await {
-                Ok(signer) => {
-                    this.update(cx, |this, cx| {
-                        this.set_signer(signer, true, cx);
-                    })
-                    .ok();
-                }
-                Err(e) => {
-                    log::warn!("Failed to get bunker: {e}");
-                    // Create a new identity if no stored bunker exists
-                    this.update(cx, |this, cx| {
-                        this.set_default_signer(cx);
-                    })
-                    .ok();
-                }
-            }
-
-            Ok(())
-        }));
-    }
-
-    /// Set the signer for the nostr client and verify the public key
-    pub fn set_signer<T>(&mut self, new: T, owned: bool, cx: &mut Context<Self>)
-    where
-        T: NostrSigner + 'static,
-    {
-        let client = self.client();
-        let signer = self.signer();
-
-        // Create a task to update the signer and verify the public key
-        let task: Task<Result<PublicKey, Error>> = cx.background_spawn(async move {
-            // Update signer and unsubscribe
-            signer.switch(new, owned).await;
-            client.unsubscribe_all().await?;
-
-            // Verify and save public key
-            let signer = client.signer().context("Signer not found")?;
-            let public_key = signer.get_public_key().await?;
-
-            let npub = public_key.to_bech32().unwrap();
-            let keys_dir = config_dir().join("keys");
-
-            // Ensure keys directory exists
-            smol::fs::create_dir_all(&keys_dir).await?;
-
-            let key_path = keys_dir.join(format!("{}.npub", npub));
-            smol::fs::write(key_path, "").await?;
-
-            log::info!("Signer's public key: {}", public_key);
-            Ok(public_key)
-        });
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            // set signer
-            let public_key = task.await?;
-
-            // Update states
-            this.update(cx, |this, cx| {
-                this.npubs.update(cx, |this, cx| {
-                    this.insert(public_key);
-                    cx.notify();
-                });
-                this.ensure_relay_list(cx);
-            })?;
-
-            Ok(())
-        }));
-    }
-
-    /// Create a new identity
-    fn set_default_signer(&mut self, cx: &mut Context<Self>) {
-        let client = self.client();
-        let keys = Keys::generate();
-        let async_keys = keys.clone();
-
-        // Create a write credential task
-        let write_credential = cx.write_credentials(
-            KEYRING,
-            &keys.public_key().to_hex(),
-            &keys.secret_key().to_secret_bytes(),
-        );
-
-        // Set the creating signer status
-        self.set_creating_signer(true, cx);
-
-        // Run async tasks in background
-        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let signer = async_keys.into_nostr_signer();
-
-            // Get default relay list
-            let relay_list = default_relay_list();
-
-            // Publish relay list event
-            let event = EventBuilder::relay_list(relay_list).sign(&signer).await?;
-            client
-                .send_event(&event)
-                .ok_timeout(Duration::from_secs(TIMEOUT))
-                .await?;
-
-            // Construct the default metadata
-            let name = petname::petname(2, "-").unwrap_or("Cooper".to_string());
-            let avatar = Url::parse(&format!("https://avatar.vercel.sh/{name}")).unwrap();
-            let metadata = Metadata::new().display_name(&name).picture(avatar);
-
-            // Publish metadata event
-            let event = EventBuilder::metadata(&metadata).sign(&signer).await?;
-            client
-                .send_event(&event)
-                .ok_timeout(Duration::from_secs(TIMEOUT))
-                .ack_policy(AckPolicy::none())
-                .await?;
-
-            // Construct the default contact list
-            let contacts = vec![Contact::new(PublicKey::parse(COOP_PUBKEY).unwrap())];
-
-            // Publish contact list event
-            let event = EventBuilder::contact_list(contacts).sign(&signer).await?;
-            client
-                .send_event(&event)
-                .ok_timeout(Duration::from_secs(TIMEOUT))
-                .ack_policy(AckPolicy::none())
-                .await?;
-
-            // Construct the default messaging relay list
-            let relays = default_messaging_relays();
-
-            // Publish messaging relay list event
-            let event = EventBuilder::nip17_relay_list(relays).sign(&signer).await?;
-            client
-                .send_event(&event)
-                .ok_timeout(Duration::from_secs(TIMEOUT))
-                .ack_policy(AckPolicy::none())
-                .await?;
-
-            // Write user's credentials to the system keyring
-            write_credential.await?;
-
-            Ok(())
-        });
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            // Wait for the task to complete
-            task.await?;
-
-            this.update(cx, |this, cx| {
-                this.set_creating_signer(false, cx);
-                this.set_signer(keys, false, cx);
-            })?;
-
-            Ok(())
-        }));
-    }
-
-    /// Set whether Coop is creating a new signer
-    fn set_creating_signer(&mut self, creating: bool, cx: &mut Context<Self>) {
-        self.creating = creating;
-        cx.notify();
-    }
-
-    /// Set the state of the relay list
-    fn set_relay_state(&mut self, state: RelayState, cx: &mut Context<Self>) {
-        self.relay_list_state = state;
-        cx.notify();
-    }
-
-    pub fn ensure_relay_list(&mut self, cx: &mut Context<Self>) {
-        let task = self.verify_relay_list(cx);
-
-        // Set the state to idle before starting the task
-        self.set_relay_state(RelayState::default(), cx);
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            let result = task.await?;
-
-            // Update state
-            this.update(cx, |this, cx| {
-                this.relay_list_state = result;
-                cx.notify();
-            })?;
-
-            Ok(())
-        }));
-    }
-
-    // Verify relay list for current user
-    fn verify_relay_list(&mut self, cx: &mut Context<Self>) -> Task<Result<RelayState, Error>> {
-        let client = self.client();
-
-        cx.background_spawn(async move {
-            let signer = client.signer().context("Signer not found")?;
-            let public_key = signer.get_public_key().await?;
-
-            let filter = Filter::new()
-                .kind(Kind::RelayList)
-                .author(public_key)
-                .limit(1);
-
-            // Construct target for subscription
-            let target: HashMap<&str, Vec<Filter>> = BOOTSTRAP_RELAYS
-                .into_iter()
-                .map(|relay| (relay, vec![filter.clone()]))
-                .collect();
-
-            // Stream events from the bootstrap relays
-            let mut stream = client
-                .stream_events(target)
-                .timeout(Duration::from_secs(TIMEOUT))
-                .await?;
-
-            while let Some((_url, res)) = stream.next().await {
-                match res {
-                    Ok(event) => {
-                        log::info!("Received relay list event: {event:?}");
-                        return Ok(RelayState::Configured);
-                    }
-                    Err(e) => {
-                        log::error!("Failed to receive relay list event: {e}");
-                    }
-                }
-            }
-
-            Ok(RelayState::NotConfigured)
-        })
-    }
-
     /// Generate a direct nostr connection initiated by the client
-    pub fn client_connect(&self, relay: Option<RelayUrl>) -> (NostrConnect, NostrConnectUri) {
+    pub fn nostr_connect(&self, relay: Option<RelayUrl>) -> (NostrConnect, NostrConnectUri) {
         let app_keys = self.app_keys();
         let timeout = Duration::from_secs(NOSTR_CONNECT_TIMEOUT);
 
@@ -683,25 +737,6 @@ impl NostrRegistry {
         signer.auth_url_handler(CoopAuthUrlHandler);
 
         (signer, uri)
-    }
-
-    /// Store the bunker connection for the next login
-    pub fn persist_bunker(&mut self, uri: NostrConnectUri, cx: &mut App) {
-        let client = self.client();
-        let rng_keys = Keys::generate();
-
-        self.tasks.push(cx.background_spawn(async move {
-            // Construct the event for application-specific data
-            let event = EventBuilder::new(Kind::ApplicationSpecificData, uri.to_string())
-                .tag(Tag::identifier("coop:account"))
-                .sign(&rng_keys)
-                .await?;
-
-            // Store the event in the database
-            client.database().save_event(&event).await?;
-
-            Ok(())
-        }));
     }
 
     /// Get the public key of a NIP-05 address

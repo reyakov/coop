@@ -331,7 +331,7 @@ impl Room {
         let client = nostr.read(cx).client();
 
         let signer = nostr.read(cx).signer();
-        let sender = signer.public_key().unwrap();
+        let sender = signer.public_key();
 
         // Get room's id
         let id = self.id;
@@ -340,7 +340,7 @@ impl Room {
         let members: Vec<PublicKey> = self
             .members
             .iter()
-            .filter(|public_key| public_key != &&sender)
+            .filter(|public_key| Some(**public_key) != sender)
             .copied()
             .collect();
 

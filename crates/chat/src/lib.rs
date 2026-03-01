@@ -262,9 +262,12 @@ impl ChatRegistry {
     pub fn get_contact_list(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
+
+        let Some(public_key) = signer.public_key() else {
+            return;
+        };
+
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
@@ -318,9 +321,12 @@ impl ChatRegistry {
     fn verify_relays(&mut self, cx: &mut Context<Self>) -> Task<Result<InboxState, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
+
+        let Some(public_key) = signer.public_key() else {
+            return Task::ready(Err(anyhow!("User not found")));
+        };
+
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
         cx.background_spawn(async move {
