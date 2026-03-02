@@ -254,7 +254,7 @@ impl Screening {
             let total = contacts.len();
 
             this.title(SharedString::from("Mutual contacts")).child(
-                v_flex().gap_1().pb_4().child(
+                v_flex().gap_1().pb_2().child(
                     uniform_list("contacts", total, move |range, _window, cx| {
                         let persons = PersonRegistry::global(cx);
                         let mut items = Vec::with_capacity(total);
@@ -356,9 +356,9 @@ impl Render for Screening {
                             .child(
                                 Button::new("report")
                                     .tooltip("Report as a scam or impostor")
-                                    .icon(IconName::Boom)
+                                    .icon(IconName::Warning)
                                     .small()
-                                    .danger()
+                                    .warning()
                                     .rounded()
                                     .on_click(cx.listener(move |this, _e, window, cx| {
                                         this.report(window, cx);

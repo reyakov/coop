@@ -113,7 +113,7 @@ impl ChatRegistry {
         subscriptions.push(
             // Observe the nip65 state and load chat rooms on every state change
             cx.observe(&nostr, |this, state, cx| {
-                match state.read(cx).relay_list_state() {
+                match state.read(cx).relay_list_state {
                     RelayState::Idle => {
                         this.reset(cx);
                     }
@@ -262,9 +262,12 @@ impl ChatRegistry {
     pub fn get_contact_list(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
+
+        let Some(public_key) = signer.public_key() else {
+            return;
+        };
+
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
@@ -318,9 +321,12 @@ impl ChatRegistry {
     fn verify_relays(&mut self, cx: &mut Context<Self>) -> Task<Result<InboxState, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
         let signer = nostr.read(cx).signer();
-        let public_key = signer.public_key().unwrap();
+
+        let Some(public_key) = signer.public_key() else {
+            return Task::ready(Err(anyhow!("User not found")));
+        };
+
         let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
         cx.background_spawn(async move {
@@ -685,14 +691,12 @@ impl ChatRegistry {
     }
 
     /// Trigger a refresh of the opened chat rooms by their IDs
-    pub fn refresh_rooms(&mut self, ids: Option<Vec<u64>>, cx: &mut Context<Self>) {
-        if let Some(ids) = ids {
-            for room in self.rooms.iter() {
-                if ids.contains(&room.read(cx).id) {
-                    room.update(cx, |this, cx| {
-                        this.emit_refresh(cx);
-                    });
-                }
+    pub fn refresh_rooms(&mut self, ids: &[u64], cx: &mut Context<Self>) {
+        for room in self.rooms.iter() {
+            if ids.contains(&room.read(cx).id) {
+                room.update(cx, |this, cx| {
+                    this.emit_refresh(cx);
+                });
             }
         }
     }

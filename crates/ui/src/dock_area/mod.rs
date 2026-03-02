@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    actions, div, px, AnyElement, AnyView, App, AppContext, Axis, Bounds, Context, Edges, Entity,
-    EntityId, EventEmitter, Focusable, InteractiveElement as _, IntoElement, ParentElement as _,
-    Pixels, Render, SharedString, Styled, Subscription, WeakEntity, Window,
+    actions, div, px, AnyElement, AnyView, App, AppContext, Axis, Bounds, Context, Decorations,
+    Edges, Entity, EntityId, EventEmitter, Focusable, InteractiveElement as _, IntoElement,
+    ParentElement as _, Pixels, Render, SharedString, Styled, Subscription, WeakEntity, Window,
 };
+use theme::CLIENT_SIDE_DECORATION_ROUNDING;
 
 use crate::dock_area::dock::{Dock, DockPlacement};
 use crate::dock_area::panel::{Panel, PanelEvent, PanelStyle, PanelView};
@@ -202,19 +203,16 @@ impl DockItem {
     /// Returns all panel ids
     pub fn panel_ids(&self, cx: &App) -> Vec<SharedString> {
         match self {
-            Self::Tabs { view, .. } => view.read(cx).panel_ids(cx),
-            Self::Split { items, .. } => {
-                let mut total = vec![];
-
-                for item in items.iter() {
-                    if let DockItem::Tabs { view, .. } = item {
-                        total.extend(view.read(cx).panel_ids(cx));
-                    }
-                }
-
-                total
-            }
             Self::Panel { .. } => vec![],
+            Self::Tabs { view, .. } => view.read(cx).panel_ids(cx),
+            Self::Split { items, .. } => items
+                .iter()
+                .filter_map(|item| match item {
+                    DockItem::Tabs { view, .. } => Some(view.read(cx).panel_ids(cx)),
+                    _ => None,
+                })
+                .flatten()
+                .collect(),
         }
     }
 
@@ -745,6 +743,7 @@ impl EventEmitter<DockEvent> for DockArea {}
 impl Render for DockArea {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().clone();
+        let decorations = window.window_decorations();
 
         div()
             .id("dock-area")
@@ -754,7 +753,17 @@ impl Render for DockArea {
             .on_prepaint(move |bounds, _, cx| view.update(cx, |r, _| r.bounds = bounds))
             .map(|this| {
                 if let Some(zoom_view) = self.zoom_view.clone() {
-                    this.child(zoom_view)
+                    this.map(|this| match decorations {
+                        Decorations::Server => this,
+                        Decorations::Client { tiling } => this
+                            .when(!(tiling.top || tiling.right), |div| {
+                                div.rounded_br(CLIENT_SIDE_DECORATION_ROUNDING)
+                            })
+                            .when(!(tiling.top || tiling.left), |div| {
+                                div.rounded_bl(CLIENT_SIDE_DECORATION_ROUNDING)
+                            }),
+                    })
+                    .child(zoom_view)
                 } else {
                     // render dock
                     this.child(

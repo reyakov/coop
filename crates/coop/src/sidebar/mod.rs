@@ -16,7 +16,7 @@ use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use smallvec::{smallvec, SmallVec};
 use state::{NostrRegistry, FIND_DELAY};
-use theme::{ActiveTheme, TABBAR_HEIGHT};
+use theme::{ActiveTheme, SIDEBAR_WIDTH, TABBAR_HEIGHT};
 use ui::button::{Button, ButtonVariants};
 use ui::dock_area::panel::{Panel, PanelEvent};
 use ui::indicator::Indicator;
@@ -585,10 +585,11 @@ impl Render for Sidebar {
             )
             .when(!show_find_panel && !loading && total_rooms == 0, |this| {
                 this.child(
-                    div().px_2().child(
+                    div().px_2().w(SIDEBAR_WIDTH).child(
                         v_flex()
                             .p_3()
                             .h_24()
+                            .w_full()
                             .border_2()
                             .border_dashed()
                             .border_color(cx.theme().border_variant)

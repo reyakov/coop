@@ -21,17 +21,17 @@ pub const FIND_DELAY: u64 = 600;
 /// Default limit for searching
 pub const FIND_LIMIT: usize = 20;
 
-/// Default timeout for Nostr Connect
-pub const NOSTR_CONNECT_TIMEOUT: u64 = 200;
-
-/// Default Nostr Connect relay
-pub const NOSTR_CONNECT_RELAY: &str = "wss://relay.nsec.app";
-
 /// Default subscription id for device gift wrap events
 pub const DEVICE_GIFTWRAP: &str = "device-gift-wraps";
 
 /// Default subscription id for user gift wrap events
 pub const USER_GIFTWRAP: &str = "user-gift-wraps";
+
+/// Default timeout for Nostr Connect
+pub const NOSTR_CONNECT_TIMEOUT: u64 = 60;
+
+/// Default Nostr Connect relay
+pub const NOSTR_CONNECT_RELAY: &str = "wss://relay.nip46.com";
 
 /// Default vertex relays
 pub const WOT_RELAYS: [&str; 1] = ["wss://relay.vertexlab.io"];
@@ -40,10 +40,9 @@ pub const WOT_RELAYS: [&str; 1] = ["wss://relay.vertexlab.io"];
 pub const SEARCH_RELAYS: [&str; 2] = ["wss://antiprimal.net", "wss://search.nos.today"];
 
 /// Default bootstrap relays
-pub const BOOTSTRAP_RELAYS: [&str; 4] = [
-    "wss://nos.lol",
-    "wss://relay.damus.io",
+pub const BOOTSTRAP_RELAYS: [&str; 3] = [
     "wss://relay.primal.net",
+    "wss://indexer.coracle.social",
     "wss://user.kindpag.es",
 ];
 

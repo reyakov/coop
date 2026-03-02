@@ -1080,8 +1080,10 @@ impl TabPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(panel) = self.active_panel(cx) {
-            self.remove_panel(&panel, window, cx);
+        if self.panels.len() > 1 {
+            if let Some(panel) = self.active_panel(cx) {
+                self.remove_panel(&panel, window, cx);
+            }
         }
     }
 }

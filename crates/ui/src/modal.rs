@@ -343,7 +343,7 @@ impl RenderOnce for Modal {
         });
 
         let window_paddings = crate::root::window_paddings(window, cx);
-        let radius = (cx.theme().radius_lg * 2.).min(px(20.));
+        let radius = cx.theme().radius_lg;
 
         let view_size = window.viewport_size()
             - gpui::size(
@@ -360,8 +360,8 @@ impl RenderOnce for Modal {
         let y = self.margin_top.unwrap_or(view_size.height / 10.) + offset_top;
         let x = bounds.center().x - self.width / 2.;
 
-        let mut padding_right = px(16.);
-        let mut padding_left = px(16.);
+        let mut padding_right = px(8.);
+        let mut padding_left = px(8.);
 
         if let Some(pl) = self.style.padding.left {
             padding_left = pl.to_pixels(self.width.into(), window.rem_size());

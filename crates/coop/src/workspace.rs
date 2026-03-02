@@ -11,7 +11,7 @@ use gpui::{
 use person::PersonRegistry;
 use serde::Deserialize;
 use smallvec::{smallvec, SmallVec};
-use state::{NostrRegistry, RelayState};
+use state::{NostrRegistry, RelayState, SignerEvent};
 use theme::{ActiveTheme, Theme, ThemeRegistry, SIDEBAR_WIDTH};
 use title_bar::TitleBar;
 use ui::avatar::Avatar;
@@ -23,7 +23,7 @@ use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::Notification;
 use ui::{h_flex, v_flex, IconName, Root, Sizable, WindowExtension};
 
-use crate::dialogs::settings;
+use crate::dialogs::{accounts, settings};
 use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list};
 use crate::sidebar;
 
@@ -42,6 +42,7 @@ pub fn init(window: &mut Window, cx: &mut App) -> Entity<Workspace> {
 #[action(namespace = workspace, no_json)]
 enum Command {
     ToggleTheme,
+    ToggleAccount,
 
     RefreshEncryption,
     RefreshRelayList,
@@ -64,11 +65,13 @@ pub struct Workspace {
     dock: Entity<DockArea>,
 
     /// Event subscriptions
-    _subscriptions: SmallVec<[Subscription; 3]>,
+    _subscriptions: SmallVec<[Subscription; 4]>,
 }
 
 impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let nostr = NostrRegistry::global(cx);
+        let npubs = nostr.read(cx).npubs();
         let chat = ChatRegistry::global(cx);
         let titlebar = cx.new(|_| TitleBar::new());
         let dock = cx.new(|cx| DockArea::new(window, cx));
@@ -79,6 +82,24 @@ impl Workspace {
             // Observe system appearance and update theme
             cx.observe_window_appearance(window, |_this, window, cx| {
                 Theme::sync_system_appearance(Some(window), cx);
+            }),
+        );
+
+        subscriptions.push(
+            // Observe the npubs entity
+            cx.observe_in(&npubs, window, move |this, npubs, window, cx| {
+                if !npubs.read(cx).is_empty() {
+                    this.account_selector(window, cx);
+                }
+            }),
+        );
+
+        subscriptions.push(
+            // Subscribe to the signer events
+            cx.subscribe_in(&nostr, window, move |this, _state, event, window, cx| {
+                if let SignerEvent::Set = event {
+                    this.set_center_layout(window, cx);
+                }
             }),
         );
 
@@ -121,12 +142,12 @@ impl Workspace {
                 let ids = this.panel_ids(cx);
 
                 chat.update(cx, |this, cx| {
-                    this.refresh_rooms(ids, cx);
+                    this.refresh_rooms(&ids, cx);
                 });
             }),
         );
 
-        // Set the default layout for app's dock
+        // Set the layout at the end of cycle
         cx.defer_in(window, |this, window, cx| {
             this.set_layout(window, cx);
         });
@@ -155,49 +176,40 @@ impl Workspace {
     }
 
     /// Get all panel ids
-    fn panel_ids(&self, cx: &App) -> Option<Vec<u64>> {
-        let ids: Vec<u64> = self
-            .dock
+    fn panel_ids(&self, cx: &App) -> Vec<u64> {
+        self.dock
             .read(cx)
             .items
             .panel_ids(cx)
             .into_iter()
             .filter_map(|panel| panel.parse::<u64>().ok())
-            .collect();
-
-        Some(ids)
+            .collect()
     }
 
     /// Set the dock layout
     fn set_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let weak_dock = self.dock.downgrade();
-
-        // Sidebar
         let left = DockItem::panel(Arc::new(sidebar::init(window, cx)));
 
-        // Main workspace
-        let center = DockItem::split_with_sizes(
-            Axis::Vertical,
-            vec![DockItem::tabs(
-                vec![Arc::new(greeter::init(window, cx))],
-                None,
-                &weak_dock,
-                window,
-                cx,
-            )],
-            vec![None],
-            &weak_dock,
-            window,
-            cx,
-        );
-
-        // Update the dock layout
+        // Update the dock layout with sidebar on the left
         self.dock.update(cx, |this, cx| {
             this.set_left_dock(left, Some(SIDEBAR_WIDTH), true, window, cx);
+        });
+    }
+
+    /// Set the center dock layout
+    fn set_center_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let dock = self.dock.downgrade();
+        let greeeter = Arc::new(greeter::init(window, cx));
+        let tabs = DockItem::tabs(vec![greeeter], None, &dock, window, cx);
+        let center = DockItem::split(Axis::Vertical, vec![tabs], &dock, window, cx);
+
+        // Update the layout with center dock
+        self.dock.update(cx, |this, cx| {
             this.set_center(center, window, cx);
         });
     }
 
+    /// Handle command events
     fn on_command(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) {
         match command {
             Command::ShowSettings => {
@@ -206,7 +218,7 @@ impl Workspace {
                 window.open_modal(cx, move |this, _window, _cx| {
                     this.width(px(520.))
                         .show_close(true)
-                        .pb_4()
+                        .pb_2()
                         .title("Preferences")
                         .child(view.clone())
                 });
@@ -290,6 +302,9 @@ impl Workspace {
             Command::ToggleTheme => {
                 self.theme_selector(window, cx);
             }
+            Command::ToggleAccount => {
+                self.account_selector(window, cx);
+            }
         }
     }
 
@@ -341,6 +356,20 @@ impl Workspace {
         });
     }
 
+    fn account_selector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let accounts = accounts::init(window, cx);
+
+        window.open_modal(cx, move |this, _window, _cx| {
+            this.width(px(520.))
+                .title("Continue with")
+                .show_close(false)
+                .keyboard(false)
+                .overlay_closable(false)
+                .pb_2()
+                .child(accounts.clone())
+        });
+    }
+
     fn theme_selector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.open_modal(cx, move |this, _window, cx| {
             let registry = ThemeRegistry::global(cx);
@@ -349,20 +378,22 @@ impl Workspace {
             this.width(px(520.))
                 .show_close(true)
                 .title("Select theme")
-                .pb_4()
+                .pb_2()
                 .child(v_flex().gap_2().w_full().children({
                     let mut items = vec![];
 
                     for (ix, (path, theme)) in themes.iter().enumerate() {
                         items.push(
                             h_flex()
+                                .id(ix)
                                 .group("")
                                 .px_2()
                                 .h_8()
                                 .w_full()
                                 .justify_between()
                                 .rounded(cx.theme().radius)
-                                .hover(|this| this.bg(cx.theme().elevated_surface_background))
+                                .bg(cx.theme().ghost_element_background)
+                                .hover(|this| this.bg(cx.theme().ghost_element_hover))
                                 .child(
                                     h_flex()
                                         .gap_1p5()
@@ -427,8 +458,15 @@ impl Workspace {
 
         h_flex()
             .flex_shrink_0()
-            .justify_between()
             .gap_2()
+            .when_none(&current_user, |this| {
+                this.child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().text_muted)
+                        .child(SharedString::from("Choose an account to continue...")),
+                )
+            })
             .when_some(current_user.as_ref(), |this, public_key| {
                 let persons = PersonRegistry::global(cx);
                 let profile = persons.read(cx).get(public_key, cx);
@@ -478,6 +516,11 @@ impl Workspace {
                                 )
                                 .separator()
                                 .menu_with_icon(
+                                    "Accounts",
+                                    IconName::Group,
+                                    Box::new(Command::ToggleAccount),
+                                )
+                                .menu_with_icon(
                                     "Settings",
                                     IconName::Settings,
                                     Box::new(Command::ShowSettings),
@@ -485,25 +528,11 @@ impl Workspace {
                         }),
                 )
             })
-            .when(nostr.read(cx).creating(), |this| {
-                this.child(div().text_xs().text_color(cx.theme().text_muted).child(
-                    SharedString::from("Coop is creating a new identity for you..."),
-                ))
-            })
-            .when(!nostr.read(cx).connected(), |this| {
-                this.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().text_muted)
-                        .child(SharedString::from("Connecting...")),
-                )
-            })
     }
 
     fn titlebar_right(&mut self, _window: &mut Window, cx: &Context<Self>) -> impl IntoElement {
         let nostr = NostrRegistry::global(cx);
         let signer = nostr.read(cx).signer();
-        let relay_list = nostr.read(cx).relay_list_state();
 
         let chat = ChatRegistry::global(cx);
         let inbox_state = chat.read(cx).state(cx);
@@ -633,7 +662,7 @@ impl Workspace {
                         div()
                             .text_xs()
                             .text_color(cx.theme().text_muted)
-                            .map(|this| match relay_list {
+                            .map(|this| match nostr.read(cx).relay_list_state {
                                 RelayState::Checking => this
                                     .child(div().child(SharedString::from(
                                         "Fetching user's relay list...",
@@ -652,7 +681,9 @@ impl Workspace {
                             .tooltip("User's relay list")
                             .small()
                             .ghost()
-                            .when(relay_list.configured(), |this| this.indicator())
+                            .when(nostr.read(cx).relay_list_state.configured(), |this| {
+                                this.indicator()
+                            })
                             .dropdown_menu(move |this, _window, cx| {
                                 let nostr = NostrRegistry::global(cx);
                                 let urls = nostr.read(cx).read_only_relays(&pkey, cx);

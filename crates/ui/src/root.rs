@@ -249,7 +249,6 @@ impl Render for Root {
         div()
             .id("window")
             .size_full()
-            .bg(gpui::transparent_black())
             .map(|div| match decorations {
                 Decorations::Server => div,
                 Decorations::Client { tiling } => div

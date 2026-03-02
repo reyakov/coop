@@ -876,7 +876,7 @@ impl ChatPanel {
                     window.open_modal(cx, move |this, _window, cx| {
                         this.show_close(true)
                             .title(SharedString::from("Sent Reports"))
-                            .child(v_flex().pb_4().gap_4().children({
+                            .child(v_flex().pb_2().gap_4().children({
                                 let mut items = Vec::with_capacity(reports.len());
 
                                 for report in reports.iter() {
