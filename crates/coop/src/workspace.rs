@@ -5,14 +5,14 @@ use chat::{ChatEvent, ChatRegistry, InboxState};
 use device::DeviceRegistry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, Action, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Subscription, Window,
+    Action, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, Styled, Subscription, Window, div, px,
 };
 use person::PersonRegistry;
 use serde::Deserialize;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, RelayState, SignerEvent};
-use theme::{ActiveTheme, Theme, ThemeRegistry, SIDEBAR_WIDTH};
+use theme::{ActiveTheme, SIDEBAR_WIDTH, Theme, ThemeRegistry};
 use title_bar::TitleBar;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
@@ -21,14 +21,13 @@ use ui::dock_area::panel::PanelView;
 use ui::dock_area::{ClosePanel, DockArea, DockItem};
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::Notification;
-use ui::{h_flex, v_flex, IconName, Root, Sizable, WindowExtension};
+use ui::{IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
 
 use crate::dialogs::{accounts, settings};
 use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list};
 use crate::sidebar;
 
-const ENC_MSG: &str =
-    "Encryption Key is a special key that used to encrypt and decrypt your messages. \
+const ENC_MSG: &str = "Encryption Key is a special key that used to encrypt and decrypt your messages. \
      Your identity is completely decoupled from all encryption processes to protect your privacy.";
 
 const ENC_WARN: &str = "By resetting your encryption key, you will lose access to \

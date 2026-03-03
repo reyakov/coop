@@ -8,19 +8,19 @@ use chat::{Message, RenderedMessage, Room, RoomEvent, SendReport};
 use common::RenderedTimestamp;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    deferred, div, img, list, px, red, relative, svg, white, AnyElement, App, AppContext,
-    ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ListAlignment, ListOffset, ListState, MouseButton, ObjectFit, ParentElement,
-    PathPromptOptions, Render, SharedString, StatefulInteractiveElement, Styled, StyledImage,
-    Subscription, Task, WeakEntity, Window,
+    AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, MouseButton,
+    ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, StatefulInteractiveElement,
+    Styled, StyledImage, Subscription, Task, WeakEntity, Window, deferred, div, img, list, px, red,
+    relative, svg, white,
 };
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
 use settings::{AppSettings, SignerKind};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use smol::lock::RwLock;
-use state::{upload, NostrRegistry};
+use state::{NostrRegistry, upload};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
@@ -31,8 +31,8 @@ use ui::menu::{ContextMenuExt, DropdownMenu};
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
 use ui::{
-    h_flex, v_flex, Disableable, Icon, IconName, InteractiveElementExt, Sizable, StyledExt,
-    WindowExtension,
+    Disableable, Icon, IconName, InteractiveElementExt, Sizable, StyledExt, WindowExtension,
+    h_flex, v_flex,
 };
 
 use crate::text::RenderedText;
@@ -699,10 +699,13 @@ impl ChatPanel {
         if let Some(message) = self.messages.iter().nth(ix) {
             match message {
                 Message::User(rendered) => {
+                    let persons = PersonRegistry::global(cx);
                     let text = self
                         .rendered_texts_by_id
                         .entry(rendered.id)
-                        .or_insert_with(|| RenderedText::new(&rendered.content, cx))
+                        .or_insert_with(|| {
+                            RenderedText::new(&rendered.content, &rendered.mentions, &persons, cx)
+                        })
                         .element(ix.into(), window, cx);
 
                     self.render_text_message(ix, rendered, text, cx)

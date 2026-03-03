@@ -1,6 +1,7 @@
 use std::hash::Hash;
+use std::ops::Range;
 
-use common::EventUtils;
+use common::{EventUtils, NostrParser};
 use nostr_sdk::prelude::*;
 
 /// New message.
@@ -91,6 +92,18 @@ impl PartialOrd for Message {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Mention {
+    pub public_key: PublicKey,
+    pub range: Range<usize>,
+}
+
+impl Mention {
+    pub fn new(public_key: PublicKey, range: Range<usize>) -> Self {
+        Self { public_key, range }
+    }
+}
+
 /// Rendered message.
 #[derive(Debug, Clone)]
 pub struct RenderedMessage {
@@ -102,7 +115,7 @@ pub struct RenderedMessage {
     /// Message created time as unix timestamp
     pub created_at: Timestamp,
     /// List of mentioned public keys in the message
-    pub mentions: Vec<PublicKey>,
+    pub mentions: Vec<Mention>,
     /// List of event of the message this message is a reply to
     pub replies_to: Vec<EventId>,
 }
@@ -184,20 +197,17 @@ impl Hash for RenderedMessage {
 }
 
 /// Extracts all mentions (public keys) from a content string.
-fn extract_mentions(content: &str) -> Vec<PublicKey> {
+fn extract_mentions(content: &str) -> Vec<Mention> {
     let parser = NostrParser::new();
     let tokens = parser.parse(content);
 
     tokens
-        .filter_map(|token| match token {
-            Token::Nostr(nip21) => match nip21 {
-                Nip21::Pubkey(pubkey) => Some(pubkey),
-                Nip21::Profile(profile) => Some(profile.public_key),
-                _ => None,
-            },
+        .filter_map(|token| match token.value {
+            Nip21::Pubkey(public_key) => Some(Mention::new(public_key, token.range)),
+            Nip21::Profile(profile) => Some(Mention::new(profile.public_key, token.range)),
             _ => None,
         })
-        .collect::<Vec<_>>()
+        .collect()
 }
 
 /// Extracts all reply (ids) from the event tags.

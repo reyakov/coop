@@ -1,29 +1,29 @@
 use std::ops::Range;
 use std::sync::Arc;
 
+use chat::Mention;
+use common::RangeExt;
 use gpui::{
-    AnyElement, App, ElementId, HighlightStyle, InteractiveText, IntoElement, SharedString,
-    StyledText, UnderlineStyle, Window,
+    AnyElement, App, ElementId, Entity, FontStyle, FontWeight, HighlightStyle, InteractiveText,
+    IntoElement, SharedString, StrikethroughStyle, StyledText, UnderlineStyle, Window,
 };
-use nostr_sdk::prelude::*;
-use once_cell::sync::Lazy;
 use person::PersonRegistry;
-use regex::Regex;
 use theme::ActiveTheme;
 
-use crate::actions::OpenPublicKey;
-
-static URL_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(?:^|\s)(?:https?://)?(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}(?::\d+)?(?:/[^\s]*)?(?:\s|$)").unwrap()
-});
-
-static NOSTR_URI_REGEX: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"nostr:(npub|note|nprofile|nevent|naddr)[a-zA-Z0-9]+").unwrap());
-
+#[allow(clippy::enum_variant_names)]
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Highlight {
-    Link,
-    Nostr,
+    Code,
+    InlineCode(bool),
+    Highlight(HighlightStyle),
+    Mention,
+}
+
+impl From<HighlightStyle> for Highlight {
+    fn from(style: HighlightStyle) -> Self {
+        Self::Highlight(style)
+    }
 }
 
 #[derive(Default)]
@@ -35,7 +35,12 @@ pub struct RenderedText {
 }
 
 impl RenderedText {
-    pub fn new(content: &str, cx: &App) -> Self {
+    pub fn new(
+        content: &str,
+        mentions: &[Mention],
+        persons: &Entity<PersonRegistry>,
+        cx: &App,
+    ) -> Self {
         let mut text = String::new();
         let mut highlights = Vec::new();
         let mut link_ranges = Vec::new();
@@ -43,10 +48,12 @@ impl RenderedText {
 
         render_plain_text_mut(
             content,
+            mentions,
             &mut text,
             &mut highlights,
             &mut link_ranges,
             &mut link_urls,
+            persons,
             cx,
         );
 
@@ -61,7 +68,7 @@ impl RenderedText {
     }
 
     pub fn element(&self, id: ElementId, window: &Window, cx: &App) -> AnyElement {
-        let link_color = cx.theme().text_accent;
+        let code_background = cx.theme().elevated_surface_background;
 
         InteractiveText::new(
             id,
@@ -71,15 +78,35 @@ impl RenderedText {
                     (
                         range.clone(),
                         match highlight {
-                            Highlight::Link => HighlightStyle {
-                                color: Some(link_color),
-                                underline: Some(UnderlineStyle::default()),
+                            Highlight::Code => HighlightStyle {
+                                background_color: Some(code_background),
                                 ..Default::default()
                             },
-                            Highlight::Nostr => HighlightStyle {
-                                color: Some(link_color),
+                            Highlight::InlineCode(link) => {
+                                if *link {
+                                    HighlightStyle {
+                                        background_color: Some(code_background),
+                                        underline: Some(UnderlineStyle {
+                                            thickness: 1.0.into(),
+                                            ..Default::default()
+                                        }),
+                                        ..Default::default()
+                                    }
+                                } else {
+                                    HighlightStyle {
+                                        background_color: Some(code_background),
+                                        ..Default::default()
+                                    }
+                                }
+                            }
+                            Highlight::Mention => HighlightStyle {
+                                underline: Some(UnderlineStyle {
+                                    thickness: 1.0.into(),
+                                    ..Default::default()
+                                }),
                                 ..Default::default()
                             },
+                            Highlight::Highlight(highlight) => *highlight,
                         },
                     )
                 }),
@@ -87,22 +114,10 @@ impl RenderedText {
         )
         .on_click(self.link_ranges.clone(), {
             let link_urls = self.link_urls.clone();
-            move |ix, window, cx| {
-                let token = link_urls[ix].as_str();
-
-                if let Some(clean_url) = token.strip_prefix("nostr:") {
-                    if let Ok(public_key) = PublicKey::parse(clean_url) {
-                        window.dispatch_action(Box::new(OpenPublicKey(public_key)), cx);
-                    }
-                } else if is_url(token) {
-                    let url = if token.starts_with("http") {
-                        token.to_string()
-                    } else {
-                        format!("https://{token}")
-                    };
-                    cx.open_url(&url);
-                } else {
-                    log::warn!("Unrecognized token {token}")
+            move |ix, _, cx| {
+                let url = &link_urls[ix];
+                if url.starts_with("http") {
+                    cx.open_url(url);
                 }
             }
         })
@@ -110,214 +125,273 @@ impl RenderedText {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_plain_text_mut(
-    content: &str,
+    block: &str,
+    mut mentions: &[Mention],
     text: &mut String,
     highlights: &mut Vec<(Range<usize>, Highlight)>,
     link_ranges: &mut Vec<Range<usize>>,
     link_urls: &mut Vec<String>,
+    persons: &Entity<PersonRegistry>,
     cx: &App,
 ) {
-    // Copy the content directly
-    text.push_str(content);
+    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
-    // Collect all URLs
-    let mut url_matches: Vec<(Range<usize>, String)> = Vec::new();
+    let mut bold_depth = 0;
+    let mut italic_depth = 0;
+    let mut strikethrough_depth = 0;
+    let mut link_url = None;
+    let mut list_stack = Vec::new();
 
-    for link in URL_REGEX.find_iter(content) {
-        let range = link.start()..link.end();
-        let url = link.as_str().to_string();
+    let mut options = Options::all();
+    options.remove(pulldown_cmark::Options::ENABLE_DEFINITION_LIST);
 
-        url_matches.push((range, url));
-    }
+    for (event, source_range) in Parser::new_ext(block, options).into_offset_iter() {
+        let prev_len = text.len();
 
-    // Collect all nostr entities with nostr: prefix
-    let mut nostr_matches: Vec<(Range<usize>, String)> = Vec::new();
+        match event {
+            Event::Text(t) => {
+                // Process text with mention replacements
+                let t_str = t.as_ref();
+                let mut last_processed = 0;
 
-    for nostr_match in NOSTR_URI_REGEX.find_iter(content) {
-        let range = nostr_match.start()..nostr_match.end();
-        let nostr_uri = nostr_match.as_str().to_string();
+                while let Some(mention) = mentions.first() {
+                    if !source_range.contains_inclusive(&mention.range) {
+                        break;
+                    }
 
-        // Check if this nostr URI overlaps with any already processed URL
-        if !url_matches
-            .iter()
-            .any(|(url_range, _)| url_range.start < range.end && range.start < url_range.end)
-        {
-            nostr_matches.push((range, nostr_uri));
-        }
-    }
+                    // Calculate positions within the current text
+                    let mention_start_in_text = mention.range.start - source_range.start;
+                    let mention_end_in_text = mention.range.end - source_range.start;
 
-    // Combine all matches for processing from end to start
-    let mut all_matches = Vec::new();
-    all_matches.extend(url_matches);
-    all_matches.extend(nostr_matches);
+                    // Add text before this mention
+                    if mention_start_in_text > last_processed {
+                        let before_mention = &t_str[last_processed..mention_start_in_text];
+                        process_text_segment(
+                            before_mention,
+                            prev_len + last_processed,
+                            bold_depth,
+                            italic_depth,
+                            strikethrough_depth,
+                            link_url.clone(),
+                            text,
+                            highlights,
+                            link_ranges,
+                            link_urls,
+                        );
+                    }
 
-    // Sort by position (end to start) to avoid changing positions when replacing text
-    all_matches.sort_by(|(range_a, _), (range_b, _)| range_b.start.cmp(&range_a.start));
+                    // Process the mention replacement
+                    let profile = persons.read(cx).get(&mention.public_key, cx);
+                    let replacement_text = format!("@{}", profile.name());
 
-    // Process all matches
-    for (range, entity) in all_matches {
-        // Handle URL token
-        if is_url(&entity) {
-            highlights.push((range.clone(), Highlight::Link));
-            link_ranges.push(range);
-            link_urls.push(entity);
-            continue;
-        };
+                    let replacement_start = text.len();
+                    text.push_str(&replacement_text);
+                    let replacement_end = text.len();
 
-        if let Ok(nip21) = Nip21::parse(&entity) {
-            match nip21 {
-                Nip21::Pubkey(public_key) => {
-                    render_pubkey(
-                        public_key,
-                        text,
-                        &range,
-                        highlights,
-                        link_ranges,
-                        link_urls,
-                        cx,
-                    );
+                    highlights.push((replacement_start..replacement_end, Highlight::Mention));
+
+                    last_processed = mention_end_in_text;
+                    mentions = &mentions[1..];
                 }
-                Nip21::Profile(nip19_profile) => {
-                    render_pubkey(
-                        nip19_profile.public_key,
+
+                // Add any remaining text after the last mention
+                if last_processed < t_str.len() {
+                    let remaining_text = &t_str[last_processed..];
+                    process_text_segment(
+                        remaining_text,
+                        prev_len + last_processed,
+                        bold_depth,
+                        italic_depth,
+                        strikethrough_depth,
+                        link_url.clone(),
                         text,
-                        &range,
-                        highlights,
-                        link_ranges,
-                        link_urls,
-                        cx,
-                    );
-                }
-                Nip21::EventId(event_id) => {
-                    render_bech32(
-                        event_id.to_bech32().unwrap(),
-                        text,
-                        &range,
-                        highlights,
-                        link_ranges,
-                        link_urls,
-                    );
-                }
-                Nip21::Event(nip19_event) => {
-                    render_bech32(
-                        nip19_event.to_bech32().unwrap(),
-                        text,
-                        &range,
-                        highlights,
-                        link_ranges,
-                        link_urls,
-                    );
-                }
-                Nip21::Coordinate(nip19_coordinate) => {
-                    render_bech32(
-                        nip19_coordinate.to_bech32().unwrap(),
-                        text,
-                        &range,
                         highlights,
                         link_ranges,
                         link_urls,
                     );
                 }
             }
+            Event::Code(t) => {
+                text.push_str(t.as_ref());
+                let is_link = link_url.is_some();
+
+                if let Some(link_url) = link_url.clone() {
+                    link_ranges.push(prev_len..text.len());
+                    link_urls.push(link_url);
+                }
+
+                highlights.push((prev_len..text.len(), Highlight::InlineCode(is_link)))
+            }
+            Event::Start(tag) => match tag {
+                Tag::Paragraph => new_paragraph(text, &mut list_stack),
+                Tag::Heading { .. } => {
+                    new_paragraph(text, &mut list_stack);
+                    bold_depth += 1;
+                }
+                Tag::CodeBlock(_kind) => {
+                    new_paragraph(text, &mut list_stack);
+                }
+                Tag::Emphasis => italic_depth += 1,
+                Tag::Strong => bold_depth += 1,
+                Tag::Strikethrough => strikethrough_depth += 1,
+                Tag::Link { dest_url, .. } => link_url = Some(dest_url.to_string()),
+                Tag::List(number) => {
+                    list_stack.push((number, false));
+                }
+                Tag::Item => {
+                    let len = list_stack.len();
+                    if let Some((list_number, has_content)) = list_stack.last_mut() {
+                        *has_content = false;
+                        if !text.is_empty() && !text.ends_with('\n') {
+                            text.push('\n');
+                        }
+                        for _ in 0..len - 1 {
+                            text.push_str("  ");
+                        }
+                        if let Some(number) = list_number {
+                            text.push_str(&format!("{}. ", number));
+                            *number += 1;
+                            *has_content = false;
+                        } else {
+                            text.push_str("- ");
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Event::End(tag) => match tag {
+                TagEnd::Heading(_) => bold_depth -= 1,
+                TagEnd::Emphasis => italic_depth -= 1,
+                TagEnd::Strong => bold_depth -= 1,
+                TagEnd::Strikethrough => strikethrough_depth -= 1,
+                TagEnd::Link => link_url = None,
+                TagEnd::List(_) => drop(list_stack.pop()),
+                _ => {}
+            },
+            Event::HardBreak => text.push('\n'),
+            Event::SoftBreak => text.push('\n'),
+            _ => {}
         }
     }
 }
 
-/// Check if a string is a URL
-fn is_url(s: &str) -> bool {
-    URL_REGEX.is_match(s)
-}
+#[allow(clippy::too_many_arguments)]
+fn process_text_segment(
+    segment: &str,
+    segment_start: usize,
+    bold_depth: i32,
+    italic_depth: i32,
+    strikethrough_depth: i32,
+    link_url: Option<String>,
+    text: &mut String,
+    highlights: &mut Vec<(Range<usize>, Highlight)>,
+    link_ranges: &mut Vec<Range<usize>>,
+    link_urls: &mut Vec<String>,
+) {
+    // Build the style for this segment
+    let mut style = HighlightStyle::default();
+    if bold_depth > 0 {
+        style.font_weight = Some(FontWeight::BOLD);
+    }
+    if italic_depth > 0 {
+        style.font_style = Some(FontStyle::Italic);
+    }
+    if strikethrough_depth > 0 {
+        style.strikethrough = Some(StrikethroughStyle {
+            thickness: 1.0.into(),
+            ..Default::default()
+        });
+    }
 
-/// Format a bech32 entity with ellipsis and last 4 characters
-fn format_shortened_entity(entity: &str) -> String {
-    let prefix_end = entity.find('1').unwrap_or(0);
+    // Add the text
+    text.push_str(segment);
+    let text_end = text.len();
 
-    if prefix_end > 0 && entity.len() > prefix_end + 5 {
-        let prefix = &entity[0..=prefix_end]; // Include the '1'
-        let suffix = &entity[entity.len() - 4..]; // Last 4 chars
+    if let Some(link_url) = link_url {
+        // Handle as a markdown link
+        link_ranges.push(segment_start..text_end);
+        link_urls.push(link_url);
+        style.underline = Some(UnderlineStyle {
+            thickness: 1.0.into(),
+            ..Default::default()
+        });
 
-        format!("{prefix}...{suffix}")
+        // Add highlight for the entire linked segment
+        if style != HighlightStyle::default() {
+            highlights.push((segment_start..text_end, Highlight::Highlight(style)));
+        }
     } else {
-        entity.to_string()
+        // Handle link detection within the segment
+        let mut finder = linkify::LinkFinder::new();
+        finder.kinds(&[linkify::LinkKind::Url]);
+        let mut last_link_pos = 0;
+
+        for link in finder.links(segment) {
+            let start = link.start();
+            let end = link.end();
+
+            // Add non-link text before this link
+            if start > last_link_pos {
+                let non_link_start = segment_start + last_link_pos;
+                let non_link_end = segment_start + start;
+
+                if style != HighlightStyle::default() {
+                    highlights.push((non_link_start..non_link_end, Highlight::Highlight(style)));
+                }
+            }
+
+            // Add the link
+            let range = (segment_start + start)..(segment_start + end);
+            link_ranges.push(range.clone());
+            link_urls.push(link.as_str().to_string());
+
+            // Apply link styling (underline + existing style)
+            let mut link_style = style;
+            link_style.underline = Some(UnderlineStyle {
+                thickness: 1.0.into(),
+                ..Default::default()
+            });
+
+            highlights.push((range, Highlight::Highlight(link_style)));
+
+            last_link_pos = end;
+        }
+
+        // Add any remaining text after the last link
+        if last_link_pos < segment.len() {
+            let remaining_start = segment_start + last_link_pos;
+            let remaining_end = segment_start + segment.len();
+
+            if style != HighlightStyle::default() {
+                highlights.push((remaining_start..remaining_end, Highlight::Highlight(style)));
+            }
+        }
     }
 }
 
-fn render_pubkey(
-    public_key: PublicKey,
-    text: &mut String,
-    range: &Range<usize>,
-    highlights: &mut Vec<(Range<usize>, Highlight)>,
-    link_ranges: &mut Vec<Range<usize>>,
-    link_urls: &mut Vec<String>,
-    cx: &App,
-) {
-    let persons = PersonRegistry::global(cx);
-    let profile = persons.read(cx).get(&public_key, cx);
-    let display_name = format!("@{}", profile.name());
-
-    text.replace_range(range.clone(), &display_name);
-
-    let new_length = display_name.len();
-    let length_diff = new_length as isize - (range.end - range.start) as isize;
-    let new_range = range.start..(range.start + new_length);
-
-    highlights.push((new_range.clone(), Highlight::Nostr));
-    link_ranges.push(new_range);
-    link_urls.push(format!("nostr:{}", profile.public_key().to_hex()));
-
-    if length_diff != 0 {
-        adjust_ranges(highlights, link_ranges, range.end, length_diff);
-    }
-}
-
-fn render_bech32(
-    bech32: String,
-    text: &mut String,
-    range: &Range<usize>,
-    highlights: &mut Vec<(Range<usize>, Highlight)>,
-    link_ranges: &mut Vec<Range<usize>>,
-    link_urls: &mut Vec<String>,
-) {
-    let njump_url = format!("https://njump.me/{bech32}");
-    let shortened_entity = format_shortened_entity(&bech32);
-    let display_text = format!("https://njump.me/{shortened_entity}");
-
-    text.replace_range(range.clone(), &display_text);
-
-    let new_length = display_text.len();
-    let length_diff = new_length as isize - (range.end - range.start) as isize;
-    let new_range = range.start..(range.start + new_length);
-
-    highlights.push((new_range.clone(), Highlight::Link));
-    link_ranges.push(new_range);
-    link_urls.push(njump_url);
-
-    if length_diff != 0 {
-        adjust_ranges(highlights, link_ranges, range.end, length_diff);
-    }
-}
-
-// Helper function to adjust ranges when text length changes
-fn adjust_ranges(
-    highlights: &mut [(Range<usize>, Highlight)],
-    link_ranges: &mut [Range<usize>],
-    position: usize,
-    length_diff: isize,
-) {
-    // Adjust highlight ranges
-    for (range, _) in highlights.iter_mut() {
-        if range.start > position {
-            range.start = (range.start as isize + length_diff) as usize;
-            range.end = (range.end as isize + length_diff) as usize;
+fn new_paragraph(text: &mut String, list_stack: &mut [(Option<u64>, bool)]) {
+    let mut is_subsequent_paragraph_of_list = false;
+    if let Some((_, has_content)) = list_stack.last_mut() {
+        if *has_content {
+            is_subsequent_paragraph_of_list = true;
+        } else {
+            *has_content = true;
+            return;
         }
     }
 
-    // Adjust link ranges
-    for range in link_ranges.iter_mut() {
-        if range.start > position {
-            range.start = (range.start as isize + length_diff) as usize;
-            range.end = (range.end as isize + length_diff) as usize;
+    if !text.is_empty() {
+        if !text.ends_with('\n') {
+            text.push('\n');
         }
+        text.push('\n');
+    }
+    for _ in 0..list_stack.len().saturating_sub(1) {
+        text.push_str("  ");
+    }
+    if is_subsequent_paragraph_of_list {
+        text.push_str("  ");
     }
 }

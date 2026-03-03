@@ -2,10 +2,10 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    canvas, div, point, px, size, AnyView, App, AppContext, Bounds, Context, CursorStyle,
-    Decorations, Edges, Entity, FocusHandle, HitboxBehavior, Hsla, InteractiveElement, IntoElement,
-    MouseButton, ParentElement as _, Pixels, Point, Render, ResizeEdge, SharedString, Size, Styled,
-    Tiling, WeakFocusHandle, Window,
+    AnyView, App, AppContext, Bounds, Context, CursorStyle, Decorations, Edges, Entity,
+    FocusHandle, HitboxBehavior, Hsla, InteractiveElement, IntoElement, MouseButton,
+    ParentElement as _, Pixels, Point, Render, ResizeEdge, SharedString, Size, Styled, Tiling,
+    WeakFocusHandle, Window, canvas, div, point, px, size,
 };
 use theme::{
     ActiveTheme, CLIENT_SIDE_DECORATION_BORDER, CLIENT_SIDE_DECORATION_ROUNDING,
