@@ -3,13 +3,13 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, App, Div, Element, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    ScrollHandle, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window,
+    App, Div, Element, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    ScrollHandle, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
 };
 
 use super::{Scrollbar, ScrollbarAxis};
-use crate::scroll::ScrollbarHandle;
 use crate::StyledExt;
+use crate::scroll::ScrollbarHandle;
 
 /// A trait for elements that can be made scrollable with scrollbars.
 pub trait ScrollableElement: InteractiveElement + Styled + ParentElement + Element {
@@ -160,6 +160,7 @@ where
 }
 
 impl ScrollableElement for Div {}
+
 impl<E> ScrollableElement for Stateful<E>
 where
     E: ParentElement + Styled + Element,
@@ -195,6 +196,7 @@ fn render_scrollbar<H: ScrollbarHandle + Clone>(
     // Do not render scrollbar when inspector is picking elements,
     // to allow us to pick the background elements.
     let is_inspector_picking = window.is_inspector_picking(cx);
+
     if is_inspector_picking {
         return div();
     }

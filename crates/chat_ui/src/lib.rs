@@ -1308,9 +1308,9 @@ impl Render for ChatPanel {
             .on_action(cx.listener(Self::on_command))
             .size_full()
             .child(
-                div()
+                v_flex()
                     .flex_1()
-                    .size_full()
+                    .relative()
                     .child(
                         list(
                             self.list_state.clone(),

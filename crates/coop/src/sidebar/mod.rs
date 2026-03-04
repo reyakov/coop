@@ -8,14 +8,14 @@ use common::{DebouncedDelay, RenderedTimestamp};
 use entry::RoomEntry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, uniform_list, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, RetainAllImageCache, SharedString, Styled, Subscription,
-    Task, UniformListScrollHandle, Window,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    ParentElement, Render, RetainAllImageCache, SharedString, Styled, Subscription, Task,
+    UniformListScrollHandle, Window, div, uniform_list,
 };
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
-use smallvec::{smallvec, SmallVec};
-use state::{NostrRegistry, FIND_DELAY};
+use smallvec::{SmallVec, smallvec};
+use state::{FIND_DELAY, NostrRegistry};
 use theme::{ActiveTheme, SIDEBAR_WIDTH, TABBAR_HEIGHT};
 use ui::button::{Button, ButtonVariants};
 use ui::dock_area::panel::{Panel, PanelEvent};
@@ -23,7 +23,7 @@ use ui::indicator::Indicator;
 use ui::input::{InputEvent, InputState, TextInput};
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
-use ui::{h_flex, v_flex, Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension};
+use ui::{Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 mod entry;
 
@@ -585,7 +585,7 @@ impl Render for Sidebar {
             )
             .when(!show_find_panel && !loading && total_rooms == 0, |this| {
                 this.child(
-                    div().px_2().w(SIDEBAR_WIDTH).child(
+                    div().w(SIDEBAR_WIDTH).px_2().child(
                         v_flex()
                             .p_3()
                             .h_24()
@@ -613,11 +613,9 @@ impl Render for Sidebar {
             })
             .child(
                 v_flex()
-                    .h_full()
-                    .px_1p5()
-                    .gap_1()
+                    .size_full()
                     .flex_1()
-                    .overflow_y_hidden()
+                    .gap_1()
                     .when(show_find_panel, |this| {
                         this.gap_3()
                             .when_some(self.find_results.read(cx).as_ref(), |this, results| {
@@ -688,7 +686,8 @@ impl Render for Sidebar {
                             )
                             .track_scroll(&self.scroll_handle)
                             .flex_1()
-                            .h_full(),
+                            .h_full()
+                            .px_2(),
                         )
                         .child(Scrollbar::vertical(&self.scroll_handle))
                     }),

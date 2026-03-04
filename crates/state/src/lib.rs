@@ -3,7 +3,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as AnyhowContext, Error};
+use anyhow::{Context as AnyhowContext, Error, anyhow};
 use common::config_dir;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, SharedString, Task, Window};
 use nostr_connect::prelude::*;
@@ -311,12 +311,33 @@ impl NostrRegistry {
             // Get default relay list
             let relay_list = default_relay_list();
 
+            // Extract write relays
+            let write_urls: Vec<RelayUrl> = relay_list
+                .iter()
+                .filter_map(|(url, metadata)| {
+                    if metadata.is_none() || metadata == &Some(RelayMetadata::Write) {
+                        Some(url)
+                    } else {
+                        None
+                    }
+                })
+                .cloned()
+                .collect();
+
+            // Ensure connected to all relays
+            for (url, _metadata) in relay_list.iter() {
+                client.add_relay(url).and_connect().await?;
+            }
+
             // Publish relay list event
             let event = EventBuilder::relay_list(relay_list).sign(&signer).await?;
-            client
+            let output = client
                 .send_event(&event)
+                .to(BOOTSTRAP_RELAYS)
                 .ok_timeout(Duration::from_secs(TIMEOUT))
                 .await?;
+
+            log::info!("Sent gossip relay list: {output:?}");
 
             // Construct the default metadata
             let name = petname::petname(2, "-").unwrap_or("Cooper".to_string());
@@ -327,6 +348,7 @@ impl NostrRegistry {
             let event = EventBuilder::metadata(&metadata).sign(&signer).await?;
             client
                 .send_event(&event)
+                .to(&write_urls)
                 .ack_policy(AckPolicy::none())
                 .await?;
 
@@ -337,16 +359,23 @@ impl NostrRegistry {
             let event = EventBuilder::contact_list(contacts).sign(&signer).await?;
             client
                 .send_event(&event)
+                .to(&write_urls)
                 .ack_policy(AckPolicy::none())
                 .await?;
 
             // Construct the default messaging relay list
             let relays = default_messaging_relays();
 
+            // Ensure connected to all relays
+            for url in relays.iter() {
+                client.add_relay(url).and_connect().await?;
+            }
+
             // Publish messaging relay list event
             let event = EventBuilder::nip17_relay_list(relays).sign(&signer).await?;
             client
                 .send_event(&event)
+                .to(&write_urls)
                 .ack_policy(AckPolicy::none())
                 .await?;
 
@@ -958,7 +987,7 @@ async fn get_events_for_room(client: &Client, nip65: &Event) -> Result<(), Error
 fn default_relay_list() -> Vec<(RelayUrl, Option<RelayMetadata>)> {
     vec![
         (
-            RelayUrl::parse("wss://relay.gulugulu.moe").unwrap(),
+            RelayUrl::parse("wss://relay.nostr.net").unwrap(),
             Some(RelayMetadata::Write),
         ),
         (

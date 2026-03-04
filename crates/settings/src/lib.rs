@@ -2,12 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::rc::Rc;
 
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use common::config_dir;
 use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task, Window};
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use theme::{Theme, ThemeFamily, ThemeMode};
 
 pub fn init(window: &mut Window, cx: &mut App) {
@@ -291,6 +291,8 @@ impl AppSettings {
     /// Reset theme
     pub fn reset_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.values.theme = None;
+        cx.notify();
+
         self.apply_theme(window, cx);
     }
 

@@ -1,7 +1,7 @@
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
 
-use gpui::{px, App, Global, Pixels, SharedString, Window};
+use gpui::{App, Global, Pixels, SharedString, Window, px};
 
 mod colors;
 mod platform_kind;
