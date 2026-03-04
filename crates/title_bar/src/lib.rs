@@ -1,14 +1,12 @@
-use gpui::prelude::FluentBuilder;
 #[cfg(target_os = "linux")]
 use gpui::MouseButton;
-#[cfg(not(target_os = "windows"))]
-use gpui::Pixels;
+use gpui::prelude::FluentBuilder;
 use gpui::{
-    px, AnyElement, Context, Decorations, Hsla, InteractiveElement as _, IntoElement,
-    ParentElement, Render, StatefulInteractiveElement as _, Styled, Window, WindowControlArea,
+    AnyElement, Context, Decorations, Hsla, InteractiveElement as _, IntoElement, ParentElement,
+    Pixels, Render, StatefulInteractiveElement as _, Styled, Window, WindowControlArea, px,
 };
-use smallvec::{smallvec, SmallVec};
-use theme::{ActiveTheme, PlatformKind, CLIENT_SIDE_DECORATION_ROUNDING};
+use smallvec::{SmallVec, smallvec};
+use theme::{ActiveTheme, CLIENT_SIDE_DECORATION_ROUNDING, PlatformKind};
 use ui::h_flex;
 
 #[cfg(target_os = "linux")]
