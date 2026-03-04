@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -922,11 +921,6 @@ fn get_or_init_app_keys() -> Result<Keys, Error> {
             // Create directory and write secret key
             std::fs::create_dir_all(dir.parent().unwrap())?;
             std::fs::write(&dir, secret_key.to_secret_bytes())?;
-
-            // Set permissions to readonly
-            let mut perms = std::fs::metadata(&dir)?.permissions();
-            perms.set_mode(0o400);
-            std::fs::set_permissions(&dir, perms)?;
 
             return Ok(keys);
         }
