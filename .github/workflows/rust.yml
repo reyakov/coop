@@ -13,7 +13,7 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ghcr.io/catthehacker/ubuntu:rust-latest]
         rustup: [stable]
 
     runs-on: ${{ matrix.os }}
@@ -23,7 +23,6 @@ jobs:
 
       - name: script/linux
         run: chmod +x ./script/linux && ./script/linux
-        if: matrix.os == 'ubuntu-latest'
 
       - name: Build
         run: cargo build --verbose
