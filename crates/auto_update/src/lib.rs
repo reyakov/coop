@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as AnyhowContext, Error};
+use anyhow::{Context as AnyhowContext, Error, anyhow};
 use gpui::http_client::{AsyncBody, HttpClient};
 use gpui::{
     App, AppContext, AsyncApp, BackgroundExecutor, Context, Entity, Global, Subscription, Task,
@@ -11,7 +11,7 @@ use gpui::{
 };
 use semver::Version;
 use serde::Deserialize;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use smol::fs::File;
 use smol::io::AsyncReadExt;
 use smol::process::Command;
@@ -20,11 +20,11 @@ const GITHUB_API_URL: &str = "https://api.github.com";
 const COOP_UPDATE_EXPLANATION: &str = "COOP_UPDATE_EXPLANATION";
 
 fn get_github_repo_owner() -> String {
-    std::env::var("COOP_GITHUB_REPO_OWNER").unwrap_or_else(|_| "your-username".to_string())
+    std::env::var("COOP_GITHUB_REPO_OWNER").unwrap_or_else(|_| "reyakov".to_string())
 }
 
 fn get_github_repo_name() -> String {
-    std::env::var("COOP_GITHUB_REPO_NAME").unwrap_or_else(|_| "your-repo".to_string())
+    std::env::var("COOP_GITHUB_REPO_NAME").unwrap_or_else(|_| "coop".to_string())
 }
 
 fn is_flatpak_installation() -> bool {

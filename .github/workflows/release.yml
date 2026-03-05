@@ -130,7 +130,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Make get-crate-version executable
         run: chmod +x script/get-crate-version
@@ -156,13 +156,11 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          repository: reyakov/coop
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
           draft: true
           prerelease: false
           generate_release_notes: true
-          token: ${{ secrets.TOKEN }}
           files: |
             artifacts/**/*
 
