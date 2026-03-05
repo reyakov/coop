@@ -1,20 +1,20 @@
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as AnyhowContext, Error};
+use anyhow::{Context as AnyhowContext, Error, anyhow};
 use common::EventUtils;
-use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
+use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task, WeakEntity, Window,
 };
 use nostr_sdk::prelude::*;
-use smallvec::{smallvec, SmallVec};
-use state::{NostrRegistry, RelayState, DEVICE_GIFTWRAP, TIMEOUT, USER_GIFTWRAP};
+use smallvec::{SmallVec, smallvec};
+use state::{DEVICE_GIFTWRAP, NostrRegistry, RelayState, TIMEOUT, USER_GIFTWRAP};
 
 mod message;
 mod room;

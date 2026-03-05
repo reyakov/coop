@@ -64,7 +64,7 @@ oneshot.workspace = true
 webbrowser.workspace = true
 
 indexset = "0.12.3"
-tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
+tracing-subscriber = { version = "0.3.18", features = ["fmt", "env-filter"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Temporary workaround https://github.com/zed-industries/zed/issues/47168
