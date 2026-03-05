@@ -156,15 +156,15 @@ jobs:
         id: create_release
         uses: softprops/action-gh-release@v2
         with:
+          repository: reyakov/coop
           tag_name: ${{ steps.version.outputs.tag }}
           name: ${{ steps.version.outputs.tag }}
           draft: true
           prerelease: false
           generate_release_notes: true
+          token: ${{ secrets.TOKEN }}
           files: |
             artifacts/**/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Output release info
         run: |

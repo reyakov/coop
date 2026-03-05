@@ -1005,7 +1005,6 @@ dependencies = [
  "smallvec",
  "smol",
  "state",
- "tracing",
 ]
 
 [[package]]
