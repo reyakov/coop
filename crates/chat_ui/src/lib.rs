@@ -27,7 +27,7 @@ use ui::button::{Button, ButtonVariants};
 use ui::dock_area::panel::{Panel, PanelEvent};
 use ui::indicator::Indicator;
 use ui::input::{InputEvent, InputState, TextInput};
-use ui::menu::{ContextMenuExt, DropdownMenu};
+use ui::menu::DropdownMenu;
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
 use ui::{
@@ -72,8 +72,14 @@ pub struct ChatPanel {
     /// Mapping message (rumor event) ids to their reports
     reports_by_id: Entity<BTreeMap<EventId, Vec<SendReport>>>,
 
-    /// Input state
+    /// Chat input state
     input: Entity<InputState>,
+
+    /// Subject input state
+    subject_input: Entity<InputState>,
+
+    /// Subject bar visibility
+    subject_bar: Entity<bool>,
 
     /// Sent message ids
     sent_ids: Arc<RwLock<Vec<EventId>>>,
@@ -91,7 +97,7 @@ pub struct ChatPanel {
     tasks: Vec<Task<Result<(), Error>>>,
 
     /// Event subscriptions
-    subscriptions: SmallVec<[Subscription; 2]>,
+    subscriptions: SmallVec<[Subscription; 3]>,
 }
 
 impl ChatPanel {
@@ -124,15 +130,34 @@ impl ChatPanel {
                 .clean_on_escape()
         });
 
+        // Define subject input state
+        let subject_input = cx.new(|cx| InputState::new(window, cx).placeholder("Nostr Meetup"));
+        let subject_bar = cx.new(|_cx| false);
+
         // Define subscriptions
-        let subscriptions =
-            smallvec![
-                cx.subscribe_in(&input, window, move |this, _input, event, window, cx| {
+        let mut subscriptions = smallvec![];
+
+        subscriptions.push(
+            // Subscribe the chat input event
+            cx.subscribe_in(&input, window, move |this, _input, event, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    this.send_text_message(window, cx);
+                };
+            }),
+        );
+
+        subscriptions.push(
+            // Subscribe the subject input event
+            cx.subscribe_in(
+                &subject_input,
+                window,
+                move |this, _input, event, window, cx| {
                     if let InputEvent::PressEnter { .. } = event {
-                        this.send_text_message(window, cx);
+                        this.change_subject(window, cx);
                     };
-                })
-            ];
+                },
+            ),
+        );
 
         // Define all functions that will run after the current cycle
         cx.defer_in(window, |this, window, cx| {
@@ -149,6 +174,8 @@ impl ChatPanel {
             room,
             list_state,
             input,
+            subject_input,
+            subject_bar,
             replies_to,
             attachments,
             rendered_texts_by_id: BTreeMap::new(),
@@ -254,23 +281,21 @@ impl ChatPanel {
     }
 
     fn subscribe_room_events(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(room) = self.room.upgrade() else {
-            return;
-        };
-
-        self.subscriptions.push(
-            // Subscribe to room events
-            cx.subscribe_in(&room, window, move |this, _room, event, window, cx| {
-                match event {
-                    RoomEvent::Incoming(message) => {
-                        this.insert_message(message, false, cx);
-                    }
-                    RoomEvent::Reload => {
-                        this.get_messages(window, cx);
-                    }
-                };
-            }),
-        );
+        if let Some(room) = self.room.upgrade() {
+            self.subscriptions.push(
+                // Subscribe to room events
+                cx.subscribe_in(&room, window, move |this, _room, event, window, cx| {
+                    match event {
+                        RoomEvent::Incoming(message) => {
+                            this.insert_message(message, false, cx);
+                        }
+                        RoomEvent::Reload => {
+                            this.get_messages(window, cx);
+                        }
+                    };
+                }),
+            );
+        }
     }
 
     /// Load all messages belonging to this room
@@ -314,6 +339,16 @@ impl ChatPanel {
         }
 
         content
+    }
+
+    fn change_subject(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let subject = self.subject_input.read(cx).value();
+
+        self.room
+            .update(cx, |this, cx| {
+                this.set_subject(subject, cx);
+            })
+            .ok();
     }
 
     fn send_text_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -505,10 +540,21 @@ impl ChatPanel {
         }
     }
 
-    fn copy_message(&self, id: &EventId, cx: &Context<Self>) {
-        if let Some(message) = self.message(id) {
-            cx.write_to_clipboard(ClipboardItem::new_string(message.content.to_string()));
-        }
+    fn copy_author(&self, public_key: &PublicKey, cx: &App) {
+        let content = public_key.to_bech32().unwrap();
+        let item = ClipboardItem::new_string(content);
+
+        cx.write_to_clipboard(item);
+    }
+
+    fn copy_message(&self, id: &EventId, cx: &App) {
+        let Some(message) = self.message(id) else {
+            return;
+        };
+        let content = message.content.to_string();
+        let item = ClipboardItem::new_string(content);
+
+        cx.write_to_clipboard(item);
     }
 
     fn reply_to(&mut self, id: &EventId, cx: &mut Context<Self>) {
@@ -588,7 +634,7 @@ impl ChatPanel {
         });
     }
 
-    fn profile(&self, public_key: &PublicKey, cx: &Context<Self>) -> Person {
+    fn profile(&self, public_key: &PublicKey, cx: &App) -> Person {
         let persons = PersonRegistry::global(cx);
         persons.read(cx).get(public_key, cx)
     }
@@ -602,7 +648,7 @@ impl ChatPanel {
                 if self
                     .room
                     .update(cx, |this, cx| {
-                        this.set_subject(*subject, cx);
+                        this.set_subject(subject, cx);
                     })
                     .is_err()
                 {
@@ -631,7 +677,95 @@ impl ChatPanel {
                     window.push_notification(Notification::error("Failed to toggle backup"), cx);
                 }
             }
+            Command::Subject => {
+                self.open_subject(window, cx);
+            }
+            Command::Copy(public_key) => {
+                self.copy_author(public_key, cx);
+            }
+            Command::Relays(public_key) => {
+                self.open_relays(public_key, window, cx);
+            }
+            Command::Njump(public_key) => {
+                self.open_njump(public_key, cx);
+            }
         }
+    }
+
+    fn open_subject(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let subject_input = self.subject_input.clone();
+
+        window.open_modal(cx, move |this, _window, cx| {
+            let subject = subject_input.read(cx).value();
+
+            this.title("Change subject")
+                .show_close(true)
+                .confirm()
+                .child(
+                    v_flex()
+                        .gap_2()
+                        .child(
+                            v_flex()
+                                .gap_1p5()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().text_muted)
+                                        .child(SharedString::from("Subject:")),
+                                )
+                                .child(TextInput::new(&subject_input).small()),
+                        )
+                        .child(
+                            div()
+                                .italic()
+                                .text_xs()
+                                .text_color(cx.theme().text_placeholder)
+                                .child(SharedString::from(
+                                    "Subject will be updated when you send a new message.",
+                                )),
+                        ),
+                )
+                .on_ok(move |_ev, window, cx| {
+                    window
+                        .dispatch_action(Box::new(Command::ChangeSubject(subject.to_string())), cx);
+                    true
+                })
+        });
+    }
+
+    fn open_relays(&mut self, public_key: &PublicKey, window: &mut Window, cx: &mut Context<Self>) {
+        let profile = self.profile(public_key, cx);
+
+        window.open_modal(cx, move |this, _window, cx| {
+            let relays = profile.messaging_relays();
+
+            this.title("Messaging Relays")
+                .show_close(true)
+                .child(v_flex().gap_1().children({
+                    let mut items = vec![];
+
+                    for url in relays.iter() {
+                        items.push(
+                            h_flex()
+                                .h_7()
+                                .px_2()
+                                .gap_2()
+                                .bg(cx.theme().elevated_surface_background)
+                                .rounded(cx.theme().radius)
+                                .text_sm()
+                                .child(div().size_1p5().rounded_full().bg(gpui::green()))
+                                .child(SharedString::from(url.to_string())),
+                        );
+                    }
+
+                    items
+                }))
+        });
+    }
+
+    fn open_njump(&mut self, public_key: &PublicKey, cx: &mut Context<Self>) {
+        let content = format!("https://njump.me/{}", public_key.to_bech32().unwrap());
+        cx.open_url(&content);
     }
 
     fn render_announcement(&self, ix: usize, cx: &Context<Self>) -> AnyElement {
@@ -758,18 +892,14 @@ impl ChatPanel {
                     .flex()
                     .gap_3()
                     .when(!hide_avatar, |this| {
-                        this.child(
-                            div()
-                                .id(SharedString::from(format!("{ix}-avatar")))
-                                .child(Avatar::new(author.avatar()))
-                                .context_menu(move |this, _window, _cx| {
-                                    let view = Box::new(OpenPublicKey(public_key));
-                                    let copy = Box::new(CopyPublicKey(public_key));
-
-                                    this.menu("View Profile", view)
-                                        .menu("Copy Public Key", copy)
-                                }),
-                        )
+                        this.child(Avatar::new(author.avatar()).dropdown_menu(
+                            move |this, _window, _cx| {
+                                this.menu("Copy Public Key", Box::new(Command::Copy(public_key)))
+                                    .menu("View Relays", Box::new(Command::Relays(public_key)))
+                                    .separator()
+                                    .menu("View on njump.me", Box::new(Command::Njump(public_key)))
+                            },
+                        ))
                     })
                     .child(
                         v_flex()
@@ -807,8 +937,17 @@ impl ChatPanel {
                             }),
                     ),
             )
-            .child(self.render_border(cx))
-            .child(self.render_actions(&id, cx))
+            .child(
+                div()
+                    .group_hover("", |this| this.bg(cx.theme().element_active))
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .w(px(2.))
+                    .h_full()
+                    .bg(cx.theme().border_transparent),
+            )
+            .child(self.render_actions(&id, &public_key, cx))
             .on_mouse_down(
                 MouseButton::Middle,
                 cx.listener(move |this, _, _window, cx| {
@@ -911,7 +1050,7 @@ impl ChatPanel {
                     window.open_modal(cx, move |this, _window, cx| {
                         this.show_close(true)
                             .title(SharedString::from("Sent Reports"))
-                            .child(v_flex().gap_4().pb_4().w_full().children({
+                            .child(v_flex().gap_4().w_full().children({
                                 let mut items = Vec::with_capacity(reports.len());
 
                                 for report in reports.iter() {
@@ -1030,18 +1169,12 @@ impl ChatPanel {
             })
     }
 
-    fn render_border(&self, cx: &Context<Self>) -> impl IntoElement {
-        div()
-            .group_hover("", |this| this.bg(cx.theme().element_active))
-            .absolute()
-            .left_0()
-            .top_0()
-            .w(px(2.))
-            .h_full()
-            .bg(cx.theme().border_transparent)
-    }
-
-    fn render_actions(&self, id: &EventId, cx: &Context<Self>) -> impl IntoElement {
+    fn render_actions(
+        &self,
+        id: &EventId,
+        public_key: &PublicKey,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         h_flex()
             .p_0p5()
             .gap_1()
@@ -1082,13 +1215,22 @@ impl ChatPanel {
             )
             .child(div().flex_shrink_0().h_4().w_px().bg(cx.theme().border))
             .child(
-                Button::new("seen-on")
+                Button::new("advance")
                     .icon(IconName::Ellipsis)
                     .small()
                     .ghost()
                     .dropdown_menu({
-                        let id = id.to_owned();
-                        move |this, _window, _cx| this.menu("Seen on", Box::new(SeenOn(id)))
+                        let public_key = *public_key;
+                        let _id = *id;
+                        move |this, _window, _cx| {
+                            this.menu("Copy author", Box::new(Command::Copy(public_key)))
+                            /*
+                            .menu(
+                                "Trace",
+                                Box::new(Command::Trace(id)),
+                            )
+                            */
+                        }
                     }),
             )
             .group_hover("", |this| this.visible())
@@ -1286,11 +1428,29 @@ impl Panel for ChatPanel {
 
                 h_flex()
                     .gap_1p5()
-                    .child(Avatar::new(url).small())
+                    .child(Avatar::new(url).xsmall())
                     .child(label)
                     .into_any_element()
             })
             .unwrap_or(div().child("Unknown").into_any_element())
+    }
+
+    fn toolbar_buttons(&self, _window: &Window, _cx: &App) -> Vec<Button> {
+        let subject_bar = self.subject_bar.clone();
+
+        vec![
+            Button::new("subject")
+                .icon(IconName::Input)
+                .tooltip("Change subject")
+                .small()
+                .ghost()
+                .on_click(move |_ev, _window, cx| {
+                    subject_bar.update(cx, |this, cx| {
+                        *this = !*this;
+                        cx.notify();
+                    });
+                }),
+        ]
     }
 }
 
@@ -1307,6 +1467,33 @@ impl Render for ChatPanel {
         v_flex()
             .on_action(cx.listener(Self::on_command))
             .size_full()
+            .when(*self.subject_bar.read(cx), |this| {
+                this.child(
+                    h_flex()
+                        .h_12()
+                        .w_full()
+                        .px_2()
+                        .gap_2()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            TextInput::new(&self.subject_input)
+                                .text_sm()
+                                .small()
+                                .bordered(false),
+                        )
+                        .child(
+                            Button::new("change")
+                                .icon(IconName::CheckCircle)
+                                .label("Change")
+                                .secondary()
+                                .disabled(self.uploading)
+                                .on_click(cx.listener(move |this, _ev, window, cx| {
+                                    this.change_subject(window, cx);
+                                })),
+                        ),
+                )
+            })
             .child(
                 v_flex()
                     .flex_1()

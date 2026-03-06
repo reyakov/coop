@@ -1,12 +1,12 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, img, px, AbsoluteLength, App, Div, Hsla, ImageSource, Img, InteractiveElement,
-    Interactivity, IntoElement, ParentElement, RenderOnce, StyleRefinement, Styled, StyledImage,
-    Window,
+    AbsoluteLength, App, Div, Hsla, ImageSource, Img, InteractiveElement, Interactivity,
+    IntoElement, ParentElement, RenderOnce, StyleRefinement, Styled, StyledImage, Window, div, img,
+    px,
 };
 use theme::ActiveTheme;
 
-use crate::{Sizable, Size};
+use crate::{Selectable, Sizable, Size};
 
 /// Returns the size of the avatar based on the given [`Size`].
 pub(super) fn avatar_size(size: Size) -> AbsoluteLength {
@@ -37,6 +37,7 @@ pub struct Avatar {
     style: StyleRefinement,
     size: Size,
     border_color: Option<Hsla>,
+    selected: bool,
 }
 
 impl Avatar {
@@ -48,6 +49,7 @@ impl Avatar {
             style: StyleRefinement::default(),
             size: Size::Medium,
             border_color: None,
+            selected: false,
         }
     }
 
@@ -86,6 +88,17 @@ impl Sizable for Avatar {
 impl Styled for Avatar {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
+    }
+}
+
+impl Selectable for Avatar {
+    fn is_selected(&self) -> bool {
+        self.selected
+    }
+
+    fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
     }
 }
 

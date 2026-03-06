@@ -5,10 +5,11 @@ use gpui::{
     RenderOnce, SharedString, StyleRefinement, Styled, Window,
 };
 
+use crate::Selectable;
+use crate::avatar::Avatar;
 use crate::button::Button;
 use crate::menu::PopupMenu;
 use crate::popover::Popover;
-use crate::Selectable;
 
 /// A dropdown menu trait for buttons and other interactive elements
 pub trait DropdownMenu: Styled + Selectable + InteractiveElement + IntoElement + 'static {
@@ -34,6 +35,8 @@ pub trait DropdownMenu: Styled + Selectable + InteractiveElement + IntoElement +
 }
 
 impl DropdownMenu for Button {}
+
+impl DropdownMenu for Avatar {}
 
 #[derive(IntoElement)]
 pub struct DropdownMenuPopover<T: Selectable + IntoElement + 'static> {

@@ -3,10 +3,9 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    anchored, div, hsla, point, px, Animation, AnimationExt as _, AnyElement, App, Bounds,
-    BoxShadow, ClickEvent, Div, FocusHandle, InteractiveElement, IntoElement, KeyBinding,
-    MouseButton, ParentElement, Pixels, Point, RenderOnce, SharedString, StyleRefinement, Styled,
-    Window,
+    Animation, AnimationExt as _, AnyElement, App, Bounds, BoxShadow, ClickEvent, Div, FocusHandle,
+    InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement, Pixels, Point,
+    RenderOnce, SharedString, StyleRefinement, Styled, Window, anchored, div, hsla, point, px,
 };
 use theme::ActiveTheme;
 
@@ -14,7 +13,7 @@ use crate::actions::{Cancel, Confirm};
 use crate::animation::cubic_bezier;
 use crate::button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _};
 use crate::scroll::ScrollableElement;
-use crate::{h_flex, v_flex, IconName, Root, Sizable, StyledExt, WindowExtension};
+use crate::{IconName, Root, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 const CONTEXT: &str = "Modal";
 
@@ -500,6 +499,7 @@ impl RenderOnce for Modal {
                                             .child(self.content),
                                     ),
                             )
+                            .when_none(&self.footer, |this| this.child(div().pt(padding_left)))
                             .when_some(self.footer, |this, footer| {
                                 this.child(
                                     h_flex()

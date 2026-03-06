@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    svg, AnyElement, App, AppContext, Context, Entity, Hsla, IntoElement, Radians, Render,
-    RenderOnce, SharedString, StyleRefinement, Styled, Svg, Transformation, Window,
+    AnyElement, App, AppContext, Context, Entity, Hsla, IntoElement, Radians, Render, RenderOnce,
+    SharedString, StyleRefinement, Styled, Svg, Transformation, Window, svg,
 };
 use theme::ActiveTheme;
 
@@ -39,6 +39,7 @@ pub enum IconName {
     Ellipsis,
     Emoji,
     Eye,
+    Input,
     Info,
     Invite,
     Inbox,
@@ -110,6 +111,7 @@ impl IconNamed for IconName {
             Self::Ellipsis => "icons/ellipsis.svg",
             Self::Emoji => "icons/emoji.svg",
             Self::Eye => "icons/eye.svg",
+            Self::Input => "icons/input.svg",
             Self::Info => "icons/info.svg",
             Self::Invite => "icons/invite.svg",
             Self::Inbox => "icons/inbox.svg",

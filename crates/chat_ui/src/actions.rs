@@ -7,21 +7,11 @@ use settings::SignerKind;
 #[action(namespace = chat, no_json)]
 pub enum Command {
     Insert(&'static str),
-    ChangeSubject(&'static str),
+    ChangeSubject(String),
     ChangeSigner(SignerKind),
     ToggleBackup,
+    Subject,
+    Copy(PublicKey),
+    Relays(PublicKey),
+    Njump(PublicKey),
 }
-
-#[derive(Action, Clone, PartialEq, Eq, Deserialize)]
-#[action(namespace = chat, no_json)]
-pub struct SeenOn(pub EventId);
-
-/// Define a open public key action
-#[derive(Action, Clone, PartialEq, Eq, Deserialize, Debug)]
-#[action(namespace = pubkey, no_json)]
-pub struct OpenPublicKey(pub PublicKey);
-
-/// Define a copy inline public key action
-#[derive(Action, Clone, PartialEq, Eq, Deserialize, Debug)]
-#[action(namespace = pubkey, no_json)]
-pub struct CopyPublicKey(pub PublicKey);
