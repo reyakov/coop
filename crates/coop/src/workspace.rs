@@ -286,7 +286,7 @@ impl Workspace {
             Command::RefreshRelayList => {
                 let nostr = NostrRegistry::global(cx);
                 nostr.update(cx, |this, cx| {
-                    this.ensure_relay_list(cx);
+                    //this.ensure_relay_list(cx);
                 });
             }
             Command::ResetEncryption => {
@@ -685,7 +685,7 @@ impl Workspace {
                             })
                             .dropdown_menu(move |this, _window, cx| {
                                 let nostr = NostrRegistry::global(cx);
-                                let urls = nostr.read(cx).read_only_relays(&pkey, cx);
+                                let urls: Vec<SharedString> = vec![];
 
                                 // Header
                                 let menu = this.min_w(px(260.)).label("Relays");

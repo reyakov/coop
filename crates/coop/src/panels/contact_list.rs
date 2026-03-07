@@ -4,20 +4,20 @@ use std::time::Duration;
 use anyhow::{Context as AnyhowContext, Error};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, rems, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    Task, TextAlign, Window,
+    Task, TextAlign, Window, div, rems,
 };
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock_area::panel::{Panel, PanelEvent};
 use ui::input::{InputEvent, InputState, TextInput};
-use ui::{h_flex, v_flex, Disableable, IconName, Sizable, StyledExt, WindowExtension};
+use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<ContactListPanel> {
     cx.new(|cx| ContactListPanel::new(window, cx))
@@ -156,15 +156,6 @@ impl ContactListPanel {
 
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
-
-        let Some(public_key) = signer.public_key() else {
-            window.push_notification("Public Key not found", cx);
-            return;
-        };
-
-        // Get user's write relays
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
         // Get contacts
         let contacts: Vec<Contact> = self
@@ -177,14 +168,12 @@ impl ContactListPanel {
         self.set_updating(true, cx);
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let urls = write_relays.await;
-
             // Construct contact list event builder
             let builder = EventBuilder::contact_list(contacts);
             let event = client.sign_event_builder(builder).await?;
 
             // Set contact list
-            client.send_event(&event).to(urls).await?;
+            client.send_event(&event).to_nip65().await?;
 
             Ok(())
         });

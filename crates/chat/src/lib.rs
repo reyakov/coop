@@ -268,16 +268,11 @@ impl ChatRegistry {
             return;
         };
 
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
-
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             let id = SubscriptionId::new("contact-list");
             let opts = SubscribeAutoCloseOptions::default()
                 .exit_policy(ReqExitPolicy::ExitOnEOSE)
                 .timeout(Some(Duration::from_secs(TIMEOUT)));
-
-            // Get user's write relays
-            let urls = write_relays.await;
 
             // Construct filter for inbox relays
             let filter = Filter::new()
@@ -285,12 +280,8 @@ impl ChatRegistry {
                 .author(public_key)
                 .limit(1);
 
-            // Construct target for subscription
-            let target: HashMap<&RelayUrl, Filter> =
-                urls.iter().map(|relay| (relay, filter.clone())).collect();
-
             // Subscribe
-            client.subscribe(target).close_on(opts).with_id(id).await?;
+            client.subscribe(filter).close_on(opts).with_id(id).await?;
 
             Ok(())
         });
@@ -323,14 +314,8 @@ impl ChatRegistry {
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
 
-        let Some(public_key) = signer.public_key() else {
-            return Task::ready(Err(anyhow!("User not found")));
-        };
-
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
-
         cx.background_spawn(async move {
-            let urls = write_relays.await;
+            let public_key = signer.get_public_key().await?;
 
             // Construct filter for inbox relays
             let filter = Filter::new()
@@ -338,13 +323,9 @@ impl ChatRegistry {
                 .author(public_key)
                 .limit(1);
 
-            // Construct target for subscription
-            let target: HashMap<&RelayUrl, Filter> =
-                urls.iter().map(|relay| (relay, filter.clone())).collect();
-
             // Stream events from user's write relays
             let mut stream = client
-                .stream_events(target)
+                .stream_events(filter)
                 .timeout(Duration::from_secs(TIMEOUT))
                 .await?;
 
