@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, px, white, Animation, AnimationExt as _, AnyElement, App, Element, ElementId,
-    GlobalElementId, InteractiveElement, IntoElement, LayoutId, ParentElement as _, SharedString,
-    Styled as _, Window,
+    Animation, AnimationExt as _, AnyElement, App, Element, ElementId, GlobalElementId,
+    InteractiveElement, IntoElement, LayoutId, ParentElement as _, SharedString, Styled as _,
+    Window, div, px, white,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, Side};
 
-use crate::{Disableable, Side, Sizable, Size};
+use crate::{Disableable, Sizable, Size};
 
 type OnClick = Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>;
 

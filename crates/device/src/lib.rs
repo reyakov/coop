@@ -3,22 +3,19 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as AnyhowContext, Error};
+use anyhow::{Context as AnyhowContext, Error, anyhow};
 use gpui::{
-    div, App, AppContext, Context, Entity, Global, IntoElement, ParentElement, SharedString,
-    Styled, Subscription, Task, Window,
+    App, AppContext, Context, Entity, EventEmitter, Global, IntoElement, ParentElement,
+    SharedString, Styled, Task, Window, div, relative,
 };
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
-use smallvec::{smallvec, SmallVec};
-use state::{
-    app_name, Announcement, DeviceState, NostrRegistry, RelayState, DEVICE_GIFTWRAP, TIMEOUT,
-};
+use state::{Announcement, DEVICE_GIFTWRAP, DeviceState, NostrRegistry, TIMEOUT, app_name};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::notification::Notification;
-use ui::{h_flex, v_flex, Disableable, IconName, Sizable, WindowExtension};
+use ui::{Disableable, IconName, Sizable, WindowExtension, h_flex, v_flex};
 
 const IDENTIFIER: &str = "coop:device";
 const MSG: &str = "You've requested an encryption key from another device. \
@@ -32,6 +29,15 @@ struct GlobalDeviceRegistry(Entity<DeviceRegistry>);
 
 impl Global for GlobalDeviceRegistry {}
 
+/// Device event.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DeviceEvent {
+    /// A new encryption signer has been set
+    Set,
+    /// An error occurred
+    Error(SharedString),
+}
+
 /// Device Registry
 ///
 /// NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
@@ -42,10 +48,9 @@ pub struct DeviceRegistry {
 
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
-
-    /// Subscriptions
-    _subscriptions: SmallVec<[Subscription; 1]>,
 }
+
+impl EventEmitter<DeviceEvent> for DeviceRegistry {}
 
 impl DeviceRegistry {
     /// Retrieve the global device registry state
@@ -60,27 +65,16 @@ impl DeviceRegistry {
 
     /// Create a new device registry instance
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let nostr = NostrRegistry::global(cx);
-        let mut subscriptions = smallvec![];
+        let state = DeviceState::default();
 
-        subscriptions.push(
-            // Observe the NIP-65 state
-            cx.observe(&nostr, |this, state, cx| {
-                if state.read(cx).relay_list_state == RelayState::Configured {
-                    this.get_announcement(cx);
-                };
-            }),
-        );
-
-        // Run at the end of current cycle
         cx.defer_in(window, |this, window, cx| {
             this.handle_notifications(window, cx);
+            this.get_announcement(cx);
         });
 
         Self {
-            state: DeviceState::default(),
+            state,
             tasks: vec![],
-            _subscriptions: subscriptions,
         }
     }
 
@@ -123,30 +117,27 @@ impl DeviceRegistry {
             Ok(())
         }));
 
-        self.tasks.push(
-            // Update GPUI states
-            cx.spawn_in(window, async move |this, cx| {
-                while let Ok(event) = rx.recv_async().await {
-                    match event.kind {
-                        // New request event
-                        Kind::Custom(4454) => {
-                            this.update_in(cx, |this, window, cx| {
-                                this.ask_for_approval(event, window, cx);
-                            })?;
-                        }
-                        // New response event
-                        Kind::Custom(4455) => {
-                            this.update(cx, |this, cx| {
-                                this.extract_encryption(event, cx);
-                            })?;
-                        }
-                        _ => {}
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            while let Ok(event) = rx.recv_async().await {
+                match event.kind {
+                    // New request event
+                    Kind::Custom(4454) => {
+                        this.update_in(cx, |this, window, cx| {
+                            this.ask_for_approval(event, window, cx);
+                        })?;
                     }
+                    // New response event
+                    Kind::Custom(4455) => {
+                        this.update(cx, |this, cx| {
+                            this.extract_encryption(event, cx);
+                        })?;
+                    }
+                    _ => {}
                 }
+            }
 
-                Ok(())
-            }),
-        );
+            Ok(())
+        }));
     }
 
     /// Get the device state
@@ -191,45 +182,68 @@ impl DeviceRegistry {
     fn get_messages(&mut self, cx: &mut Context<Self>) {
         let task = self.subscribe_to_giftwrap_events(cx);
 
-        self.tasks.push(cx.spawn(async move |_this, _cx| {
-            task.await?;
-
-            // Update state
-
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            if let Err(e) = task.await {
+                this.update(cx, |_this, cx| {
+                    cx.emit(DeviceEvent::Error(SharedString::from(e.to_string())));
+                })?;
+            }
             Ok(())
         }));
     }
 
-    /// Continuously get gift wrap events for the current user in their messaging relays
-    fn subscribe_to_giftwrap_events(&mut self, cx: &mut Context<Self>) -> Task<Result<(), Error>> {
+    /// Get the messaging relays for the current user
+    fn get_user_messaging_relays(&self, cx: &App) -> Task<Result<Vec<RelayUrl>, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
 
-        let Some(public_key) = signer.public_key() else {
-            return Task::ready(Err(anyhow!("User not found")));
-        };
+        cx.background_spawn(async move {
+            let public_key = signer.get_public_key().await?;
+            let filter = Filter::new()
+                .kind(Kind::InboxRelays)
+                .author(public_key)
+                .limit(1);
 
-        let persons = PersonRegistry::global(cx);
-        let profile = persons.read(cx).get(&public_key, cx);
-        let relay_urls = profile.messaging_relays().clone();
+            if let Some(event) = client.database().query(filter).await?.first_owned() {
+                // Extract relay URLs from the event
+                let urls: Vec<RelayUrl> = nip17::extract_owned_relay_list(event).collect();
+
+                // Ensure all relays are connected
+                for url in urls.iter() {
+                    client.add_relay(url).and_connect().await?;
+                }
+
+                Ok(urls)
+            } else {
+                Err(anyhow!("Relays not found"))
+            }
+        })
+    }
+
+    /// Continuously get gift wrap events for the current user in their messaging relays
+    fn subscribe_to_giftwrap_events(&self, cx: &App) -> Task<Result<(), Error>> {
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
+        let urls = self.get_user_messaging_relays(cx);
 
         cx.background_spawn(async move {
+            let urls = urls.await?;
+            let encryption = signer.get_encryption_signer().await.context("not found")?;
+            let public_key = encryption.get_public_key().await?;
+
             let filter = Filter::new().kind(Kind::GiftWrap).pubkey(public_key);
             let id = SubscriptionId::new(DEVICE_GIFTWRAP);
 
             // Construct target for subscription
-            let target: HashMap<RelayUrl, Filter> = relay_urls
+            let target: HashMap<RelayUrl, Filter> = urls
                 .into_iter()
                 .map(|relay| (relay, filter.clone()))
                 .collect();
 
-            let output = client.subscribe(target).with_id(id).await?;
-
-            log::info!(
-                "Successfully subscribed to encryption gift-wrap messages on: {:?}",
-                output.success
-            );
+            // Subscribe
+            client.subscribe(target).with_id(id).await?;
 
             Ok(())
         })
@@ -239,20 +253,13 @@ impl DeviceRegistry {
     pub fn get_announcement(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
-
-        let Some(public_key) = signer.public_key() else {
-            return;
-        };
 
         // Reset state before fetching announcement
         self.reset(cx);
 
-        // Get user's write relays
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
-
         let task: Task<Result<Event, Error>> = cx.background_spawn(async move {
-            let urls = write_relays.await;
+            let signer = client.signer().context("Signer not found")?;
+            let public_key = signer.get_public_key().await?;
 
             // Construct the filter for the device announcement event
             let filter = Filter::new()
@@ -260,29 +267,19 @@ impl DeviceRegistry {
                 .author(public_key)
                 .limit(1);
 
-            // Construct target for subscription
-            let target: HashMap<&RelayUrl, Filter> =
-                urls.iter().map(|relay| (relay, filter.clone())).collect();
-
             // Stream events from user's write relays
             let mut stream = client
-                .stream_events(target)
+                .stream_events(filter)
                 .timeout(Duration::from_secs(TIMEOUT))
                 .await?;
 
             while let Some((_url, res)) = stream.next().await {
-                match res {
-                    Ok(event) => {
-                        log::info!("Received device announcement event: {event:?}");
-                        return Ok(event);
-                    }
-                    Err(e) => {
-                        log::error!("Failed to receive device announcement event: {e}");
-                    }
+                if let Ok(event) = res {
+                    return Ok(event);
                 }
             }
 
-            Err(anyhow!("Device announcement not found"))
+            Err(anyhow!("Announcement not found"))
         });
 
         self.tasks.push(cx.spawn(async move |this, cx| {
@@ -307,22 +304,12 @@ impl DeviceRegistry {
     pub fn create_encryption(&self, cx: &App) -> Task<Result<Keys, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
-
-        let Some(public_key) = signer.public_key() else {
-            return Task::ready(Err(anyhow!("User not found")));
-        };
-
-        // Get user's write relays
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
         let keys = Keys::generate();
         let secret = keys.secret_key().to_secret_hex();
         let n = keys.public_key();
 
         cx.background_spawn(async move {
-            let urls = write_relays.await;
-
             // Construct an announcement event
             let event = client
                 .sign_event_builder(EventBuilder::new(Kind::Custom(10044), "").tags(vec![
@@ -332,7 +319,7 @@ impl DeviceRegistry {
                 .await?;
 
             // Publish announcement
-            client.send_event(&event).to(urls).await?;
+            client.send_event(&event).to_nip65().await?;
 
             // Save device keys to the database
             set_keys(&client, &secret).await?;
@@ -409,23 +396,15 @@ impl DeviceRegistry {
             return;
         };
 
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
-
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let urls = write_relays.await;
-
             // Construct a filter for device key requests
             let filter = Filter::new()
                 .kind(Kind::Custom(4454))
                 .author(public_key)
                 .since(Timestamp::now());
 
-            // Construct target for subscription
-            let target: HashMap<&RelayUrl, Filter> =
-                urls.iter().map(|relay| (relay, filter.clone())).collect();
-
             // Subscribe to the device key requests on user's write relays
-            client.subscribe(target).await?;
+            client.subscribe(filter).await?;
 
             Ok(())
         });
@@ -443,23 +422,15 @@ impl DeviceRegistry {
             return;
         };
 
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
-
         self.tasks.push(cx.background_spawn(async move {
-            let urls = write_relays.await;
-
             // Construct a filter for device key requests
             let filter = Filter::new()
                 .kind(Kind::Custom(4455))
                 .author(public_key)
                 .since(Timestamp::now());
 
-            // Construct target for subscription
-            let target: HashMap<&RelayUrl, Filter> =
-                urls.iter().map(|relay| (relay, filter.clone())).collect();
-
             // Subscribe to the device key requests on user's write relays
-            client.subscribe(target).await?;
+            client.subscribe(filter).await?;
 
             Ok(())
         }));
@@ -471,13 +442,7 @@ impl DeviceRegistry {
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
 
-        let Some(public_key) = signer.public_key() else {
-            return;
-        };
-
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
-
-        let app_keys = nostr.read(cx).app_keys.clone();
+        let app_keys = nostr.read(cx).keys();
         let app_pubkey = app_keys.public_key();
 
         let task: Task<Result<Option<Keys>, Error>> = cx.background_spawn(async move {
@@ -507,8 +472,6 @@ impl DeviceRegistry {
                     Ok(Some(keys))
                 }
                 None => {
-                    let urls = write_relays.await;
-
                     // Construct an event for device key request
                     let event = client
                         .sign_event_builder(EventBuilder::new(Kind::Custom(4454), "").tags(vec![
@@ -518,7 +481,7 @@ impl DeviceRegistry {
                         .await?;
 
                     // Send the event to write relays
-                    client.send_event(&event).to(urls).await?;
+                    client.send_event(&event).to_nip65().await?;
 
                     Ok(None)
                 }
@@ -549,7 +512,7 @@ impl DeviceRegistry {
     /// Parse the response event for device keys from other devices
     fn extract_encryption(&mut self, event: Event, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
-        let app_keys = nostr.read(cx).app_keys.clone();
+        let app_keys = nostr.read(cx).keys();
 
         let task: Task<Result<Keys, Error>> = cx.background_spawn(async move {
             let root_device = event
@@ -586,18 +549,11 @@ impl DeviceRegistry {
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
 
-        let Some(public_key) = signer.public_key() else {
-            return;
-        };
-
         // Get user's write relays
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
         let event = event.clone();
         let id: SharedString = event.id.to_hex().into();
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let urls = write_relays.await;
-
             // Get device keys
             let keys = get_keys(&client).await?;
             let secret = keys.secret_key().to_secret_hex();
@@ -626,7 +582,7 @@ impl DeviceRegistry {
             let event = client.sign_event_builder(builder).await?;
 
             // Send the response event to the user's relay list
-            client.send_event(&event).to(urls).await?;
+            client.send_event(&event).to_nip65().await?;
 
             Ok(())
         });
@@ -635,13 +591,16 @@ impl DeviceRegistry {
             match task.await {
                 Ok(_) => {
                     cx.update(|window, cx| {
-                        window.clear_notification(id, cx);
+                        window.clear_notification_by_id::<DeviceNotification>(id, cx);
                     })
                     .ok();
                 }
                 Err(e) => {
                     cx.update(|window, cx| {
-                        window.push_notification(Notification::error(e.to_string()), cx);
+                        window.push_notification(
+                            Notification::error(e.to_string()).autohide(false),
+                            cx,
+                        );
                     })
                     .ok();
                 }
@@ -671,17 +630,23 @@ impl DeviceRegistry {
 
         let entity = cx.entity().downgrade();
         let loading = Rc::new(Cell::new(false));
+        let key = SharedString::from(event.id.to_hex());
 
         Notification::new()
-            .custom_id(SharedString::from(event.id.to_hex()))
+            .type_id::<DeviceNotification>(key)
             .autohide(false)
             .icon(IconName::UserKey)
             .title(SharedString::from("New request"))
-            .content(move |_window, cx| {
+            .content(move |_this, _window, cx| {
                 v_flex()
                     .gap_2()
                     .text_sm()
-                    .child(SharedString::from(MSG))
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_height(relative(1.25))
+                            .child(SharedString::from(MSG)),
+                    )
                     .child(
                         v_flex()
                             .gap_2()
@@ -733,7 +698,7 @@ impl DeviceRegistry {
                     )
                     .into_any_element()
             })
-            .action(move |_window, _cx| {
+            .action(move |_this, _window, _cx| {
                 let view = entity.clone();
                 let event = event.clone();
 
@@ -758,6 +723,8 @@ impl DeviceRegistry {
             })
     }
 }
+
+struct DeviceNotification;
 
 /// Verify the author of an event
 async fn verify_author(client: &Client, event: &Event) -> bool {

@@ -1,5 +1,4 @@
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
@@ -10,7 +9,7 @@ use itertools::Itertools;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
 use settings::{RoomConfig, SignerKind};
-use state::{NostrRegistry, BOOTSTRAP_RELAYS, TIMEOUT};
+use state::{NostrRegistry, TIMEOUT};
 
 use crate::NewMessage;
 
@@ -333,9 +332,6 @@ impl Room {
         let signer = nostr.read(cx).signer();
         let sender = signer.public_key();
 
-        // Get room's id
-        let id = self.id;
-
         // Get all members, excluding the sender
         let members: Vec<PublicKey> = self
             .members
@@ -345,30 +341,27 @@ impl Room {
             .collect();
 
         cx.background_spawn(async move {
-            let id = SubscriptionId::new(format!("room-{id}"));
             let opts = SubscribeAutoCloseOptions::default()
                 .exit_policy(ReqExitPolicy::ExitOnEOSE)
                 .timeout(Some(Duration::from_secs(TIMEOUT)));
 
-            // Construct filters for each member
-            let filters: Vec<Filter> = members
-                .into_iter()
-                .map(|public_key| {
-                    Filter::new()
-                        .author(public_key)
-                        .kind(Kind::RelayList)
-                        .limit(1)
-                })
-                .collect();
+            for public_key in members.into_iter() {
+                let inbox = Filter::new()
+                    .author(public_key)
+                    .kind(Kind::InboxRelays)
+                    .limit(1);
 
-            // Construct target for subscription
-            let target: HashMap<&str, Vec<Filter>> = BOOTSTRAP_RELAYS
-                .into_iter()
-                .map(|relay| (relay, filters.clone()))
-                .collect();
+                let announcement = Filter::new()
+                    .author(public_key)
+                    .kind(Kind::Custom(10044))
+                    .limit(1);
 
-            // Subscribe to the target
-            client.subscribe(target).close_on(opts).with_id(id).await?;
+                // Subscribe to the target
+                client
+                    .subscribe(vec![inbox, announcement])
+                    .close_on(opts)
+                    .await?;
+            }
 
             Ok(())
         })
@@ -491,14 +484,8 @@ impl Room {
 
             // Process each member
             for member in members {
-                let relays = member.messaging_relays();
                 let announcement = member.announcement();
                 let public_key = member.public_key();
-
-                if relays.is_empty() {
-                    reports.push(SendReport::new(public_key).error("No messaging relays"));
-                    continue;
-                }
 
                 // Handle encryption signer requirements
                 if signer_kind.encryption() {
@@ -535,8 +522,7 @@ impl Room {
                     SignerKind::User => (member.public_key(), user_signer.clone()),
                 };
 
-                match send_gift_wrap(&client, &signer, &receiver, &rumor, relays, public_key).await
-                {
+                match send_gift_wrap(&client, &signer, &receiver, &rumor, public_key).await {
                     Ok((report, _)) => {
                         reports.push(report);
                         sents += 1;
@@ -549,12 +535,10 @@ impl Room {
 
             // Send backup to current user if needed
             if backup && sents >= 1 {
-                let relays = sender.messaging_relays();
                 let public_key = sender.public_key();
                 let signer = encryption_signer.as_ref().unwrap_or(&user_signer);
 
-                match send_gift_wrap(&client, signer, &public_key, &rumor, relays, public_key).await
-                {
+                match send_gift_wrap(&client, signer, &public_key, &rumor, public_key).await {
                     Ok((report, _)) => reports.push(report),
                     Err(report) => reports.push(report),
                 }
@@ -571,22 +555,16 @@ async fn send_gift_wrap<T>(
     signer: &T,
     receiver: &PublicKey,
     rumor: &UnsignedEvent,
-    relays: &[RelayUrl],
     public_key: PublicKey,
 ) -> Result<(SendReport, bool), SendReport>
 where
     T: NostrSigner + 'static,
 {
-    // Ensure relay connections
-    for url in relays {
-        client.add_relay(url).and_connect().await.ok();
-    }
-
     match EventBuilder::gift_wrap(signer, receiver, rumor.clone(), []).await {
         Ok(event) => {
             match client
                 .send_event(&event)
-                .to(relays)
+                .to_nip17()
                 .ack_policy(AckPolicy::none())
                 .await
             {

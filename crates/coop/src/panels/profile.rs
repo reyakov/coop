@@ -3,21 +3,21 @@ use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Error};
 use gpui::{
-    div, AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
+    AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task,
-    Window,
+    Window, div,
 };
 use nostr_sdk::prelude::*;
-use person::{shorten_pubkey, Person, PersonRegistry};
+use person::{Person, PersonRegistry, shorten_pubkey};
 use settings::AppSettings;
-use state::{upload, NostrRegistry};
+use state::{NostrRegistry, upload};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock_area::panel::{Panel, PanelEvent};
 use ui::input::{InputState, TextInput};
 use ui::notification::Notification;
-use ui::{h_flex, v_flex, Disableable, IconName, Sizable, StyledExt, WindowExtension};
+use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 pub fn init(public_key: PublicKey, window: &mut Window, cx: &mut App) -> Entity<ProfilePanel> {
     cx.new(|cx| ProfilePanel::new(public_key, window, cx))
@@ -186,7 +186,10 @@ impl ProfilePanel {
                 Err(e) => {
                     this.update_in(cx, |this, window, cx| {
                         this.set_uploading(false, cx);
-                        window.push_notification(Notification::error(e.to_string()), cx);
+                        window.push_notification(
+                            Notification::error(e.to_string()).autohide(false),
+                            cx,
+                        );
                     })?;
                 }
             }
@@ -269,7 +272,10 @@ impl ProfilePanel {
                 }
                 Err(e) => {
                     cx.update(|window, cx| {
-                        window.push_notification(Notification::error(e.to_string()), cx);
+                        window.push_notification(
+                            Notification::error(e.to_string()).autohide(false),
+                            cx,
+                        );
                     })?;
                 }
             };

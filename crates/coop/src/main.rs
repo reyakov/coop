@@ -2,9 +2,9 @@ use std::sync::{Arc, Mutex};
 
 use assets::Assets;
 use gpui::{
-    actions, point, px, size, App, AppContext, Bounds, KeyBinding, Menu, MenuItem, SharedString,
-    TitlebarOptions, WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowKind,
-    WindowOptions,
+    App, AppContext, Bounds, KeyBinding, Menu, MenuItem, SharedString, TitlebarOptions,
+    WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowKind, WindowOptions,
+    actions, point, px, size,
 };
 use gpui_platform::application;
 use state::{APP_ID, CLIENT_NAME};
@@ -86,7 +86,7 @@ fn main() {
                     state::init(window, cx);
 
                     // Initialize person registry
-                    person::init(cx);
+                    person::init(window, cx);
 
                     // Initialize relay auth registry
                     relay_auth::init(window, cx);

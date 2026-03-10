@@ -1,21 +1,21 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as AnyhowContext, Error};
+use anyhow::{Context as AnyhowContext, Error, anyhow};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, rems, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    Task, TextAlign, Window,
+    Task, TextAlign, Window, div, rems,
 };
 use nostr_sdk::prelude::*;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::dock_area::panel::{Panel, PanelEvent};
 use ui::input::{InputEvent, InputState, TextInput};
-use ui::{divider, h_flex, v_flex, Disableable, IconName, Sizable, StyledExt, WindowExtension};
+use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, divider, h_flex, v_flex};
 
 const MSG: &str = "Messaging Relays are relays that hosted all your messages. \
                    Other users will find your relays and send messages to it.";
@@ -170,15 +170,6 @@ impl MessagingRelayPanel {
 
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
-
-        let Some(public_key) = signer.public_key() else {
-            window.push_notification("Public Key not found", cx);
-            return;
-        };
-
-        // Get user's write relays
-        let write_relays = nostr.read(cx).write_relays(&public_key, cx);
 
         // Construct event tags
         let tags: Vec<Tag> = self
@@ -191,14 +182,12 @@ impl MessagingRelayPanel {
         self.set_updating(true, cx);
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let urls = write_relays.await;
-
             // Construct nip17 event builder
             let builder = EventBuilder::new(Kind::InboxRelays, "").tags(tags);
             let event = client.sign_event_builder(builder).await?;
 
             // Set messaging relays
-            client.send_event(&event).to(urls).await?;
+            client.send_event(&event).to_nip65().await?;
 
             Ok(())
         });

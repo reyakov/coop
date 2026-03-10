@@ -5,19 +5,19 @@ use std::hash::Hash;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context as AnyhowContext, Error};
+use anyhow::{Context as AnyhowContext, Error, anyhow};
 use gpui::{
     App, AppContext, Context, Entity, Global, IntoElement, ParentElement, SharedString, Styled,
-    Task, Window,
+    Task, Window, div, relative,
 };
 use nostr_sdk::prelude::*;
 use settings::{AppSettings, AuthMode};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::notification::Notification;
-use ui::{v_flex, Disableable, IconName, Sizable, WindowExtension};
+use ui::{Disableable, IconName, Sizable, WindowExtension, v_flex};
 
 const AUTH_MESSAGE: &str =
     "Approve the authentication request to allow Coop to continue sending or receiving events.";
@@ -34,7 +34,10 @@ struct AuthRequest {
 }
 
 impl AuthRequest {
-    pub fn new(challenge: impl Into<String>, url: RelayUrl) -> Self {
+    pub fn new<S>(challenge: S, url: RelayUrl) -> Self
+    where
+        S: Into<String>,
+    {
         Self {
             challenge: challenge.into(),
             url,
@@ -104,22 +107,6 @@ impl RelayAuth {
                                 let signal = Signal::Auth(request);
 
                                 tx.send_async(signal).await.ok();
-                            }
-                        }
-                        RelayMessage::Closed {
-                            subscription_id,
-                            message,
-                        } => {
-                            let msg = MachineReadablePrefix::parse(&message);
-
-                            if let Some(MachineReadablePrefix::AuthRequired) = msg {
-                                if let Ok(Some(relay)) = client.relay(&relay_url).await {
-                                    // Send close message to relay
-                                    relay
-                                        .send_msg(ClientMessage::Close(subscription_id))
-                                        .await
-                                        .ok();
-                                }
                             }
                         }
                         RelayMessage::Ok {
@@ -273,7 +260,7 @@ impl RelayAuth {
     fn response(&self, req: &Arc<AuthRequest>, window: &Window, cx: &Context<Self>) {
         let settings = AppSettings::global(cx);
         let req = req.clone();
-        let challenge = req.challenge().to_string();
+        let challenge = SharedString::from(req.challenge().to_string());
 
         // Create a task for authentication
         let task = self.auth(&req, cx);
@@ -283,7 +270,7 @@ impl RelayAuth {
             let url = req.url();
 
             this.update_in(cx, |this, window, cx| {
-                window.clear_notification(challenge, cx);
+                window.clear_notification_by_id::<AuthNotification>(challenge, cx);
 
                 match result {
                     Ok(_) => {
@@ -295,10 +282,19 @@ impl RelayAuth {
                             this.add_trusted_relay(url, cx);
                         });
 
-                        window.push_notification(format!("{} has been authenticated", url), cx);
+                        window.push_notification(
+                            Notification::success(format!(
+                                "Relay {} has been authenticated",
+                                url.domain().unwrap_or_default()
+                            )),
+                            cx,
+                        );
                     }
                     Err(e) => {
-                        window.push_notification(Notification::error(e.to_string()), cx);
+                        window.push_notification(
+                            Notification::error(e.to_string()).autohide(false),
+                            cx,
+                        );
                     }
                 }
             })
@@ -323,20 +319,25 @@ impl RelayAuth {
     /// Build a notification for the authentication request.
     fn notification(&self, req: &Arc<AuthRequest>, cx: &Context<Self>) -> Notification {
         let req = req.clone();
+        let challenge = SharedString::from(req.challenge.clone());
         let url = SharedString::from(req.url().to_string());
         let entity = cx.entity().downgrade();
         let loading = Rc::new(Cell::new(false));
 
         Notification::new()
-            .custom_id(SharedString::from(&req.challenge))
+            .type_id::<AuthNotification>(challenge)
             .autohide(false)
-            .icon(IconName::Info)
+            .icon(IconName::Warning)
             .title(SharedString::from("Authentication Required"))
-            .content(move |_window, cx| {
+            .content(move |_this, _window, cx| {
                 v_flex()
                     .gap_2()
-                    .text_sm()
-                    .child(SharedString::from(AUTH_MESSAGE))
+                    .child(
+                        div()
+                            .text_sm()
+                            .line_height(relative(1.25))
+                            .child(SharedString::from(AUTH_MESSAGE)),
+                    )
                     .child(
                         v_flex()
                             .py_1()
@@ -349,7 +350,7 @@ impl RelayAuth {
                     )
                     .into_any_element()
             })
-            .action(move |_window, _cx| {
+            .action(move |_this, _window, _cx| {
                 let view = entity.clone();
                 let req = req.clone();
 
@@ -374,3 +375,5 @@ impl RelayAuth {
             })
     }
 }
+
+struct AuthNotification;

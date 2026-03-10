@@ -1,25 +1,23 @@
 use std::any::TypeId;
-use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, Animation, AnimationExt, AnyElement, App, AppContext, ClickEvent, Context,
-    DismissEvent, ElementId, Entity, EventEmitter, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
-    Subscription, Window,
+    Animation, AnimationExt, AnyElement, App, AppContext, ClickEvent, Context, DismissEvent,
+    ElementId, Entity, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _,
+    Render, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription,
+    Window, div, px, relative,
 };
-use smol::Timer;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, Anchor};
 
 use crate::animation::cubic_bezier;
 use crate::button::{Button, ButtonVariants as _};
-use crate::{h_flex, v_flex, Icon, IconName, Sizable as _, StyledExt};
+use crate::{Icon, IconName, Sizable as _, StyledExt, h_flex, v_flex};
 
 #[derive(Debug, Clone, Copy, Default)]
-pub enum NotificationType {
+pub enum NotificationKind {
     #[default]
     Info,
     Success,
@@ -27,13 +25,17 @@ pub enum NotificationType {
     Error,
 }
 
-impl NotificationType {
+impl NotificationKind {
     fn icon(&self, cx: &App) -> Icon {
         match self {
-            Self::Info => Icon::new(IconName::Info).text_color(cx.theme().element_foreground),
-            Self::Success => Icon::new(IconName::Info).text_color(cx.theme().secondary_foreground),
+            Self::Info => Icon::new(IconName::Info).text_color(cx.theme().icon),
             Self::Warning => Icon::new(IconName::Warning).text_color(cx.theme().warning_foreground),
-            Self::Error => Icon::new(IconName::Warning).text_color(cx.theme().danger_foreground),
+            Self::Success => {
+                Icon::new(IconName::CheckCircle).text_color(cx.theme().secondary_foreground)
+            }
+            Self::Error => {
+                Icon::new(IconName::CloseCircle).text_color(cx.theme().danger_foreground)
+            }
         }
     }
 }
@@ -56,6 +58,7 @@ impl From<(TypeId, ElementId)> for NotificationId {
     }
 }
 
+#[allow(clippy::type_complexity)]
 /// A notification element.
 pub struct Notification {
     /// The id is used make the notification unique.
@@ -64,28 +67,19 @@ pub struct Notification {
     /// None means the notification will be added to the end of the list.
     id: NotificationId,
     style: StyleRefinement,
-    type_: Option<NotificationType>,
+    kind: Option<NotificationKind>,
     title: Option<SharedString>,
     message: Option<SharedString>,
     icon: Option<Icon>,
     autohide: bool,
-    #[allow(clippy::type_complexity)]
-    action_builder: Option<Rc<dyn Fn(&mut Window, &mut Context<Self>) -> Button>>,
-    #[allow(clippy::type_complexity)]
-    content_builder: Option<Rc<dyn Fn(&mut Window, &mut Context<Self>) -> AnyElement>>,
-    #[allow(clippy::type_complexity)]
+    action_builder: Option<Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>) -> Button>>,
+    content_builder: Option<Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>) -> AnyElement>>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     closing: bool,
 }
 
 impl From<String> for Notification {
     fn from(s: String) -> Self {
-        Self::new().message(s)
-    }
-}
-
-impl From<Cow<'static, str>> for Notification {
-    fn from(s: Cow<'static, str>) -> Self {
         Self::new().message(s)
     }
 }
@@ -102,24 +96,24 @@ impl From<&'static str> for Notification {
     }
 }
 
-impl From<(NotificationType, &'static str)> for Notification {
-    fn from((type_, content): (NotificationType, &'static str)) -> Self {
-        Self::new().message(content).with_type(type_)
+impl From<(NotificationKind, &'static str)> for Notification {
+    fn from((kind, content): (NotificationKind, &'static str)) -> Self {
+        Self::new().message(content).with_kind(kind)
     }
 }
 
-impl From<(NotificationType, SharedString)> for Notification {
-    fn from((type_, content): (NotificationType, SharedString)) -> Self {
-        Self::new().message(content).with_type(type_)
+impl From<(NotificationKind, SharedString)> for Notification {
+    fn from((kind, content): (NotificationKind, SharedString)) -> Self {
+        Self::new().message(content).with_kind(kind)
     }
 }
 
 struct DefaultIdType;
 
 impl Notification {
-    /// Create a new notification with the given content.
+    /// Create a new notification.
     ///
-    /// default width is 320px.
+    /// The default id is a random UUID.
     pub fn new() -> Self {
         let id: SharedString = uuid::Uuid::new_v4().to_string().into();
         let id = (TypeId::of::<DefaultIdType>(), id.into());
@@ -129,7 +123,7 @@ impl Notification {
             style: StyleRefinement::default(),
             title: None,
             message: None,
-            type_: None,
+            kind: None,
             icon: None,
             autohide: true,
             action_builder: None,
@@ -139,33 +133,38 @@ impl Notification {
         }
     }
 
+    /// Set the message of the notification, default is None.
     pub fn message(mut self, message: impl Into<SharedString>) -> Self {
         self.message = Some(message.into());
         self
     }
 
+    /// Create an info notification with the given message.
     pub fn info(message: impl Into<SharedString>) -> Self {
         Self::new()
             .message(message)
-            .with_type(NotificationType::Info)
+            .with_kind(NotificationKind::Info)
     }
 
+    /// Create a success notification with the given message.
     pub fn success(message: impl Into<SharedString>) -> Self {
         Self::new()
             .message(message)
-            .with_type(NotificationType::Success)
+            .with_kind(NotificationKind::Success)
     }
 
+    /// Create a warning notification with the given message.
     pub fn warning(message: impl Into<SharedString>) -> Self {
         Self::new()
             .message(message)
-            .with_type(NotificationType::Warning)
+            .with_kind(NotificationKind::Warning)
     }
 
+    /// Create an error notification with the given message.
     pub fn error(message: impl Into<SharedString>) -> Self {
         Self::new()
             .message(message)
-            .with_type(NotificationType::Error)
+            .with_kind(NotificationKind::Error)
     }
 
     /// Set the type for unique identification of the notification.
@@ -180,8 +179,8 @@ impl Notification {
     }
 
     /// Set the type and id of the notification, used to uniquely identify the notification.
-    pub fn custom_id(mut self, key: impl Into<ElementId>) -> Self {
-        self.id = (TypeId::of::<DefaultIdType>(), key.into()).into();
+    pub fn type_id<T: Sized + 'static>(mut self, key: impl Into<ElementId>) -> Self {
+        self.id = (TypeId::of::<T>(), key.into()).into();
         self
     }
 
@@ -202,8 +201,8 @@ impl Notification {
     }
 
     /// Set the type of the notification, default is NotificationType::Info.
-    pub fn with_type(mut self, type_: NotificationType) -> Self {
-        self.type_ = Some(type_);
+    pub fn with_kind(mut self, kind: NotificationKind) -> Self {
+        self.kind = Some(kind);
         self
     }
 
@@ -223,22 +222,31 @@ impl Notification {
     }
 
     /// Set the action button of the notification.
+    ///
+    /// When an action is set, the notification will not autohide.
     pub fn action<F>(mut self, action: F) -> Self
     where
-        F: Fn(&mut Window, &mut Context<Self>) -> Button + 'static,
+        F: Fn(&mut Self, &mut Window, &mut Context<Self>) -> Button + 'static,
     {
         self.action_builder = Some(Rc::new(action));
+        self.autohide = false;
         self
     }
 
     /// Dismiss the notification.
     pub fn dismiss(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if self.closing {
+            return;
+        }
         self.closing = true;
         cx.notify();
 
         // Dismiss the notification after 0.15s to show the animation.
         cx.spawn(async move |view, cx| {
-            Timer::after(Duration::from_secs_f32(0.15)).await;
+            cx.background_executor()
+                .timer(Duration::from_secs_f32(0.15))
+                .await;
+
             cx.update(|cx| {
                 if let Some(view) = view.upgrade() {
                     view.update(cx, |view, cx| {
@@ -248,13 +256,13 @@ impl Notification {
                 }
             })
         })
-        .detach()
+        .detach();
     }
 
     /// Set the content of the notification.
     pub fn content(
         mut self,
-        content: impl Fn(&mut Window, &mut Context<Self>) -> AnyElement + 'static,
+        content: impl Fn(&mut Self, &mut Window, &mut Context<Self>) -> AnyElement + 'static,
     ) -> Self {
         self.content_builder = Some(Rc::new(content));
         self
@@ -276,57 +284,76 @@ impl Styled for Notification {
         &mut self.style
     }
 }
-
 impl Render for Notification {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let closing = self.closing;
-        let icon = match self.type_ {
+        let placement = cx.theme().notification.placement;
+
+        let content = self
+            .content_builder
+            .clone()
+            .map(|builder| builder(self, window, cx));
+
+        let action = self
+            .action_builder
+            .clone()
+            .map(|builder| builder(self, window, cx).small().mr_3p5());
+
+        let icon = match self.kind {
             None => self.icon.clone(),
-            Some(type_) => Some(type_.icon(cx)),
+            Some(kind) => Some(kind.icon(cx)),
+        };
+
+        let background = match self.kind {
+            Some(NotificationKind::Error) => cx.theme().danger_background,
+            _ => cx.theme().surface_background,
+        };
+
+        let text_color = match self.kind {
+            Some(NotificationKind::Error) => cx.theme().danger_foreground,
+            _ => cx.theme().text,
         };
 
         h_flex()
             .id("notification")
-            .refine_style(&self.style)
             .group("")
             .occlude()
             .relative()
-            .w_96()
+            .w_112()
             .border_1()
             .border_color(cx.theme().border)
-            .bg(cx.theme().surface_background)
+            .bg(background)
+            .text_color(text_color)
             .rounded(cx.theme().radius_lg)
             .when(cx.theme().shadow, |this| this.shadow_md())
             .p_2()
-            .gap_3()
+            .gap_2()
             .justify_start()
             .items_start()
+            .refine_style(&self.style)
             .when_some(icon, |this, icon| {
-                this.child(div().flex_shrink_0().pt_1().child(icon))
+                this.child(div().flex_shrink_0().child(icon))
             })
             .child(
                 v_flex()
                     .flex_1()
-                    .gap_1()
                     .overflow_hidden()
                     .when_some(self.title.clone(), |this, title| {
                         this.child(div().text_sm().font_semibold().child(title))
                     })
                     .when_some(self.message.clone(), |this, message| {
-                        this.child(div().text_sm().child(message))
+                        this.child(div().text_sm().line_height(relative(1.25)).child(message))
                     })
-                    .when_some(self.content_builder.clone(), |this, child_builder| {
-                        this.child(child_builder(window, cx))
-                    })
-                    .when_some(self.action_builder.clone(), |this, action_builder| {
-                        this.child(action_builder(window, cx).small().w_full().my_2())
+                    .when_some(content, |this, content| this.child(content))
+                    .when_some(action, |this, action| {
+                        this.child(h_flex().flex_1().gap_1().justify_end().child(action))
                     }),
             )
             .child(
                 div()
                     .absolute()
-                    .top_2p5()
-                    .right_2p5()
+                    .top_2()
+                    .right_2()
                     .invisible()
                     .group_hover("", |this| this.visible())
                     .child(
@@ -334,7 +361,7 @@ impl Render for Notification {
                             .icon(IconName::Close)
                             .ghost()
                             .xsmall()
-                            .on_click(cx.listener(|this, _, window, cx| {
+                            .on_click(cx.listener(move |this, _ev, window, cx| {
                                 this.dismiss(window, cx);
                             })),
                     ),
@@ -345,21 +372,47 @@ impl Render for Notification {
                     on_click(event, window, cx);
                 }))
             })
+            .on_aux_click(cx.listener(move |view, event: &ClickEvent, window, cx| {
+                if event.is_middle_click() {
+                    view.dismiss(window, cx);
+                }
+            }))
             .with_animation(
                 ElementId::NamedInteger("slide-down".into(), closing as u64),
                 Animation::new(Duration::from_secs_f64(0.25))
                     .with_easing(cubic_bezier(0.4, 0., 0.2, 1.)),
                 move |this, delta| {
                     if closing {
-                        let x_offset = px(0.) + delta * px(45.);
                         let opacity = 1. - delta;
-                        this.left(px(0.) + x_offset)
+                        let that = this
                             .shadow_none()
                             .opacity(opacity)
-                            .when(opacity < 0.85, |this| this.shadow_none())
+                            .when(opacity < 0.85, |this| this.shadow_none());
+                        match placement {
+                            Anchor::TopRight | Anchor::BottomRight => {
+                                let x_offset = px(0.) + delta * px(45.);
+                                that.left(px(0.) + x_offset)
+                            }
+                            Anchor::TopLeft | Anchor::BottomLeft => {
+                                let x_offset = px(0.) - delta * px(45.);
+                                that.left(px(0.) + x_offset)
+                            }
+                            Anchor::TopCenter => {
+                                let y_offset = px(0.) - delta * px(45.);
+                                that.top(px(0.) + y_offset)
+                            }
+                            Anchor::BottomCenter => {
+                                let y_offset = px(0.) + delta * px(45.);
+                                that.top(px(0.) + y_offset)
+                            }
+                        }
                     } else {
-                        let y_offset = px(-45.) + delta * px(45.);
                         let opacity = delta;
+                        let y_offset = match placement {
+                            placement if placement.is_top() => px(-45.) + delta * px(45.),
+                            placement if placement.is_bottom() => px(45.) - delta * px(45.),
+                            _ => px(0.),
+                        };
                         this.top(px(0.) + y_offset)
                             .opacity(opacity)
                             .when(opacity < 0.85, |this| this.shadow_none())
@@ -373,7 +426,11 @@ impl Render for Notification {
 pub struct NotificationList {
     /// Notifications that will be auto hidden.
     pub(crate) notifications: VecDeque<Entity<Notification>>,
+
+    /// Whether the notification list is expanded.
     expanded: bool,
+
+    /// Subscriptions
     _subscriptions: HashMap<NotificationId, Subscription>,
 }
 
@@ -386,10 +443,12 @@ impl NotificationList {
         }
     }
 
-    pub fn push<T>(&mut self, notification: T, window: &mut Window, cx: &mut Context<Self>)
-    where
-        T: Into<Notification>,
-    {
+    pub fn push(
+        &mut self,
+        notification: impl Into<Notification>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let notification = notification.into();
         let id = notification.id.clone();
         let autohide = notification.autohide;
@@ -411,36 +470,35 @@ impl NotificationList {
 
         if autohide {
             // Sleep for 5 seconds to autohide the notification
-            cx.spawn_in(window, async move |_, cx| {
-                Timer::after(Duration::from_secs(5)).await;
+            cx.spawn_in(window, async move |_this, cx| {
+                cx.background_executor().timer(Duration::from_secs(5)).await;
 
-                if let Err(error) =
+                if let Err(err) =
                     notification.update_in(cx, |note, window, cx| note.dismiss(window, cx))
                 {
-                    log::error!("Failed to auto hide notification: {error}");
+                    log::error!("failed to auto hide notification: {:?}", err);
                 }
             })
             .detach();
         }
+
         cx.notify();
     }
 
-    pub fn close<T>(&mut self, key: T, window: &mut Window, cx: &mut Context<Self>)
-    where
-        T: Into<ElementId>,
-    {
-        let id = (TypeId::of::<DefaultIdType>(), key.into()).into();
-
+    pub(crate) fn close(
+        &mut self,
+        id: impl Into<NotificationId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let id: NotificationId = id.into();
         if let Some(n) = self.notifications.iter().find(|n| n.read(cx).id == id) {
-            n.update(cx, |note, cx| {
-                note.dismiss(window, cx);
-            });
+            n.update(cx, |note, cx| note.dismiss(window, cx))
         }
-
         cx.notify();
     }
 
-    pub fn clear(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    pub fn clear(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         self.notifications.clear();
         cx.notify();
     }
@@ -451,25 +509,46 @@ impl NotificationList {
 }
 
 impl Render for NotificationList {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
         let size = window.viewport_size();
         let items = self.notifications.iter().rev().take(10).rev().cloned();
 
-        div()
-            .id("notification-wrapper")
-            .absolute()
-            .top_4()
-            .right_4()
-            .child(
-                v_flex()
-                    .id("notification-list")
-                    .h(size.height - px(8.))
-                    .gap_3()
-                    .children(items)
-                    .on_hover(cx.listener(|view, hovered, _, cx| {
-                        view.expanded = *hovered;
-                        cx.notify()
-                    })),
+        let placement = cx.theme().notification.placement;
+        let margins = &cx.theme().notification.margins;
+
+        v_flex()
+            .id("notification-list")
+            .max_h(size.height)
+            .pt(margins.top)
+            .pb(margins.bottom)
+            .gap_3()
+            .when(
+                matches!(placement, Anchor::TopRight),
+                |this| this.pr(margins.right), // ignore left
             )
+            .when(
+                matches!(placement, Anchor::TopLeft),
+                |this| this.pl(margins.left), // ignore right
+            )
+            .when(
+                matches!(placement, Anchor::BottomLeft),
+                |this| this.flex_col_reverse().pl(margins.left), // ignore right
+            )
+            .when(
+                matches!(placement, Anchor::BottomRight),
+                |this| this.flex_col_reverse().pr(margins.right), // ignore left
+            )
+            .when(matches!(placement, Anchor::BottomCenter), |this| {
+                this.flex_col_reverse()
+            })
+            .on_hover(cx.listener(|view, hovered, _, cx| {
+                view.expanded = *hovered;
+                cx.notify()
+            }))
+            .children(items)
     }
 }

@@ -1,17 +1,15 @@
-use chat::{ChatRegistry, InboxState};
-use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, svg, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    IntoElement, ParentElement, Render, SharedString, Styled, Window, div, svg,
 };
-use state::{NostrRegistry, RelayState};
+use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::dock_area::dock::DockPlacement;
 use ui::dock_area::panel::{Panel, PanelEvent};
-use ui::{h_flex, v_flex, Icon, IconName, Sizable, StyledExt};
+use ui::{Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
 
-use crate::panels::{messaging_relays, profile, relay_list};
+use crate::panels::profile;
 use crate::workspace::Workspace;
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<GreeterPanel> {
@@ -82,15 +80,6 @@ impl Render for GreeterPanel {
         const TITLE: &str = "Welcome to Coop!";
         const DESCRIPTION: &str = "Chat Freely, Stay Private on Nostr.";
 
-        let chat = ChatRegistry::global(cx);
-        let nip17 = chat.read(cx).state(cx);
-
-        let nostr = NostrRegistry::global(cx);
-        let nip65 = nostr.read(cx).relay_list_state.clone();
-
-        let required_actions =
-            nip65 == RelayState::NotConfigured || nip17 == InboxState::RelayNotAvailable;
-
         h_flex()
             .size_full()
             .items_center()
@@ -130,64 +119,6 @@ impl Render for GreeterPanel {
                                     ),
                             ),
                     )
-                    .when(required_actions, |this| {
-                        this.child(
-                            v_flex()
-                                .gap_2()
-                                .w_full()
-                                .child(
-                                    h_flex()
-                                        .gap_2()
-                                        .w_full()
-                                        .text_xs()
-                                        .font_semibold()
-                                        .text_color(cx.theme().text_muted)
-                                        .child(SharedString::from("Required Actions"))
-                                        .child(div().flex_1().h_px().bg(cx.theme().border)),
-                                )
-                                .child(
-                                    v_flex()
-                                        .gap_2()
-                                        .w_full()
-                                        .when(nip65.not_configured(), |this| {
-                                            this.child(
-                                                Button::new("relaylist")
-                                                    .icon(Icon::new(IconName::Relay))
-                                                    .label("Set up relay list")
-                                                    .ghost()
-                                                    .small()
-                                                    .justify_start()
-                                                    .on_click(move |_ev, window, cx| {
-                                                        Workspace::add_panel(
-                                                            relay_list::init(window, cx),
-                                                            DockPlacement::Center,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }),
-                                            )
-                                        })
-                                        .when(nip17.not_configured(), |this| {
-                                            this.child(
-                                                Button::new("import")
-                                                    .icon(Icon::new(IconName::Relay))
-                                                    .label("Set up messaging relays")
-                                                    .ghost()
-                                                    .small()
-                                                    .justify_start()
-                                                    .on_click(move |_ev, window, cx| {
-                                                        Workspace::add_panel(
-                                                            messaging_relays::init(window, cx),
-                                                            DockPlacement::Center,
-                                                            window,
-                                                            cx,
-                                                        );
-                                                    }),
-                                            )
-                                        }),
-                                ),
-                        )
-                    })
                     .child(
                         v_flex()
                             .gap_2()

@@ -3,14 +3,15 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, Along, AnyElement, App, AppContext, Axis, Bounds, Context, Element, ElementId, Empty,
-    Entity, EventEmitter, InteractiveElement as _, IntoElement, IsZero as _, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, Render, RenderOnce, Style, Styled, Window,
+    Along, AnyElement, App, AppContext, Axis, Bounds, Context, Element, ElementId, Empty, Entity,
+    EventEmitter, InteractiveElement as _, IntoElement, IsZero as _, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Render, RenderOnce, Style, Styled, Window, div,
 };
+use theme::AxisExt;
 
-use super::{resizable_panel, resize_handle, ResizableState};
+use super::{ResizableState, resizable_panel, resize_handle};
 use crate::resizable::PANEL_MIN_SIZE;
-use crate::{h_flex, v_flex, AxisExt, ElementExt};
+use crate::{ElementExt, h_flex, v_flex};
 
 pub enum ResizablePanelEvent {
     Resized,

@@ -138,7 +138,7 @@ impl Anchor {
         }
     }
 
-    pub(crate) fn other_side_corner_along(&self, axis: Axis) -> Anchor {
+    pub fn other_side_corner_along(&self, axis: Axis) -> Anchor {
         match axis {
             Axis::Vertical => match self {
                 Self::TopLeft => Self::BottomLeft,

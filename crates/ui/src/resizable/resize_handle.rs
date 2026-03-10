@@ -3,14 +3,13 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, px, AnyElement, App, Axis, Element, ElementId, Entity, GlobalElementId,
-    InteractiveElement, IntoElement, MouseDownEvent, MouseUpEvent, ParentElement as _, Pixels,
-    Point, Render, StatefulInteractiveElement, Styled as _, Window,
+    AnyElement, App, Axis, Element, ElementId, Entity, GlobalElementId, InteractiveElement,
+    IntoElement, MouseDownEvent, MouseUpEvent, ParentElement as _, Pixels, Point, Render,
+    StatefulInteractiveElement, Styled as _, Window, div, px,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, AxisExt};
 
 use crate::dock_area::dock::DockPlacement;
-use crate::AxisExt;
 
 pub(crate) const HANDLE_PADDING: Pixels = px(4.);
 pub(crate) const HANDLE_SIZE: Pixels = px(1.);

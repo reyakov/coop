@@ -1,11 +1,12 @@
+use std::any::TypeId;
 use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyView, App, AppContext, Bounds, Context, CursorStyle, Decorations, Edges, Entity,
+    AnyView, App, AppContext, Bounds, Context, CursorStyle, Decorations, Edges, ElementId, Entity,
     FocusHandle, HitboxBehavior, Hsla, InteractiveElement, IntoElement, MouseButton,
-    ParentElement as _, Pixels, Point, Render, ResizeEdge, SharedString, Size, Styled, Tiling,
-    WeakFocusHandle, Window, canvas, div, point, px, size,
+    ParentElement as _, Pixels, Point, Render, ResizeEdge, Size, Styled, Tiling, WeakFocusHandle,
+    Window, canvas, div, point, px, size,
 };
 use theme::{
     ActiveTheme, CLIENT_SIDE_DECORATION_BORDER, CLIENT_SIDE_DECORATION_ROUNDING,
@@ -213,13 +214,30 @@ impl Root {
         cx.notify();
     }
 
-    /// Clear a notification by its ID.
-    pub fn clear_notification<T>(&mut self, id: T, window: &mut Window, cx: &mut Context<Self>)
-    where
-        T: Into<SharedString>,
-    {
-        self.notification
-            .update(cx, |view, cx| view.close(id.into(), window, cx));
+    /// Clear a notification by its type.
+    pub fn clear_notification<T: Sized + 'static>(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<'_, Root>,
+    ) {
+        self.notification.update(cx, |view, cx| {
+            let id = TypeId::of::<T>();
+            view.close(id, window, cx);
+        });
+        cx.notify();
+    }
+
+    /// Clear a notification by its type.
+    pub fn clear_notification_by_id<T: Sized + 'static>(
+        &mut self,
+        key: impl Into<ElementId>,
+        window: &mut Window,
+        cx: &mut Context<'_, Root>,
+    ) {
+        self.notification.update(cx, |view, cx| {
+            let id = (TypeId::of::<T>(), key.into());
+            view.close(id, window, cx);
+        });
         cx.notify();
     }
 

@@ -7,16 +7,16 @@ use gpui::{
     Window,
 };
 use smallvec::SmallVec;
-use theme::{ActiveTheme, CLIENT_SIDE_DECORATION_ROUNDING};
+use theme::{ActiveTheme, AxisExt as _, CLIENT_SIDE_DECORATION_ROUNDING, Placement};
 
 use super::{DockArea, PanelEvent};
 use crate::dock_area::panel::{Panel, PanelView};
 use crate::dock_area::tab_panel::TabPanel;
+use crate::h_flex;
 use crate::resizable::{
-    resizable_panel, ResizablePanelEvent, ResizablePanelGroup, ResizablePanelState, ResizableState,
-    PANEL_MIN_SIZE,
+    PANEL_MIN_SIZE, ResizablePanelEvent, ResizablePanelGroup, ResizablePanelState, ResizableState,
+    resizable_panel,
 };
-use crate::{h_flex, AxisExt as _, Placement};
 
 pub struct StackPanel {
     pub(super) parent: Option<WeakEntity<StackPanel>>,

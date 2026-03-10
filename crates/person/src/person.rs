@@ -65,6 +65,21 @@ impl Person {
         }
     }
 
+    /// Build profile encryption keys announcement
+    pub fn with_announcement(mut self, announcement: Announcement) -> Self {
+        self.announcement = Some(announcement);
+        self
+    }
+
+    /// Build profile messaging relays
+    pub fn with_messaging_relays<I>(mut self, relays: I) -> Self
+    where
+        I: IntoIterator<Item = RelayUrl>,
+    {
+        self.messaging_relays = relays.into_iter().collect();
+        self
+    }
+
     /// Get profile public key
     pub fn public_key(&self) -> PublicKey {
         self.public_key
@@ -75,19 +90,9 @@ impl Person {
         self.metadata.clone()
     }
 
-    /// Set profile metadata
-    pub fn set_metadata(&mut self, metadata: Metadata) {
-        self.metadata = metadata;
-    }
-
     /// Get profile encryption keys announcement
     pub fn announcement(&self) -> Option<Announcement> {
         self.announcement.clone()
-    }
-
-    /// Set profile encryption keys announcement
-    pub fn set_announcement(&mut self, announcement: Announcement) {
-        self.announcement = Some(announcement);
     }
 
     /// Get profile messaging relays
@@ -100,14 +105,6 @@ impl Person {
         self.messaging_relays.first().cloned()
     }
 
-    /// Set profile messaging relays
-    pub fn set_messaging_relays<I>(&mut self, relays: I)
-    where
-        I: IntoIterator<Item = RelayUrl>,
-    {
-        self.messaging_relays = relays.into_iter().collect();
-    }
-
     /// Get profile avatar
     pub fn avatar(&self) -> SharedString {
         self.metadata()
@@ -115,8 +112,9 @@ impl Person {
             .as_ref()
             .filter(|picture| !picture.is_empty())
             .map(|picture| {
+                let encoded_picture = urlencoding::encode(picture);
                 let url = format!(
-                    "{IMAGE_RESIZER}/?url={picture}&w=100&h=100&fit=cover&mask=circle&n=-1"
+                    "{IMAGE_RESIZER}/?url={encoded_picture}&w=100&h=100&fit=cover&mask=circle&n=-1"
                 );
                 url.into()
             })
@@ -139,6 +137,24 @@ impl Person {
 
         SharedString::from(shorten_pubkey(self.public_key(), 4))
     }
+
+    /// Set profile metadata
+    pub fn set_metadata(&mut self, metadata: Metadata) {
+        self.metadata = metadata;
+    }
+
+    /// Set profile encryption keys announcement
+    pub fn set_announcement(&mut self, announcement: Announcement) {
+        self.announcement = Some(announcement);
+    }
+
+    /// Set profile messaging relays
+    pub fn set_messaging_relays<I>(&mut self, relays: I)
+    where
+        I: IntoIterator<Item = RelayUrl>,
+    {
+        self.messaging_relays = relays.into_iter().collect();
+    }
 }
 
 /// Shorten a [`PublicKey`] to a string with the first and last `len` characters
@@ -148,7 +164,7 @@ pub fn shorten_pubkey(public_key: PublicKey, len: usize) -> String {
     let Ok(pubkey) = public_key.to_bech32();
 
     format!(
-        "{}:{}",
+        "{}...{}",
         &pubkey[0..(len + 1)],
         &pubkey[pubkey.len() - len..]
     )

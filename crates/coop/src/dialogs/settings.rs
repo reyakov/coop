@@ -1,7 +1,7 @@
 use gpui::http_client::Url;
 use gpui::{
-    div, px, App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString,
-    Styled, Window,
+    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
+    Window, div, px,
 };
 use settings::{AppSettings, AuthMode};
 use theme::{ActiveTheme, ThemeMode};
@@ -11,7 +11,7 @@ use ui::input::{InputState, TextInput};
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::Notification;
 use ui::switch::Switch;
-use ui::{h_flex, v_flex, IconName, Sizable, WindowExtension};
+use ui::{IconName, Sizable, WindowExtension, h_flex, v_flex};
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Preferences> {
     cx.new(|cx| Preferences::new(window, cx))
@@ -41,7 +41,7 @@ impl Preferences {
                 AppSettings::update_file_server(url, cx);
             }
             Err(e) => {
-                window.push_notification(Notification::error(e.to_string()), cx);
+                window.push_notification(Notification::error(e.to_string()).autohide(false), cx);
             }
         }
     }

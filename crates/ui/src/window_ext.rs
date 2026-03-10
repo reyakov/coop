@@ -1,11 +1,11 @@
 use std::rc::Rc;
 
-use gpui::{App, Entity, SharedString, Window};
+use gpui::{App, ElementId, Entity, Window};
 
+use crate::Root;
 use crate::input::InputState;
 use crate::modal::Modal;
 use crate::notification::Notification;
-use crate::Root;
 
 /// Extension trait for [`Window`] to add modal, notification .. functionality.
 pub trait WindowExtension: Sized {
@@ -31,10 +31,15 @@ pub trait WindowExtension: Sized {
     where
         T: Into<Notification>;
 
-    /// Clears a notification by its ID.
-    fn clear_notification<T>(&mut self, id: T, cx: &mut App)
-    where
-        T: Into<SharedString>;
+    /// Clear the unique notification.
+    fn clear_notification<T: Sized + 'static>(&mut self, cx: &mut App);
+
+    /// Clear the unique notification with the given id.
+    fn clear_notification_by_id<T: Sized + 'static>(
+        &mut self,
+        key: impl Into<ElementId>,
+        cx: &mut App,
+    );
 
     /// Clear all notifications
     fn clear_notifications(&mut self, cx: &mut App);
@@ -88,13 +93,21 @@ impl WindowExtension for Window {
     }
 
     #[inline]
-    fn clear_notification<T>(&mut self, id: T, cx: &mut App)
-    where
-        T: Into<SharedString>,
-    {
-        let id = id.into();
-        Root::update(self, cx, move |root, window, cx| {
-            root.clear_notification(id, window, cx);
+    fn clear_notification<T: Sized + 'static>(&mut self, cx: &mut App) {
+        Root::update(self, cx, |root, window, cx| {
+            root.clear_notification::<T>(window, cx);
+        })
+    }
+
+    #[inline]
+    fn clear_notification_by_id<T: Sized + 'static>(
+        &mut self,
+        key: impl Into<ElementId>,
+        cx: &mut App,
+    ) {
+        let key: ElementId = key.into();
+        Root::update(self, cx, |root, window, cx| {
+            root.clear_notification_by_id::<T>(key, window, cx);
         })
     }
 

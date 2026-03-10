@@ -4,6 +4,8 @@ use std::rc::Rc;
 use gpui::{App, Global, Pixels, SharedString, Window, px};
 
 mod colors;
+mod geometry;
+mod notification;
 mod platform_kind;
 mod registry;
 mod scale;
@@ -11,6 +13,8 @@ mod scrollbar_mode;
 mod theme;
 
 pub use colors::*;
+pub use geometry::*;
+pub use notification::*;
 pub use platform_kind::PlatformKind;
 pub use registry::*;
 pub use scale::*;
@@ -81,6 +85,9 @@ pub struct Theme {
 
     /// Show the scrollbar mode, default: scrolling
     pub scrollbar_mode: ScrollbarMode,
+
+    /// Notification settings
+    pub notification: NotificationSettings,
 
     /// Platform kind
     pub platform: PlatformKind,
@@ -204,6 +211,7 @@ impl From<ThemeFamily> for Theme {
             radius_lg: px(10.),
             shadow: true,
             scrollbar_mode: ScrollbarMode::default(),
+            notification: NotificationSettings::default(),
             mode,
             colors: *colors,
             theme: Rc::new(family),

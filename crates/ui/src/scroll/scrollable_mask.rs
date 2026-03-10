@@ -1,10 +1,9 @@
 use gpui::{
-    px, relative, App, Axis, BorderStyle, Bounds, ContentMask, Corners, Edges, Element, ElementId,
-    EntityId, GlobalElementId, Hitbox, Hsla, IntoElement, IsZero as _, LayoutId, PaintQuad, Pixels,
-    Point, Position, ScrollHandle, ScrollWheelEvent, Size, Style, Window,
+    App, Axis, BorderStyle, Bounds, ContentMask, Corners, Edges, Element, ElementId, EntityId,
+    GlobalElementId, Hitbox, Hsla, IntoElement, IsZero as _, LayoutId, PaintQuad, Pixels, Point,
+    Position, ScrollHandle, ScrollWheelEvent, Size, Style, Window, px, relative,
 };
-
-use crate::AxisExt;
+use theme::AxisExt;
 
 /// Make a scrollable mask element to cover the parent view with the mouse wheel event listening.
 ///

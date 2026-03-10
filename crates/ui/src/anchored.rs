@@ -1,13 +1,12 @@
 //! This is a fork of gpui's anchored element that adds support for offsetting
 //! https://github.com/zed-industries/zed/blob/b06f4088a3565c5e30663106ff79c1ced645d87a/crates/gpui/src/elements/anchored.rs
 use gpui::{
-    point, px, AnyElement, App, Axis, Bounds, Display, Edges, Element, GlobalElementId, Half,
+    AnyElement, App, Axis, Bounds, Display, Edges, Element, GlobalElementId, Half,
     InspectorElementId, IntoElement, LayoutId, ParentElement, Pixels, Point, Position, Size, Style,
-    Window,
+    Window, point, px,
 };
 use smallvec::SmallVec;
-
-use crate::Anchor;
+use theme::Anchor;
 
 /// The state that the anchored element element uses to track its children.
 pub struct AnchoredState {

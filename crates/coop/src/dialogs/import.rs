@@ -1,18 +1,18 @@
 use std::time::Duration;
 
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
-    Subscription, Task, Window,
+    AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
+    Subscription, Task, Window, div,
 };
 use nostr_connect::prelude::*;
-use smallvec::{smallvec, SmallVec};
-use state::{CoopAuthUrlHandler, NostrRegistry, SignerEvent};
+use smallvec::{SmallVec, smallvec};
+use state::{CoopAuthUrlHandler, NostrRegistry, StateEvent};
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::input::{InputEvent, InputState, TextInput};
-use ui::{v_flex, Disableable};
+use ui::{Disableable, v_flex};
 
 #[derive(Debug)]
 pub struct ImportKey {
@@ -60,7 +60,7 @@ impl ImportKey {
         subscriptions.push(
             // Subscribe to the nostr signer event
             cx.subscribe_in(&nostr, window, |this, _state, event, _window, cx| {
-                if let SignerEvent::Error(e) = event {
+                if let StateEvent::Error(e) = event {
                     this.set_error(e, cx);
                 }
             }),
@@ -117,7 +117,7 @@ impl ImportKey {
         };
 
         let nostr = NostrRegistry::global(cx);
-        let app_keys = nostr.read(cx).app_keys.clone();
+        let app_keys = nostr.read(cx).keys();
         let timeout = Duration::from_secs(30);
 
         // Construct the nostr connect signer

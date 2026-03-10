@@ -2,19 +2,19 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    anchored, div, px, rems, Action, AnyElement, App, AppContext, Axis, Bounds, ClickEvent,
-    Context, Corner, DismissEvent, Edges, Entity, EventEmitter, FocusHandle, Focusable, Half,
-    InteractiveElement, IntoElement, KeyBinding, MouseDownEvent, OwnedMenuItem, ParentElement,
-    Pixels, Point, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
-    Subscription, WeakEntity, Window,
+    Action, AnyElement, App, AppContext, Axis, Bounds, ClickEvent, Context, Corner, DismissEvent,
+    Edges, Entity, EventEmitter, FocusHandle, Focusable, Half, InteractiveElement, IntoElement,
+    KeyBinding, MouseDownEvent, OwnedMenuItem, ParentElement, Pixels, Point, Render, ScrollHandle,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, anchored,
+    div, px, rems,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, Side};
 
 use crate::actions::{Cancel, Confirm, SelectDown, SelectLeft, SelectRight, SelectUp};
 use crate::kbd::Kbd;
 use crate::menu::menu_item::MenuItemElement;
 use crate::scroll::ScrollableElement;
-use crate::{h_flex, v_flex, ElementExt, Icon, IconName, Side, Sizable as _, Size, StyledExt};
+use crate::{ElementExt, Icon, IconName, Sizable as _, Size, StyledExt, h_flex, v_flex};
 
 const CONTEXT: &str = "PopupMenu";
 

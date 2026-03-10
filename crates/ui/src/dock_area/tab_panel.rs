@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, rems, App, AppContext, Context, Corner, DefiniteLength, DismissEvent, DragMoveEvent,
-    Empty, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement, Pixels, Render, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, WeakEntity, Window,
+    App, AppContext, Context, Corner, DefiniteLength, DismissEvent, DragMoveEvent, Empty, Entity,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement, Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
+    WeakEntity, Window, div, px, rems,
 };
-use theme::{ActiveTheme, CLIENT_SIDE_DECORATION_ROUNDING, TABBAR_HEIGHT};
+use theme::{ActiveTheme, AxisExt, CLIENT_SIDE_DECORATION_ROUNDING, Placement, TABBAR_HEIGHT};
 
 use crate::button::{Button, ButtonVariants as _};
 use crate::dock_area::dock::DockPlacement;
@@ -15,9 +15,9 @@ use crate::dock_area::panel::{Panel, PanelView};
 use crate::dock_area::stack_panel::StackPanel;
 use crate::dock_area::{ClosePanel, DockArea, PanelEvent, PanelStyle, ToggleZoom};
 use crate::menu::{DropdownMenu, PopupMenu};
-use crate::tab::tab_bar::TabBar;
 use crate::tab::Tab;
-use crate::{h_flex, v_flex, AxisExt, IconName, Placement, Selectable, Sizable, StyledExt};
+use crate::tab::tab_bar::TabBar;
+use crate::{IconName, Selectable, Sizable, StyledExt, h_flex, v_flex};
 
 #[derive(Clone)]
 struct TabState {

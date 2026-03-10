@@ -40,7 +40,8 @@ pub const WOT_RELAYS: [&str; 1] = ["wss://relay.vertexlab.io"];
 pub const SEARCH_RELAYS: [&str; 2] = ["wss://antiprimal.net", "wss://search.nos.today"];
 
 /// Default bootstrap relays
-pub const BOOTSTRAP_RELAYS: [&str; 3] = [
+pub const BOOTSTRAP_RELAYS: [&str; 4] = [
+    "wss://relay.damus.io",
     "wss://relay.primal.net",
     "wss://indexer.coracle.social",
     "wss://user.kindpag.es",

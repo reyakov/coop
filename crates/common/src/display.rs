@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use chrono::{Local, TimeZone};
 use gpui::{Image, ImageFormat, SharedString};
 use nostr_sdk::prelude::*;

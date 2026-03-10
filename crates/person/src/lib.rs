@@ -3,19 +3,19 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::Duration;
 
-use anyhow::{anyhow, Error};
+use anyhow::{Error, anyhow};
 use common::EventUtils;
-use gpui::{App, AppContext, Context, Entity, Global, Task};
+use gpui::{App, AppContext, Context, Entity, Global, Task, Window};
 use nostr_sdk::prelude::*;
-use smallvec::{smallvec, SmallVec};
-use state::{Announcement, NostrRegistry, BOOTSTRAP_RELAYS, TIMEOUT};
+use smallvec::{SmallVec, smallvec};
+use state::{Announcement, BOOTSTRAP_RELAYS, NostrRegistry, TIMEOUT};
 
 mod person;
 
 pub use person::*;
 
-pub fn init(cx: &mut App) {
-    PersonRegistry::set_global(cx.new(PersonRegistry::new), cx);
+pub fn init(window: &mut Window, cx: &mut App) {
+    PersonRegistry::set_global(cx.new(|cx| PersonRegistry::new(window, cx)), cx);
 }
 
 struct GlobalPersonRegistry(Entity<PersonRegistry>);
@@ -36,13 +36,13 @@ pub struct PersonRegistry {
     persons: HashMap<PublicKey, Entity<Person>>,
 
     /// Set of public keys that have been seen
-    seen: Rc<RefCell<HashSet<PublicKey>>>,
+    seens: Rc<RefCell<HashSet<PublicKey>>>,
 
     /// Sender for requesting metadata
     sender: flume::Sender<PublicKey>,
 
     /// Tasks for asynchronous operations
-    _tasks: SmallVec<[Task<()>; 4]>,
+    tasks: SmallVec<[Task<()>; 4]>,
 }
 
 impl PersonRegistry {
@@ -57,13 +57,13 @@ impl PersonRegistry {
     }
 
     /// Create a new person registry instance
-    fn new(cx: &mut Context<Self>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
         // Channel for communication between nostr and gpui
         let (tx, rx) = flume::bounded::<Dispatch>(100);
-        let (mta_tx, mta_rx) = flume::bounded::<PublicKey>(100);
+        let (mta_tx, mta_rx) = flume::unbounded::<PublicKey>();
 
         let mut tasks = smallvec![];
 
@@ -111,33 +111,16 @@ impl PersonRegistry {
             }),
         );
 
-        tasks.push(
-            // Load all user profiles from the database
-            cx.spawn(async move |this, cx| {
-                let result = cx
-                    .background_executor()
-                    .await_on_background(async move { load_persons(&client).await })
-                    .await;
-
-                match result {
-                    Ok(persons) => {
-                        this.update(cx, |this, cx| {
-                            this.bulk_inserts(persons, cx);
-                        })
-                        .ok();
-                    }
-                    Err(e) => {
-                        log::error!("Failed to load all persons from the database: {e}");
-                    }
-                };
-            }),
-        );
+        // Load all user profiles from the database
+        cx.defer_in(window, |this, _window, cx| {
+            this.load(cx);
+        });
 
         Self {
             persons: HashMap::new(),
-            seen: Rc::new(RefCell::new(HashSet::new())),
+            seens: Rc::new(RefCell::new(HashSet::new())),
             sender: mta_tx,
-            _tasks: tasks,
+            tasks,
         }
     }
 
@@ -163,25 +146,21 @@ impl PersonRegistry {
                         let metadata = Metadata::from_json(&event.content).unwrap_or_default();
                         let person = Person::new(event.pubkey, metadata);
                         let val = Box::new(person);
-
                         // Send
                         tx.send_async(Dispatch::Person(val)).await.ok();
                     }
                     Kind::ContactList => {
                         let public_keys = event.extract_public_keys();
-
                         // Get metadata for all public keys
                         get_metadata(client, public_keys).await.ok();
                     }
                     Kind::InboxRelays => {
                         let val = Box::new(event.into_owned());
-
                         // Send
                         tx.send_async(Dispatch::Relays(val)).await.ok();
                     }
                     Kind::Custom(10044) => {
                         let val = Box::new(event.into_owned());
-
                         // Send
                         tx.send_async(Dispatch::Announcement(val)).await.ok();
                     }
@@ -198,7 +177,7 @@ impl PersonRegistry {
         loop {
             match flume::Selector::new()
                 .recv(rx, |result| result.ok())
-                .wait_timeout(Duration::from_secs(2))
+                .wait_timeout(Duration::from_secs(TIMEOUT))
             {
                 Ok(Some(public_key)) => {
                     batch.insert(public_key);
@@ -208,40 +187,81 @@ impl PersonRegistry {
                     }
                 }
                 _ => {
-                    get_metadata(client, std::mem::take(&mut batch)).await.ok();
+                    if !batch.is_empty() {
+                        get_metadata(client, std::mem::take(&mut batch)).await.ok();
+                    }
                 }
             }
         }
     }
 
+    /// Load all user profiles from the database
+    fn load(&mut self, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+
+        let task: Task<Result<Vec<Person>, Error>> = cx.background_spawn(async move {
+            let filter = Filter::new().kind(Kind::Metadata).limit(200);
+            let events = client.database().query(filter).await?;
+            let persons = events
+                .into_iter()
+                .map(|event| {
+                    let metadata = Metadata::from_json(event.content).unwrap_or_default();
+                    Person::new(event.pubkey, metadata)
+                })
+                .collect();
+
+            Ok(persons)
+        });
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            if let Ok(persons) = task.await {
+                this.update(cx, |this, cx| {
+                    this.bulk_inserts(persons, cx);
+                })
+                .ok();
+            }
+        }));
+    }
+
     /// Set profile encryption keys announcement
     fn set_announcement(&mut self, event: &Event, cx: &mut App) {
-        if let Some(person) = self.persons.get(&event.pubkey) {
-            let announcement = Announcement::from(event);
+        let announcement = Announcement::from(event);
 
+        if let Some(person) = self.persons.get(&event.pubkey) {
             person.update(cx, |person, cx| {
                 person.set_announcement(announcement);
                 cx.notify();
             });
+        } else {
+            let person =
+                Person::new(event.pubkey, Metadata::default()).with_announcement(announcement);
+            self.insert(person, cx);
         }
     }
 
     /// Set messaging relays for a person
     fn set_messaging_relays(&mut self, event: &Event, cx: &mut App) {
-        if let Some(person) = self.persons.get(&event.pubkey) {
-            let urls: Vec<RelayUrl> = nip17::extract_relay_list(event).cloned().collect();
+        let urls: Vec<RelayUrl> = nip17::extract_relay_list(event).cloned().collect();
 
+        if let Some(person) = self.persons.get(&event.pubkey) {
             person.update(cx, |person, cx| {
                 person.set_messaging_relays(urls);
                 cx.notify();
             });
+        } else {
+            let person = Person::new(event.pubkey, Metadata::default()).with_messaging_relays(urls);
+            self.insert(person, cx);
         }
     }
 
     /// Insert batch of persons
     fn bulk_inserts(&mut self, persons: Vec<Person>, cx: &mut Context<Self>) {
         for person in persons.into_iter() {
-            self.persons.insert(person.public_key(), cx.new(|_| person));
+            let public_key = person.public_key();
+            self.persons
+                .entry(public_key)
+                .or_insert_with(|| cx.new(|_| person));
         }
         cx.notify();
     }
@@ -270,7 +290,7 @@ impl PersonRegistry {
         }
 
         let public_key = *public_key;
-        let mut seen = self.seen.borrow_mut();
+        let mut seen = self.seens.borrow_mut();
 
         if seen.insert(public_key) {
             let sender = self.sender.clone();
@@ -321,20 +341,4 @@ where
     client.subscribe(target).close_on(opts).await?;
 
     Ok(())
-}
-
-/// Load all user profiles from the database
-async fn load_persons(client: &Client) -> Result<Vec<Person>, Error> {
-    let filter = Filter::new().kind(Kind::Metadata).limit(200);
-    let events = client.database().query(filter).await?;
-
-    let mut persons = vec![];
-
-    for event in events.into_iter() {
-        let metadata = Metadata::from_json(event.content).unwrap_or_default();
-        let person = Person::new(event.pubkey, metadata);
-        persons.push(person);
-    }
-
-    Ok(persons)
 }

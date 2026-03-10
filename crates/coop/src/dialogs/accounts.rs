@@ -1,17 +1,17 @@
 use anyhow::Error;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window,
+    App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, Window, div, px,
 };
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
-use state::{NostrRegistry, SignerEvent};
+use state::{NostrRegistry, StateEvent};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::indicator::Indicator;
-use ui::{h_flex, v_flex, Disableable, Icon, IconName, Sizable, WindowExtension};
+use ui::{Disableable, Icon, IconName, Sizable, WindowExtension, h_flex, v_flex};
 
 use crate::dialogs::connect::ConnectSigner;
 use crate::dialogs::import::ImportKey;
@@ -44,13 +44,14 @@ impl AccountSelector {
         let nostr = NostrRegistry::global(cx);
         let subscription = cx.subscribe_in(&nostr, window, |this, _state, event, window, cx| {
             match event {
-                SignerEvent::Set => {
+                StateEvent::SignerSet => {
                     window.close_all_modals(cx);
                     window.refresh();
                 }
-                SignerEvent::Error(e) => {
+                StateEvent::Error(e) => {
                     this.set_error(e.to_string(), cx);
                 }
+                _ => {}
             };
         });
 

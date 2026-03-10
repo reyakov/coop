@@ -2,14 +2,15 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    deferred, div, px, AnyElement, App, Bounds, Context, Deferred, DismissEvent, Div, ElementId,
-    EventEmitter, FocusHandle, Focusable, Half, InteractiveElement as _, IntoElement, KeyBinding,
-    MouseButton, ParentElement, Pixels, Point, Render, RenderOnce, Stateful, StyleRefinement,
-    Styled, Subscription, Window,
+    AnyElement, App, Bounds, Context, Deferred, DismissEvent, Div, ElementId, EventEmitter,
+    FocusHandle, Focusable, Half, InteractiveElement as _, IntoElement, KeyBinding, MouseButton,
+    ParentElement, Pixels, Point, Render, RenderOnce, Stateful, StyleRefinement, Styled,
+    Subscription, Window, deferred, div, px,
 };
+use theme::Anchor;
 
 use crate::actions::Cancel;
-use crate::{anchored, v_flex, Anchor, ElementExt, Selectable, StyledExt as _};
+use crate::{ElementExt, Selectable, StyledExt as _, anchored, v_flex};
 
 const CONTEXT: &str = "Popover";
 

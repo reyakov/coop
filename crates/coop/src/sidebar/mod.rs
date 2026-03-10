@@ -180,7 +180,10 @@ impl Sidebar {
                 }
                 Err(e) => {
                     cx.update(|window, cx| {
-                        window.push_notification(Notification::error(e.to_string()), cx);
+                        window.push_notification(
+                            Notification::error(e.to_string()).autohide(false),
+                            cx,
+                        );
                     })?;
                 }
             };

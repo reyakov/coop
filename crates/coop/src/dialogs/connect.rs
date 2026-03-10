@@ -4,13 +4,13 @@ use std::time::Duration;
 use common::TextUtils;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, img, px, AppContext, Context, Entity, Image, IntoElement, ParentElement, Render,
-    SharedString, Styled, Subscription, Window,
+    AppContext, Context, Entity, Image, IntoElement, ParentElement, Render, SharedString, Styled,
+    Subscription, Window, div, img, px,
 };
 use nostr_connect::prelude::*;
 use state::{
-    CoopAuthUrlHandler, NostrRegistry, SignerEvent, CLIENT_NAME, NOSTR_CONNECT_RELAY,
-    NOSTR_CONNECT_TIMEOUT,
+    CLIENT_NAME, CoopAuthUrlHandler, NOSTR_CONNECT_RELAY, NOSTR_CONNECT_TIMEOUT, NostrRegistry,
+    StateEvent,
 };
 use theme::ActiveTheme;
 use ui::v_flex;
@@ -31,7 +31,7 @@ impl ConnectSigner {
         let error = cx.new(|_| None);
 
         let nostr = NostrRegistry::global(cx);
-        let app_keys = nostr.read(cx).app_keys.clone();
+        let app_keys = nostr.read(cx).keys();
 
         let timeout = Duration::from_secs(NOSTR_CONNECT_TIMEOUT);
         let relay = RelayUrl::parse(NOSTR_CONNECT_RELAY).unwrap();
@@ -55,7 +55,7 @@ impl ConnectSigner {
 
         // Subscribe to the signer event
         let subscription = cx.subscribe_in(&nostr, window, |this, _state, event, _window, cx| {
-            if let SignerEvent::Error(e) = event {
+            if let StateEvent::Error(e) = event {
                 this.set_error(e, cx);
             }
         });

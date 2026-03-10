@@ -604,7 +604,10 @@ impl ChatPanel {
                 Err(e) => {
                     this.update_in(cx, |this, window, cx| {
                         this.set_uploading(false, cx);
-                        window.push_notification(Notification::error(e.to_string()), cx);
+                        window.push_notification(
+                            Notification::error(e.to_string()).autohide(false),
+                            cx,
+                        );
                     })?;
                 }
             }
@@ -652,7 +655,10 @@ impl ChatPanel {
                     })
                     .is_err()
                 {
-                    window.push_notification(Notification::error("Failed to change subject"), cx);
+                    window.push_notification(
+                        Notification::error("Failed to change subject").autohide(false),
+                        cx,
+                    );
                 }
             }
             Command::ChangeSigner(kind) => {
@@ -663,7 +669,10 @@ impl ChatPanel {
                     })
                     .is_err()
                 {
-                    window.push_notification(Notification::error("Failed to change signer"), cx);
+                    window.push_notification(
+                        Notification::error("Failed to change signer").autohide(false),
+                        cx,
+                    );
                 }
             }
             Command::ToggleBackup => {
@@ -674,7 +683,10 @@ impl ChatPanel {
                     })
                     .is_err()
                 {
-                    window.push_notification(Notification::error("Failed to toggle backup"), cx);
+                    window.push_notification(
+                        Notification::error("Failed to toggle backup").autohide(false),
+                        cx,
+                    );
                 }
             }
             Command::Subject => {

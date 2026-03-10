@@ -10,6 +10,8 @@ common = { path = "../common" }
 nostr.workspace = true
 nostr-sdk.workspace = true
 nostr-lmdb.workspace = true
+nostr-memory.workspace = true
+nostr-gossip-sqlite.workspace = true
 nostr-connect.workspace = true
 nostr-blossom.workspace = true
 

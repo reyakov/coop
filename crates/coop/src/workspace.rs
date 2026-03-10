@@ -1,8 +1,10 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use ::settings::AppSettings;
-use chat::{ChatEvent, ChatRegistry, InboxState};
-use device::DeviceRegistry;
+use chat::{ChatEvent, ChatRegistry};
+use device::{DeviceEvent, DeviceRegistry};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement, ParentElement,
@@ -11,7 +13,7 @@ use gpui::{
 use person::PersonRegistry;
 use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
-use state::{NostrRegistry, RelayState, SignerEvent};
+use state::{NostrRegistry, StateEvent};
 use theme::{ActiveTheme, SIDEBAR_WIDTH, Theme, ThemeRegistry};
 use title_bar::TitleBar;
 use ui::avatar::Avatar;
@@ -20,8 +22,8 @@ use ui::dock_area::dock::DockPlacement;
 use ui::dock_area::panel::PanelView;
 use ui::dock_area::{ClosePanel, DockArea, DockItem};
 use ui::menu::{DropdownMenu, PopupMenuItem};
-use ui::notification::Notification;
-use ui::{IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
+use ui::notification::{Notification, NotificationKind};
+use ui::{Disableable, IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
 
 use crate::dialogs::{accounts, settings};
 use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list};
@@ -36,6 +38,8 @@ const ENC_WARN: &str = "By resetting your encryption key, you will lose access t
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Workspace> {
     cx.new(|cx| Workspace::new(window, cx))
 }
+
+struct RelayNotifcation;
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = workspace, no_json)]
@@ -63,15 +67,23 @@ pub struct Workspace {
     /// App's Dock Area
     dock: Entity<DockArea>,
 
+    /// Whether a user's relay list is connected
+    relay_connected: bool,
+
+    /// Whether the inbox is connected
+    inbox_connected: bool,
+
     /// Event subscriptions
-    _subscriptions: SmallVec<[Subscription; 4]>,
+    _subscriptions: SmallVec<[Subscription; 6]>,
 }
 
 impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let chat = ChatRegistry::global(cx);
+        let device = DeviceRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
         let npubs = nostr.read(cx).npubs();
-        let chat = ChatRegistry::global(cx);
+
         let titlebar = cx.new(|_| TitleBar::new());
         let dock = cx.new(|cx| DockArea::new(window, cx));
 
@@ -96,9 +108,56 @@ impl Workspace {
         subscriptions.push(
             // Subscribe to the signer events
             cx.subscribe_in(&nostr, window, move |this, _state, event, window, cx| {
-                if let SignerEvent::Set = event {
-                    this.set_center_layout(window, cx);
-                }
+                match event {
+                    StateEvent::Connecting => {
+                        let note = Notification::new()
+                            .id::<RelayNotifcation>()
+                            .message("Connecting to the bootstrap relay...")
+                            .with_kind(NotificationKind::Info)
+                            .icon(IconName::Relay);
+
+                        window.push_notification(note, cx);
+                    }
+                    StateEvent::Connected => {
+                        let note = Notification::new()
+                            .id::<RelayNotifcation>()
+                            .message("Connected to the bootstrap relay")
+                            .with_kind(NotificationKind::Success)
+                            .icon(IconName::Relay);
+
+                        window.push_notification(note, cx);
+                    }
+                    StateEvent::RelayNotConfigured => {
+                        this.relay_notification(window, cx);
+                    }
+                    StateEvent::RelayConnected => {
+                        window.clear_notification::<RelayNotifcation>(cx);
+                        this.set_relay_connected(true, cx);
+                    }
+                    StateEvent::SignerSet => {
+                        this.set_center_layout(window, cx);
+                        this.set_relay_connected(false, cx);
+                        this.set_inbox_connected(false, cx);
+                    }
+                    _ => {}
+                };
+            }),
+        );
+
+        subscriptions.push(
+            // Observe all events emitted by the device registry
+            cx.subscribe_in(&device, window, |_this, _device, ev, window, cx| {
+                match ev {
+                    DeviceEvent::Set => {
+                        window.push_notification(
+                            Notification::success("Encryption Key has been set"),
+                            cx,
+                        );
+                    }
+                    DeviceEvent::Error(error) => {
+                        window.push_notification(Notification::error(error).autohide(false), cx);
+                    }
+                };
             }),
         );
 
@@ -130,6 +189,12 @@ impl Workspace {
                             });
                         });
                     }
+                    ChatEvent::Subscribed => {
+                        this.set_inbox_connected(true, cx);
+                    }
+                    ChatEvent::Error(error) => {
+                        window.push_notification(Notification::error(error).autohide(false), cx);
+                    }
                     _ => {}
                 };
             }),
@@ -154,6 +219,8 @@ impl Workspace {
         Self {
             titlebar,
             dock,
+            relay_connected: false,
+            inbox_connected: false,
             _subscriptions: subscriptions,
         }
     }
@@ -183,6 +250,18 @@ impl Workspace {
             .into_iter()
             .filter_map(|panel| panel.parse::<u64>().ok())
             .collect()
+    }
+
+    /// Set whether the relay list is connected
+    fn set_relay_connected(&mut self, connected: bool, cx: &mut Context<Self>) {
+        self.relay_connected = connected;
+        cx.notify();
+    }
+
+    /// Set whether the inbox is connected
+    fn set_inbox_connected(&mut self, connected: bool, cx: &mut Context<Self>) {
+        self.inbox_connected = connected;
+        cx.notify();
     }
 
     /// Set the dock layout
@@ -267,6 +346,12 @@ impl Workspace {
                     );
                 });
             }
+            Command::RefreshMessagingRelays => {
+                let chat = ChatRegistry::global(cx);
+                chat.update(cx, |this, cx| {
+                    this.get_messages(cx);
+                });
+            }
             Command::ShowRelayList => {
                 self.dock.update(cx, |this, cx| {
                     this.add_panel(
@@ -277,26 +362,24 @@ impl Workspace {
                     );
                 });
             }
+            Command::RefreshRelayList => {
+                let nostr = NostrRegistry::global(cx);
+                let signer = nostr.read(cx).signer();
+
+                if let Some(public_key) = signer.public_key() {
+                    nostr.update(cx, |this, cx| {
+                        this.ensure_relay_list(&public_key, cx);
+                    });
+                }
+            }
             Command::RefreshEncryption => {
                 let device = DeviceRegistry::global(cx);
                 device.update(cx, |this, cx| {
                     this.get_announcement(cx);
                 });
             }
-            Command::RefreshRelayList => {
-                let nostr = NostrRegistry::global(cx);
-                nostr.update(cx, |this, cx| {
-                    this.ensure_relay_list(cx);
-                });
-            }
             Command::ResetEncryption => {
                 self.confirm_reset_encryption(window, cx);
-            }
-            Command::RefreshMessagingRelays => {
-                let chat = ChatRegistry::global(cx);
-                chat.update(cx, |this, cx| {
-                    this.ensure_messaging_relays(cx);
-                });
             }
             Command::ToggleTheme => {
                 self.theme_selector(window, cx);
@@ -341,8 +424,10 @@ impl Workspace {
                                     window.close_modal(cx);
                                 }
                                 Err(e) => {
-                                    window
-                                        .push_notification(Notification::error(e.to_string()), cx);
+                                    window.push_notification(
+                                        Notification::error(e.to_string()).autohide(false),
+                                        cx,
+                                    );
                                 }
                             })
                             .ok();
@@ -450,7 +535,56 @@ impl Workspace {
         });
     }
 
-    fn titlebar_left(&mut self, _window: &mut Window, cx: &Context<Self>) -> impl IntoElement {
+    fn relay_notification(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        const BODY: &str = "Coop cannot found your gossip relay list. \
+                            Maybe you haven't set it yet or relay not responsed";
+
+        let nostr = NostrRegistry::global(cx);
+        let signer = nostr.read(cx).signer();
+
+        let Some(public_key) = signer.public_key() else {
+            return;
+        };
+
+        let entity = nostr.downgrade();
+        let loading = Rc::new(Cell::new(false));
+
+        let note = Notification::new()
+            .autohide(false)
+            .id::<RelayNotifcation>()
+            .icon(IconName::Relay)
+            .title("Gossip Relays are required")
+            .message(BODY)
+            .action(move |_this, _window, _cx| {
+                let entity = entity.clone();
+                let public_key = public_key.to_owned();
+
+                Button::new("retry")
+                    .label("Retry")
+                    .small()
+                    .primary()
+                    .loading(loading.get())
+                    .disabled(loading.get())
+                    .on_click({
+                        let loading = Rc::clone(&loading);
+
+                        move |_ev, _window, cx| {
+                            // Set loading state to true
+                            loading.set(true);
+                            // Retry
+                            entity
+                                .update(cx, |this, cx| {
+                                    this.ensure_relay_list(&public_key, cx);
+                                })
+                                .ok();
+                        }
+                    })
+            });
+
+        window.push_notification(note, cx);
+    }
+
+    fn titlebar_left(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let nostr = NostrRegistry::global(cx);
         let signer = nostr.read(cx).signer();
         let current_user = signer.public_key();
@@ -529,14 +663,14 @@ impl Workspace {
             })
     }
 
-    fn titlebar_right(&mut self, _window: &mut Window, cx: &Context<Self>) -> impl IntoElement {
+    fn titlebar_right(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let relay_connected = self.relay_connected;
+        let inbox_connected = self.inbox_connected;
+
         let nostr = NostrRegistry::global(cx);
         let signer = nostr.read(cx).signer();
 
-        let chat = ChatRegistry::global(cx);
-        let inbox_state = chat.read(cx).state(cx);
-
-        let Some(pkey) = signer.public_key() else {
+        let Some(public_key) = signer.public_key() else {
             return div();
         };
 
@@ -554,7 +688,7 @@ impl Workspace {
                         let state = device.read(cx).state();
 
                         this.min_w(px(260.))
-                            .item(PopupMenuItem::element(move |_window, _cx| {
+                            .item(PopupMenuItem::element(move |_window, cx| {
                                 h_flex()
                                     .px_1()
                                     .w_full()
@@ -566,7 +700,7 @@ impl Workspace {
                                             .rounded_full()
                                             .when(state.set(), |this| this.bg(gpui::green()))
                                             .when(state.requesting(), |this| {
-                                                this.bg(gpui::yellow())
+                                                this.bg(cx.theme().icon_accent)
                                             }),
                                     )
                                     .child(SharedString::from(state.to_string()))
@@ -585,140 +719,81 @@ impl Workspace {
                     }),
             )
             .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().text_muted)
-                            .map(|this| match inbox_state {
-                                InboxState::Checking => this.child(div().child(
-                                    SharedString::from("Fetching user's messaging relay list..."),
-                                )),
-                                InboxState::RelayNotAvailable => {
-                                    this.child(div().text_color(cx.theme().warning_active).child(
-                                        SharedString::from(
-                                            "User hasn't configured a messaging relay list",
-                                        ),
-                                    ))
-                                }
-                                _ => this,
-                            }),
-                    )
-                    .child(
-                        Button::new("inbox")
-                            .icon(IconName::Inbox)
-                            .tooltip("Inbox")
-                            .small()
-                            .ghost()
-                            .when(inbox_state.subscribing(), |this| this.indicator())
-                            .dropdown_menu(move |this, _window, cx| {
-                                let persons = PersonRegistry::global(cx);
-                                let profile = persons.read(cx).get(&pkey, cx);
-                                let urls: Vec<SharedString> = profile
-                                    .messaging_relays()
-                                    .iter()
-                                    .map(|url| SharedString::from(url.to_string()))
-                                    .collect();
+                Button::new("inbox")
+                    .icon(IconName::Inbox)
+                    .small()
+                    .ghost()
+                    .loading(!inbox_connected)
+                    .disabled(!inbox_connected)
+                    .when(!inbox_connected, |this| {
+                        this.tooltip("Connecting to user's messaging relays...")
+                    })
+                    .when(inbox_connected, |this| this.indicator())
+                    .dropdown_menu(move |this, _window, cx| {
+                        let persons = PersonRegistry::global(cx);
+                        let profile = persons.read(cx).get(&public_key, cx);
 
-                                // Header
-                                let menu = this.min_w(px(260.)).label("Messaging Relays");
+                        let urls: Vec<SharedString> = profile
+                            .messaging_relays()
+                            .iter()
+                            .map(|url| SharedString::from(url.to_string()))
+                            .collect();
 
-                                // Content
-                                let menu = urls.into_iter().fold(menu, |this, url| {
-                                    this.item(PopupMenuItem::element(move |_window, _cx| {
-                                        h_flex()
-                                            .px_1()
-                                            .w_full()
-                                            .gap_2()
-                                            .text_sm()
-                                            .child(
-                                                div().size_1p5().rounded_full().bg(gpui::green()),
-                                            )
-                                            .child(url.clone())
-                                    }))
-                                });
+                        // Header
+                        let menu = this.min_w(px(260.)).label("Messaging Relays");
 
-                                // Footer
-                                menu.separator()
-                                    .menu_with_icon(
-                                        "Reload",
-                                        IconName::Refresh,
-                                        Box::new(Command::RefreshMessagingRelays),
-                                    )
-                                    .menu_with_icon(
-                                        "Update relays",
-                                        IconName::Settings,
-                                        Box::new(Command::ShowMessaging),
-                                    )
-                            }),
-                    ),
+                        // Content
+                        let menu = urls.into_iter().fold(menu, |this, url| {
+                            this.item(PopupMenuItem::element(move |_window, _cx| {
+                                h_flex()
+                                    .px_1()
+                                    .w_full()
+                                    .gap_2()
+                                    .text_sm()
+                                    .child(div().size_1p5().rounded_full().bg(gpui::green()))
+                                    .child(url.clone())
+                            }))
+                        });
+
+                        // Footer
+                        menu.separator()
+                            .menu_with_icon(
+                                "Reload",
+                                IconName::Refresh,
+                                Box::new(Command::RefreshMessagingRelays),
+                            )
+                            .menu_with_icon(
+                                "Update relays",
+                                IconName::Settings,
+                                Box::new(Command::ShowMessaging),
+                            )
+                    }),
             )
             .child(
-                h_flex()
-                    .gap_2()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().text_muted)
-                            .map(|this| match nostr.read(cx).relay_list_state {
-                                RelayState::Checking => this
-                                    .child(div().child(SharedString::from(
-                                        "Fetching user's relay list...",
-                                    ))),
-                                RelayState::NotConfigured => {
-                                    this.child(div().text_color(cx.theme().warning_active).child(
-                                        SharedString::from("User hasn't configured a relay list"),
-                                    ))
-                                }
-                                _ => this,
-                            }),
-                    )
-                    .child(
-                        Button::new("relay-list")
-                            .icon(IconName::Relay)
-                            .tooltip("User's relay list")
-                            .small()
-                            .ghost()
-                            .when(nostr.read(cx).relay_list_state.configured(), |this| {
-                                this.indicator()
-                            })
-                            .dropdown_menu(move |this, _window, cx| {
-                                let nostr = NostrRegistry::global(cx);
-                                let urls = nostr.read(cx).read_only_relays(&pkey, cx);
-
-                                // Header
-                                let menu = this.min_w(px(260.)).label("Relays");
-
-                                // Content
-                                let menu = urls.into_iter().fold(menu, |this, url| {
-                                    this.item(PopupMenuItem::element(move |_window, _cx| {
-                                        h_flex()
-                                            .px_1()
-                                            .w_full()
-                                            .gap_2()
-                                            .text_sm()
-                                            .child(
-                                                div().size_1p5().rounded_full().bg(gpui::green()),
-                                            )
-                                            .child(url.clone())
-                                    }))
-                                });
-
-                                // Footer
-                                menu.separator()
-                                    .menu_with_icon(
-                                        "Reload",
-                                        IconName::Refresh,
-                                        Box::new(Command::RefreshRelayList),
-                                    )
-                                    .menu_with_icon(
-                                        "Update relay list",
-                                        IconName::Settings,
-                                        Box::new(Command::ShowRelayList),
-                                    )
-                            }),
-                    ),
+                Button::new("relay-list")
+                    .icon(IconName::Relay)
+                    .small()
+                    .ghost()
+                    .loading(!relay_connected)
+                    .disabled(!relay_connected)
+                    .when(!relay_connected, |this| {
+                        this.tooltip("Connecting to user's relay list...")
+                    })
+                    .when(relay_connected, |this| this.indicator())
+                    .dropdown_menu(move |this, _window, _cx| {
+                        this.label("User's Relay List")
+                            .separator()
+                            .menu_with_icon(
+                                "Reload",
+                                IconName::Refresh,
+                                Box::new(Command::RefreshRelayList),
+                            )
+                            .menu_with_icon(
+                                "Update",
+                                IconName::Settings,
+                                Box::new(Command::ShowRelayList),
+                            )
+                    }),
             )
     }
 }

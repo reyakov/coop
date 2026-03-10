@@ -11,9 +11,7 @@ use gpui::{
     Position, ScrollHandle, ScrollWheelEvent, Size, Style, UniformListScrollHandle, Window, fill,
     point, px, relative, size,
 };
-use theme::{ActiveTheme, ScrollbarMode};
-
-use crate::AxisExt;
+use theme::{ActiveTheme, AxisExt, ScrollbarMode};
 
 /// The width of the scrollbar (THUMB_ACTIVE_INSET * 2 + THUMB_ACTIVE_WIDTH)
 const WIDTH: Pixels = px(1. * 2. + 8.);
