@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
-use std::time::Duration;
 
 pub use actions::*;
 use anyhow::{Context as AnyhowContext, Error};
@@ -24,7 +23,7 @@ use state::{NostrRegistry, upload};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
-use ui::dock_area::panel::{Panel, PanelEvent};
+use ui::dock::{Panel, PanelEvent};
 use ui::indicator::Indicator;
 use ui::input::{InputEvent, InputState, TextInput};
 use ui::menu::DropdownMenu;
@@ -42,11 +41,6 @@ mod text;
 
 const ANNOUNCEMENT: &str =
     "This conversation is private. Only members can see each other's messages.";
-const NO_INBOX: &str = "has not set up messaging relays. \
-    They will not receive messages you send.";
-const NO_ANNOUNCEMENT: &str = "has not set up an encryption key. \
-    You cannot send messages encrypted with an encryption key to them yet. \
-    Coop automatically uses your identity to encrypt messages.";
 
 pub fn init(room: WeakEntity<Room>, window: &mut Window, cx: &mut App) -> Entity<ChatPanel> {
     cx.new(|cx| ChatPanel::new(room, window, cx))
@@ -131,7 +125,7 @@ impl ChatPanel {
         });
 
         // Define subject input state
-        let subject_input = cx.new(|cx| InputState::new(window, cx).placeholder("Nostr Meetup"));
+        let subject_input = cx.new(|cx| InputState::new(window, cx).placeholder("New subject..."));
         let subject_bar = cx.new(|_cx| false);
 
         // Define subscriptions
@@ -161,7 +155,6 @@ impl ChatPanel {
 
         // Define all functions that will run after the current cycle
         cx.defer_in(window, |this, window, cx| {
-            this.connect(window, cx);
             this.handle_notifications(cx);
             this.subscribe_room_events(window, cx);
             this.get_messages(window, cx);
@@ -185,49 +178,6 @@ impl ChatPanel {
             subscriptions,
             tasks: vec![],
         }
-    }
-
-    /// Get all necessary data for each member
-    fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Ok((members, connect)) = self
-            .room
-            .read_with(cx, |this, cx| (this.members(), this.connect(cx)))
-        else {
-            return;
-        };
-
-        // Run the connect task in background
-        self.tasks.push(connect);
-
-        // Spawn another task to verify after 3 seconds
-        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor().timer(Duration::from_secs(3)).await;
-
-            // Verify the connection
-            this.update_in(cx, |this, _window, cx| {
-                let persons = PersonRegistry::global(cx);
-
-                for member in members.into_iter() {
-                    let profile = persons.read(cx).get(&member, cx);
-
-                    if profile.announcement().is_none() {
-                        let content = format!("{} {}", profile.name(), NO_ANNOUNCEMENT);
-                        let message = Message::warning(content);
-
-                        this.insert_message(message, true, cx);
-                    }
-
-                    if profile.messaging_relays().is_empty() {
-                        let content = format!("{} {}", profile.name(), NO_INBOX);
-                        let message = Message::warning(content);
-
-                        this.insert_message(message, true, cx);
-                    }
-                }
-            })?;
-
-            Ok(())
-        }));
     }
 
     /// Handle nostr notifications
@@ -1047,11 +997,11 @@ impl ChatPanel {
     fn render_message_reports(&self, id: &EventId, cx: &Context<Self>) -> impl IntoElement {
         h_flex()
             .id(SharedString::from(id.to_hex()))
-            .gap_0p5()
-            .text_color(cx.theme().danger_active)
+            .gap_1()
+            .text_color(cx.theme().text_danger)
             .text_xs()
             .italic()
-            .child(Icon::new(IconName::Info).xsmall())
+            .child(Icon::new(IconName::Info).small())
             .child(SharedString::from(
                 "Failed to send message. Click to see details.",
             ))

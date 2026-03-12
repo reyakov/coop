@@ -10,8 +10,8 @@ use smallvec::SmallVec;
 use theme::{ActiveTheme, AxisExt as _, CLIENT_SIDE_DECORATION_ROUNDING, Placement};
 
 use super::{DockArea, PanelEvent};
-use crate::dock_area::panel::{Panel, PanelView};
-use crate::dock_area::tab_panel::TabPanel;
+use crate::dock::panel::{Panel, PanelView};
+use crate::dock::tab_panel::TabPanel;
 use crate::h_flex;
 use crate::resizable::{
     PANEL_MIN_SIZE, ResizablePanelEvent, ResizablePanelGroup, ResizablePanelState, ResizableState,

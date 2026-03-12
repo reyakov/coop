@@ -2,16 +2,16 @@ use std::time::Duration;
 
 use anyhow::Error;
 use gpui::{
-    div, AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window,
+    AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
+    Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window, div,
 };
 use nostr_sdk::prelude::*;
 use state::KEYRING;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
-use ui::dock_area::panel::{Panel, PanelEvent};
+use ui::dock::{Panel, PanelEvent};
 use ui::input::{InputState, TextInput};
-use ui::{divider, v_flex, IconName, Sizable, StyledExt};
+use ui::{IconName, Sizable, StyledExt, divider, v_flex};
 
 const MSG: &str = "Store your account keys in a safe location. \
                    You can restore your account or move to another client anytime you want.";

@@ -10,10 +10,10 @@ use gpui::{
 use theme::{ActiveTheme, AxisExt, CLIENT_SIDE_DECORATION_ROUNDING, Placement, TABBAR_HEIGHT};
 
 use crate::button::{Button, ButtonVariants as _};
-use crate::dock_area::dock::DockPlacement;
-use crate::dock_area::panel::{Panel, PanelView};
-use crate::dock_area::stack_panel::StackPanel;
-use crate::dock_area::{ClosePanel, DockArea, PanelEvent, PanelStyle, ToggleZoom};
+use crate::dock::dock::DockPlacement;
+use crate::dock::panel::{Panel, PanelView};
+use crate::dock::stack_panel::StackPanel;
+use crate::dock::{ClosePanel, DockArea, PanelEvent, PanelStyle, ToggleZoom};
 use crate::menu::{DropdownMenu, PopupMenu};
 use crate::tab::Tab;
 use crate::tab::tab_bar::TabBar;
@@ -42,22 +42,20 @@ impl DragPanel {
 
 impl Render for DragPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
+        h_flex()
             .id("drag-panel")
             .cursor_grab()
-            .py_1()
-            .px_2()
-            .w_24()
-            .flex()
-            .items_center()
+            .p_2()
+            .min_w_24()
             .justify_center()
             .overflow_hidden()
             .whitespace_nowrap()
-            .rounded(cx.theme().radius_lg)
+            .rounded(cx.theme().radius)
             .text_xs()
-            .when(cx.theme().shadow, |this| this.shadow_lg())
+            .text_color(cx.theme().text)
+            .text_ellipsis()
+            .when(cx.theme().shadow, |this| this.shadow_xs())
             .bg(cx.theme().background)
-            .text_color(cx.theme().text_accent)
             .child(self.panel.title(cx))
     }
 }
@@ -425,14 +423,13 @@ impl TabPanel {
         let view = cx.entity().clone();
         let build_popup_menu = move |this, cx: &App| view.read(cx).popup_menu(this, cx);
         let toolbar = self.toolbar_buttons(window, cx);
-        let has_toolbar = !toolbar.is_empty();
 
         h_flex()
             .p_0p5()
-            .gap_1()
+            .gap_1p5()
             .occlude()
             .rounded_full()
-            .children(toolbar.into_iter().map(|btn| btn.small().ghost().rounded()))
+            .children(toolbar.into_iter().map(|btn| btn.small().ghost()))
             .when(self.zoomed, |this| {
                 this.child(
                     Button::new("zoom")
@@ -445,15 +442,11 @@ impl TabPanel {
                         })),
                 )
             })
-            .when(has_toolbar, |this| {
-                this.child(div().flex_shrink_0().h_4().w_px().bg(cx.theme().border))
-            })
             .child(
                 Button::new("menu")
                     .icon(IconName::Ellipsis)
                     .small()
                     .ghost()
-                    .rounded()
                     .dropdown_menu({
                         let zoomable = state.zoomable;
                         let closable = state.closable;
@@ -578,6 +571,7 @@ impl TabPanel {
         let right_dock_button = self.render_dock_toggle_button(DockPlacement::Right, window, cx);
         let has_extend_dock_button = left_dock_button.is_some() || bottom_dock_button.is_some();
         let tabs_count = self.panels.len();
+        let is_bottom_dock = bottom_dock_button.is_some();
 
         if tabs_count == 1 && dock_area.read(cx).panel_style == PanelStyle::Default {
             let panel = self.panels.first().unwrap();
@@ -646,7 +640,7 @@ impl TabPanel {
                 .into_any_element();
         }
 
-        TabBar::new()
+        TabBar::new("tab-bar")
             .track_scroll(&self.tab_bar_scroll_handle)
             .h(TABBAR_HEIGHT)
             .when(has_extend_dock_button, |this| {
@@ -659,8 +653,9 @@ impl TabPanel {
                         .border_b_1()
                         .h_full()
                         .border_color(cx.theme().border)
-                        .bg(cx.theme().surface_background)
-                        .px_2()
+                        .bg(cx.theme().tab_background)
+                        .pl_0p5()
+                        .pr_1()
                         .children(left_dock_button)
                         .children(bottom_dock_button),
                 )
@@ -682,16 +677,43 @@ impl TabPanel {
                 Some(
                     Tab::new()
                         .ix(ix)
-                        .label(panel.title(cx))
-                        .py_2()
+                        .tab_bar_prefix(has_extend_dock_button)
+                        .child(panel.title(cx))
                         .selected(active)
                         .disabled(disabled)
+                        .suffix(
+                            Button::new("close-{ix}")
+                                .icon(IconName::Close)
+                                .tooltip("Close panel")
+                                .ghost()
+                                .xsmall()
+                                .on_click(cx.listener({
+                                    let panel = panel.clone();
+                                    move |view, _ev, window, cx| {
+                                        view.remove_panel(&panel, window, cx);
+                                    }
+                                })),
+                        )
+                        .on_click(cx.listener({
+                            let is_collapsed = self.collapsed;
+                            let dock_area = self.dock_area.clone();
+                            move |view, _, window, cx| {
+                                view.set_active_ix(ix, window, cx);
+
+                                // Open dock if clicked on the collapsed bottom dock
+                                if is_bottom_dock && is_collapsed {
+                                    _ = dock_area.update(cx, |dock_area, cx| {
+                                        dock_area.toggle_dock(DockPlacement::Bottom, window, cx);
+                                    });
+                                }
+                            }
+                        }))
                         .when(!disabled, |this| {
                             this.on_mouse_down(
                                 MouseButton::Middle,
                                 cx.listener({
                                     let panel = panel.clone();
-                                    move |view, _, window, cx| {
+                                    move |view, _ev, window, cx| {
                                         view.remove_panel(&panel, window, cx);
                                     }
                                 }),
@@ -757,14 +779,15 @@ impl TabPanel {
                 this.suffix(
                     h_flex()
                         .items_center()
-                        .px_2()
-                        .gap_1()
                         .top_0()
                         .right_0()
                         .h_full()
-                        .border_color(cx.theme().border)
                         .border_l_1()
                         .border_b_1()
+                        .px_0p5()
+                        .gap_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().tab_background)
                         .child(self.render_toolbar(state, window, cx))
                         .when_some(right_dock_button, |this, btn| this.child(btn)),
                 )
@@ -1099,6 +1122,7 @@ impl Focusable for TabPanel {
 }
 
 impl EventEmitter<DismissEvent> for TabPanel {}
+
 impl EventEmitter<PanelEvent> for TabPanel {}
 
 impl Render for TabPanel {

@@ -207,7 +207,7 @@ impl From<ThemeFamily> for Theme {
         Theme {
             font_size: px(15.),
             font_family: font_family.into(),
-            radius: px(5.),
+            radius: px(6.),
             radius_lg: px(10.),
             shadow: true,
             scrollbar_mode: ScrollbarMode::default(),

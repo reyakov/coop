@@ -1,4 +1,4 @@
-use gpui::{hsla, Hsla, Rgba};
+use gpui::{Hsla, Rgba, hsla};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +30,8 @@ pub struct ThemeColors {
     pub text_muted: Hsla,
     pub text_placeholder: Hsla,
     pub text_accent: Hsla,
+    pub text_danger: Hsla,
+    pub text_warning: Hsla,
 
     // Icon colors
     pub icon: Hsla,
@@ -77,11 +79,11 @@ pub struct ThemeColors {
     pub ghost_element_disabled: Hsla,
 
     // Tab colors
-    pub tab_inactive_background: Hsla,
-    pub tab_inactive_foreground: Hsla,
+    pub tab_background: Hsla,
+    pub tab_foreground: Hsla,
+    pub tab_hover_background: Hsla,
     pub tab_active_background: Hsla,
     pub tab_active_foreground: Hsla,
-    pub tab_hover_foreground: Hsla,
 
     // Scrollbar colors
     pub scrollbar_thumb_background: Hsla,
@@ -110,8 +112,8 @@ impl ThemeColors {
             elevated_surface_background: neutral().light().step_3(),
             panel_background: neutral().light().step_1(),
             overlay: neutral().light_alpha().step_3(),
-            title_bar: neutral().light().step_2(),
-            title_bar_inactive: neutral().light().step_3(),
+            title_bar: neutral().light().step_3(),
+            title_bar_inactive: neutral().light().step_1(),
             window_border: hsl(240.0, 5.9, 78.0),
 
             border: neutral().light().step_6(),
@@ -125,7 +127,9 @@ impl ThemeColors {
             text: neutral().light().step_12(),
             text_muted: neutral().light().step_11(),
             text_placeholder: neutral().light().step_10(),
-            text_accent: brand().light().step_11(),
+            text_accent: brand().light().step_9(),
+            text_danger: danger().light().step_9(),
+            text_warning: warning().light().step_9(),
 
             icon: neutral().light().step_11(),
             icon_muted: neutral().light().step_10(),
@@ -166,17 +170,17 @@ impl ThemeColors {
             ghost_element_selected: neutral().light().step_5(),
             ghost_element_disabled: neutral().light_alpha().step_2(),
 
-            tab_inactive_background: neutral().light().step_2(),
-            tab_inactive_foreground: neutral().light().step_11(),
+            tab_background: neutral().light().step_3(),
+            tab_foreground: neutral().light().step_11(),
+            tab_hover_background: neutral().light_alpha().step_4(),
             tab_active_background: neutral().light().step_1(),
             tab_active_foreground: neutral().light().step_12(),
-            tab_hover_foreground: brand().light().step_9(),
 
             scrollbar_thumb_background: neutral().light_alpha().step_3(),
             scrollbar_thumb_hover_background: neutral().light_alpha().step_4(),
             scrollbar_thumb_border: gpui::transparent_black(),
             scrollbar_track_background: gpui::transparent_black(),
-            scrollbar_track_border: neutral().light().step_5(),
+            scrollbar_track_border: gpui::transparent_black(),
 
             drop_target_background: brand().light_alpha().step_2(),
             cursor: hsl(200., 100., 50.),
@@ -192,9 +196,9 @@ impl ThemeColors {
             background: neutral().dark().step_1(),
             surface_background: neutral().dark().step_2(),
             elevated_surface_background: neutral().dark().step_3(),
-            panel_background: gpui::black(),
+            panel_background: neutral().dark().step_1(),
             overlay: neutral().dark_alpha().step_3(),
-            title_bar: gpui::transparent_black(),
+            title_bar: neutral().dark().step_3(),
             title_bar_inactive: neutral().dark().step_1(),
             window_border: hsl(240.0, 3.7, 28.0),
 
@@ -209,7 +213,9 @@ impl ThemeColors {
             text: neutral().dark().step_12(),
             text_muted: neutral().dark().step_11(),
             text_placeholder: neutral().dark().step_10(),
-            text_accent: brand().dark().step_11(),
+            text_accent: brand().dark().step_9(),
+            text_danger: danger().dark().step_9(),
+            text_warning: warning().dark().step_9(),
 
             icon: neutral().dark().step_11(),
             icon_muted: neutral().dark().step_10(),
@@ -250,17 +256,17 @@ impl ThemeColors {
             ghost_element_selected: neutral().dark().step_5(),
             ghost_element_disabled: neutral().dark_alpha().step_2(),
 
-            tab_inactive_background: neutral().dark().step_2(),
-            tab_inactive_foreground: neutral().dark().step_11(),
-            tab_active_background: neutral().dark().step_3(),
+            tab_background: neutral().dark().step_3(),
+            tab_foreground: neutral().dark().step_11(),
+            tab_hover_background: neutral().dark_alpha().step_4(),
+            tab_active_background: neutral().dark().step_1(),
             tab_active_foreground: neutral().dark().step_12(),
-            tab_hover_foreground: brand().dark().step_9(),
 
             scrollbar_thumb_background: neutral().dark_alpha().step_3(),
             scrollbar_thumb_hover_background: neutral().dark_alpha().step_4(),
             scrollbar_thumb_border: gpui::transparent_black(),
             scrollbar_track_background: gpui::transparent_black(),
-            scrollbar_track_border: neutral().dark().step_5(),
+            scrollbar_track_border: gpui::transparent_black(),
 
             drop_target_background: brand().dark_alpha().step_2(),
             cursor: hsl(200., 100., 50.),

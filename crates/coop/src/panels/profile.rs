@@ -14,7 +14,7 @@ use state::{NostrRegistry, upload};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
-use ui::dock_area::panel::{Panel, PanelEvent};
+use ui::dock::{Panel, PanelEvent};
 use ui::input::{InputState, TextInput};
 use ui::notification::Notification;
 use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};

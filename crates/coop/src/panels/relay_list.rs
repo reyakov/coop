@@ -1,23 +1,23 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context as AnyhowContext, Error};
+use anyhow::{Context as AnyhowContext, Error, anyhow};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, rems, Action, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled,
-    Subscription, Task, TextAlign, Window,
+    Action, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
+    Task, TextAlign, Window, div, px, rems,
 };
 use nostr_sdk::prelude::*;
 use serde::Deserialize;
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
-use ui::dock_area::panel::{Panel, PanelEvent};
+use ui::dock::{Panel, PanelEvent};
 use ui::input::{InputEvent, InputState, TextInput};
 use ui::menu::DropdownMenu;
-use ui::{divider, h_flex, v_flex, Disableable, IconName, Sizable, StyledExt, WindowExtension};
+use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, divider, h_flex, v_flex};
 
 const MSG: &str = "Relay List (or Gossip Relays) are a set of relays \
                    where you will publish all your events. Others also publish events \
@@ -408,7 +408,7 @@ impl Render for RelayListPanel {
                                     div()
                                         .italic()
                                         .text_xs()
-                                        .text_color(cx.theme().danger_active)
+                                        .text_color(cx.theme().text_danger)
                                         .child(error.clone()),
                                 )
                             }),

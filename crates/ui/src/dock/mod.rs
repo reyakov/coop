@@ -2,22 +2,24 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    actions, div, px, AnyElement, AnyView, App, AppContext, Axis, Bounds, Context, Decorations,
-    Edges, Entity, EntityId, EventEmitter, Focusable, InteractiveElement as _, IntoElement,
-    ParentElement as _, Pixels, Render, SharedString, Styled, Subscription, WeakEntity, Window,
+    AnyElement, AnyView, App, AppContext, Axis, Bounds, Context, Decorations, Edges, Entity,
+    EntityId, EventEmitter, Focusable, InteractiveElement as _, IntoElement, ParentElement as _,
+    Pixels, Render, SharedString, Styled, Subscription, WeakEntity, Window, actions, div, px,
 };
 use theme::CLIENT_SIDE_DECORATION_ROUNDING;
 
-use crate::dock_area::dock::{Dock, DockPlacement};
-use crate::dock_area::panel::{Panel, PanelEvent, PanelStyle, PanelView};
-use crate::dock_area::stack_panel::StackPanel;
-use crate::dock_area::tab_panel::TabPanel;
 use crate::ElementExt;
 
-pub mod dock;
-pub mod panel;
-pub mod stack_panel;
-pub mod tab_panel;
+#[allow(clippy::module_inception)]
+mod dock;
+mod panel;
+mod stack_panel;
+mod tab_panel;
+
+pub use dock::*;
+pub use panel::*;
+pub use stack_panel::*;
+pub use tab_panel::*;
 
 actions!(dock, [ToggleZoom, ClosePanel]);
 

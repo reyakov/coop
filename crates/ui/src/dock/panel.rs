@@ -1,5 +1,5 @@
 use gpui::{
-    AnyElement, AnyView, App, Element, Entity, EventEmitter, FocusHandle, Focusable, Hsla, Render,
+    AnyElement, AnyView, App, Element, Entity, EventEmitter, FocusHandle, Focusable, Render,
     SharedString, Window,
 };
 
@@ -19,12 +19,6 @@ pub enum PanelStyle {
     Default,
     /// Always display the tab bar.
     TabBar,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TitleStyle {
-    pub background: Hsla,
-    pub foreground: Hsla,
 }
 
 pub trait Panel: EventEmitter<PanelEvent> + Render + Focusable {

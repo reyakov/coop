@@ -3,16 +3,16 @@ use std::rc::Rc;
 use chat::RoomKind;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, App, ClickEvent, InteractiveElement, IntoElement, ParentElement as _, RenderOnce,
-    SharedString, StatefulInteractiveElement, Styled, Window,
+    App, ClickEvent, InteractiveElement, IntoElement, ParentElement as _, RenderOnce, SharedString,
+    StatefulInteractiveElement, Styled, Window, div,
 };
 use nostr_sdk::prelude::*;
 use settings::AppSettings;
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
-use ui::dock_area::ClosePanel;
+use ui::dock::ClosePanel;
 use ui::modal::ModalButtonProps;
-use ui::{h_flex, Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension};
+use ui::{Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension, h_flex};
 
 use crate::dialogs::screening;
 

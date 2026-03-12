@@ -18,9 +18,7 @@ use theme::{ActiveTheme, SIDEBAR_WIDTH, Theme, ThemeRegistry};
 use title_bar::TitleBar;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
-use ui::dock_area::dock::DockPlacement;
-use ui::dock_area::panel::PanelView;
-use ui::dock_area::{ClosePanel, DockArea, DockItem};
+use ui::dock::{ClosePanel, DockArea, DockItem, DockPlacement, PanelView};
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::{Notification, NotificationKind};
 use ui::{Disableable, IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
@@ -277,8 +275,8 @@ impl Workspace {
     /// Set the center dock layout
     fn set_center_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let dock = self.dock.downgrade();
-        let greeeter = Arc::new(greeter::init(window, cx));
-        let tabs = DockItem::tabs(vec![greeeter], None, &dock, window, cx);
+        let greeter = Arc::new(greeter::init(window, cx));
+        let tabs = DockItem::tabs(vec![greeter], None, &dock, window, cx);
         let center = DockItem::split(Axis::Vertical, vec![tabs], &dock, window, cx);
 
         // Update the layout with center dock

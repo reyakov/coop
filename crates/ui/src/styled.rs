@@ -1,4 +1,4 @@
-use gpui::{div, px, App, Div, Pixels, Refineable, StyleRefinement, Styled};
+use gpui::{App, DefiniteLength, Div, Edges, Pixels, Refineable, StyleRefinement, Styled, div, px};
 use serde::{Deserialize, Serialize};
 use theme::ActiveTheme;
 
@@ -44,6 +44,30 @@ pub trait StyledExt: Styled + Sized {
     #[inline]
     fn v_flex(self) -> Self {
         self.flex().flex_col()
+    }
+
+    /// Apply paddings to the element.
+    fn paddings<L>(self, paddings: impl Into<Edges<L>>) -> Self
+    where
+        L: Into<DefiniteLength> + Clone + Default + std::fmt::Debug + PartialEq,
+    {
+        let paddings = paddings.into();
+        self.pt(paddings.top.into())
+            .pb(paddings.bottom.into())
+            .pl(paddings.left.into())
+            .pr(paddings.right.into())
+    }
+
+    /// Apply margins to the element.
+    fn margins<L>(self, margins: impl Into<Edges<L>>) -> Self
+    where
+        L: Into<DefiniteLength> + Clone + Default + std::fmt::Debug + PartialEq,
+    {
+        let margins = margins.into();
+        self.mt(margins.top.into())
+            .mb(margins.bottom.into())
+            .ml(margins.left.into())
+            .mr(margins.right.into())
     }
 
     font_weight!(font_thin, THIN);

@@ -18,7 +18,7 @@ use smallvec::{SmallVec, smallvec};
 use state::{FIND_DELAY, NostrRegistry};
 use theme::{ActiveTheme, SIDEBAR_WIDTH, TABBAR_HEIGHT};
 use ui::button::{Button, ButtonVariants};
-use ui::dock_area::panel::{Panel, PanelEvent};
+use ui::dock::{Panel, PanelEvent};
 use ui::indicator::Indicator;
 use ui::input::{InputEvent, InputState, TextInput};
 use ui::notification::Notification;
@@ -503,7 +503,7 @@ impl Render for Sidebar {
                     .h(TABBAR_HEIGHT)
                     .border_b_1()
                     .border_color(cx.theme().border)
-                    .bg(cx.theme().elevated_surface_background)
+                    .bg(cx.theme().tab_background)
                     .child(
                         TextInput::new(&self.find_input)
                             .appearance(false)

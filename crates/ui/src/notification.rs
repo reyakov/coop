@@ -29,10 +29,8 @@ impl NotificationKind {
     fn icon(&self, cx: &App) -> Icon {
         match self {
             Self::Info => Icon::new(IconName::Info).text_color(cx.theme().icon),
-            Self::Warning => Icon::new(IconName::Warning).text_color(cx.theme().warning_foreground),
-            Self::Success => {
-                Icon::new(IconName::CheckCircle).text_color(cx.theme().secondary_foreground)
-            }
+            Self::Success => Icon::new(IconName::CheckCircle).text_color(cx.theme().icon_accent),
+            Self::Warning => Icon::new(IconName::Warning).text_color(cx.theme().text_warning),
             Self::Error => {
                 Icon::new(IconName::CloseCircle).text_color(cx.theme().danger_foreground)
             }
@@ -352,8 +350,8 @@ impl Render for Notification {
             .child(
                 div()
                     .absolute()
-                    .top_2()
-                    .right_2()
+                    .top(px(6.5))
+                    .right(px(6.5))
                     .invisible()
                     .group_hover("", |this| this.visible())
                     .child(

@@ -15,7 +15,7 @@ use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
-use ui::dock_area::panel::{Panel, PanelEvent};
+use ui::dock::{Panel, PanelEvent};
 use ui::input::{InputEvent, InputState, TextInput};
 use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
@@ -322,7 +322,7 @@ impl Render for ContactListPanel {
                                 div()
                                     .italic()
                                     .text_xs()
-                                    .text_color(cx.theme().danger_active)
+                                    .text_color(cx.theme().text_danger)
                                     .child(error.clone()),
                             )
                         }),

@@ -5,8 +5,7 @@ use gpui::{
 use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
-use ui::dock_area::dock::DockPlacement;
-use ui::dock_area::panel::{Panel, PanelEvent};
+use ui::dock::{DockPlacement, Panel, PanelEvent};
 use ui::{Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
 
 use crate::panels::profile;

@@ -9,7 +9,7 @@ use gpui::{
 };
 use theme::{ActiveTheme, AxisExt};
 
-use crate::dock_area::dock::DockPlacement;
+use crate::dock::DockPlacement;
 
 pub(crate) const HANDLE_PADDING: Pixels = px(4.);
 pub(crate) const HANDLE_SIZE: Pixels = px(1.);

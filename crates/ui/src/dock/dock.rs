@@ -3,19 +3,25 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, px, App, AppContext, Axis, Context, Element, Entity, IntoElement, MouseMoveEvent,
-    MouseUpEvent, ParentElement as _, Pixels, Point, Render, Style, Styled as _, WeakEntity,
-    Window,
+    App, AppContext, Axis, Context, Element, Empty, Entity, IntoElement, MouseMoveEvent,
+    MouseUpEvent, ParentElement as _, Pixels, Point, Render, Style, StyleRefinement, Styled as _,
+    WeakEntity, Window, div, px,
 };
 
 use super::{DockArea, DockItem};
-use crate::dock_area::panel::PanelView;
-use crate::dock_area::tab_panel::TabPanel;
-use crate::resizable::{resize_handle, PANEL_MIN_SIZE};
 use crate::StyledExt;
+use crate::dock::panel::PanelView;
+use crate::dock::tab_panel::TabPanel;
+use crate::resizable::{PANEL_MIN_SIZE, resize_handle};
 
-#[derive(Clone, Render)]
+#[derive(Clone)]
 struct ResizePanel;
+
+impl Render for ResizePanel {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        Empty
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DockPlacement {
@@ -321,6 +327,8 @@ impl Render for Dock {
             return div();
         }
 
+        let cache_style = StyleRefinement::default().absolute().size_full();
+
         div()
             .relative()
             .overflow_hidden()
@@ -336,7 +344,7 @@ impl Render for Dock {
             .map(|this| match &self.panel {
                 DockItem::Split { view, .. } => this.child(view.clone()),
                 DockItem::Tabs { view, .. } => this.child(view.clone()),
-                DockItem::Panel { view, .. } => this.child(view.clone().view()),
+                DockItem::Panel { view, .. } => this.child(view.clone().view().cached(cache_style)),
             })
             .child(self.render_resize_handle(window, cx))
             .child(DockElement {

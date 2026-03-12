@@ -293,7 +293,7 @@ impl Render for ImportKey {
                     div()
                         .text_xs()
                         .text_center()
-                        .text_color(cx.theme().danger_active)
+                        .text_color(cx.theme().text_danger)
                         .child(error.clone()),
                 )
             })
