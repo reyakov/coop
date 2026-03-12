@@ -613,9 +613,19 @@ impl ChatRegistry {
     /// If the room doesn't exist, it will be created.
     /// Updates room ordering based on the most recent messages.
     pub fn new_message(&mut self, message: NewMessage, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let signer = nostr.read(cx).signer();
+
         match self.rooms.iter().find(|e| e.read(cx).id == message.room) {
             Some(room) => {
                 room.update(cx, |this, cx| {
+                    if this.kind == RoomKind::Request {
+                        if let Some(public_key) = signer.public_key() {
+                            if message.rumor.pubkey == public_key {
+                                this.set_ongoing(cx);
+                            }
+                        }
+                    }
                     this.push_message(message, cx);
                 });
                 self.sort(cx);

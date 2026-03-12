@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 pub use actions::*;
 use anyhow::{Context as AnyhowContext, Error};
-use chat::{Message, RenderedMessage, Room, RoomEvent, SendReport};
+use chat::{Message, RenderedMessage, Room, RoomEvent, SendReport, SendStatus};
 use common::RenderedTimestamp;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -24,7 +24,6 @@ use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
-use ui::indicator::Indicator;
 use ui::input::{InputEvent, InputState, TextInput};
 use ui::menu::DropdownMenu;
 use ui::notification::Notification;
@@ -185,22 +184,33 @@ impl ChatPanel {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let sent_ids = self.sent_ids.clone();
+        let reports = self.reports_by_id.downgrade();
 
-        let (tx, rx) = flume::bounded::<(EventId, RelayUrl)>(256);
+        let (tx, rx) = flume::bounded::<Arc<SendStatus>>(256);
 
         self.tasks.push(cx.background_spawn(async move {
             let mut notifications = client.notifications();
 
             while let Some(notification) = notifications.next().await {
                 if let ClientNotification::Message {
-                    message: RelayMessage::Ok { event_id, .. },
+                    message:
+                        RelayMessage::Ok {
+                            event_id,
+                            status,
+                            message,
+                        },
                     relay_url,
                 } = notification
                 {
                     let sent_ids = sent_ids.read().await;
 
                     if sent_ids.contains(&event_id) {
-                        tx.send_async((event_id, relay_url)).await.ok();
+                        let status = if status {
+                            SendStatus::ok(event_id, relay_url)
+                        } else {
+                            SendStatus::failed(event_id, relay_url, message.into())
+                        };
+                        tx.send_async(Arc::new(status)).await.ok();
                     }
                 }
             }
@@ -208,24 +218,31 @@ impl ChatPanel {
             Ok(())
         }));
 
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            while let Ok((event_id, relay_url)) = rx.recv_async().await {
-                this.update(cx, |this, cx| {
-                    this.reports_by_id.update(cx, |this, cx| {
-                        for reports in this.values_mut() {
-                            for report in reports.iter_mut() {
-                                if let Some(output) = report.output.as_mut() {
-                                    if output.id() == &event_id {
-                                        output.success.insert(relay_url.clone());
-                                        cx.notify();
+        self.tasks.push(cx.spawn(async move |_this, cx| {
+            while let Ok(status) = rx.recv_async().await {
+                reports.update(cx, |this, cx| {
+                    for reports in this.values_mut() {
+                        for report in reports.iter_mut() {
+                            let Some(output) = report.output.as_mut() else {
+                                continue;
+                            };
+                            match &*status {
+                                SendStatus::Ok { id, relay } => {
+                                    if output.id() == id {
+                                        output.success.insert(relay.clone());
+                                    }
+                                }
+                                SendStatus::Failed { id, relay, message } => {
+                                    if output.id() == id {
+                                        output.failed.insert(relay.clone(), message.clone());
                                     }
                                 }
                             }
+                            cx.notify();
                         }
-                    });
+                    }
                 })?;
             }
-
             Ok(())
         }));
     }
@@ -442,23 +459,12 @@ impl ChatPanel {
         self.reports_by_id
             .read(cx)
             .get(id)
-            .is_some_and(|reports| reports.iter().any(|r| r.pending()))
+            .is_some_and(|reports| reports.iter().all(|r| r.pending()))
     }
 
-    /// Check if a message was sent successfully by its ID
-    fn sent_success(&self, id: &EventId, cx: &App) -> bool {
-        self.reports_by_id
-            .read(cx)
-            .get(id)
-            .is_some_and(|reports| reports.iter().any(|r| r.success()))
-    }
-
-    /// Check if a message failed to send by its ID
-    fn sent_failed(&self, id: &EventId, cx: &App) -> Option<bool> {
-        self.reports_by_id
-            .read(cx)
-            .get(id)
-            .map(|reports| reports.iter().all(|r| !r.success()))
+    /// Check if a message has any reports
+    fn has_reports(&self, id: &EventId, cx: &App) -> bool {
+        self.reports_by_id.read(cx).get(id).is_some()
     }
 
     /// Get all sent reports for a message by its ID
@@ -825,19 +831,13 @@ impl ChatPanel {
     ) -> AnyElement {
         let id = message.id;
         let author = self.profile(&message.author, cx);
-        let public_key = author.public_key();
+        let pk = author.public_key();
 
         let replies = message.replies_to.as_slice();
         let has_replies = !replies.is_empty();
 
-        // Check if message is sent failed
         let sent_pending = self.sent_pending(&id, cx);
-
-        // Check if message is sent successfully
-        let sent_success = self.sent_success(&id, cx);
-
-        // Check if message is sent failed
-        let sent_failed = self.sent_failed(&id, cx);
+        let has_reports = self.has_reports(&id, cx);
 
         // Hide avatar setting
         let hide_avatar = AppSettings::get_hide_avatar(cx);
@@ -854,14 +854,17 @@ impl ChatPanel {
                     .flex()
                     .gap_3()
                     .when(!hide_avatar, |this| {
-                        this.child(Avatar::new(author.avatar()).dropdown_menu(
-                            move |this, _window, _cx| {
-                                this.menu("Copy Public Key", Box::new(Command::Copy(public_key)))
-                                    .menu("View Relays", Box::new(Command::Relays(public_key)))
-                                    .separator()
-                                    .menu("View on njump.me", Box::new(Command::Njump(public_key)))
-                            },
-                        ))
+                        this.child(
+                            Avatar::new(author.avatar())
+                                .flex_shrink_0()
+                                .relative()
+                                .dropdown_menu(move |this, _window, _cx| {
+                                    this.menu("Public Key", Box::new(Command::Copy(pk)))
+                                        .menu("View Relays", Box::new(Command::Relays(pk)))
+                                        .separator()
+                                        .menu("View on njump.me", Box::new(Command::Njump(pk)))
+                                }),
+                        )
                     })
                     .child(
                         v_flex()
@@ -882,21 +885,16 @@ impl ChatPanel {
                                     )
                                     .child(message.created_at.to_human_time())
                                     .when(sent_pending, |this| {
-                                        this.child(deferred(Indicator::new().small()))
+                                        this.child(SharedString::from("• Sending..."))
                                     })
-                                    .when(sent_success, |this| {
-                                        this.child(deferred(self.render_sent_indicator(&id, cx)))
+                                    .when(has_reports, |this| {
+                                        this.child(deferred(self.render_sent_reports(&id, cx)))
                                     }),
                             )
                             .when(has_replies, |this| {
                                 this.children(self.render_message_replies(replies, cx))
                             })
-                            .child(rendered_text)
-                            .when_some(sent_failed, |this, failed| {
-                                this.when(failed, |this| {
-                                    this.child(deferred(self.render_message_reports(&id, cx)))
-                                })
-                            }),
+                            .child(rendered_text),
                     ),
             )
             .child(
@@ -909,7 +907,7 @@ impl ChatPanel {
                     .h_full()
                     .bg(cx.theme().border_transparent),
             )
-            .child(self.render_actions(&id, &public_key, cx))
+            .child(self.render_actions(&id, &pk, cx))
             .on_mouse_down(
                 MouseButton::Middle,
                 cx.listener(move |this, _, _window, cx| {
@@ -969,50 +967,37 @@ impl ChatPanel {
         items
     }
 
-    fn render_sent_indicator(&self, id: &EventId, cx: &Context<Self>) -> impl IntoElement {
+    fn render_sent_reports(&self, id: &EventId, cx: &App) -> impl IntoElement {
+        let reports = self.sent_reports(id, cx);
+
+        let success = reports
+            .as_ref()
+            .is_some_and(|reports| reports.iter().any(|r| r.success()));
+
+        let failed = reports
+            .as_ref()
+            .is_some_and(|reports| reports.iter().all(|r| r.failed()));
+
+        let label = if success {
+            SharedString::from("• Sent")
+        } else if failed {
+            SharedString::from("• Failed")
+        } else {
+            SharedString::from("• Sending...")
+        };
+
         div()
             .id(SharedString::from(id.to_hex()))
-            .child(SharedString::from("• Sent"))
-            .when_some(self.sent_reports(id, cx), |this, reports| {
+            .child(label)
+            .when(failed, |this| this.text_color(cx.theme().text_danger))
+            .when_some(reports, |this, reports| {
                 this.on_click(move |_e, window, cx| {
                     let reports = reports.clone();
 
                     window.open_modal(cx, move |this, _window, cx| {
-                        this.show_close(true)
-                            .title(SharedString::from("Sent Reports"))
-                            .child(v_flex().pb_2().gap_4().children({
-                                let mut items = Vec::with_capacity(reports.len());
-
-                                for report in reports.iter() {
-                                    items.push(Self::render_report(report, cx))
-                                }
-
-                                items
-                            }))
-                    });
-                })
-            })
-    }
-
-    fn render_message_reports(&self, id: &EventId, cx: &Context<Self>) -> impl IntoElement {
-        h_flex()
-            .id(SharedString::from(id.to_hex()))
-            .gap_1()
-            .text_color(cx.theme().text_danger)
-            .text_xs()
-            .italic()
-            .child(Icon::new(IconName::Info).small())
-            .child(SharedString::from(
-                "Failed to send message. Click to see details.",
-            ))
-            .when_some(self.sent_reports(id, cx), |this, reports| {
-                this.on_click(move |_e, window, cx| {
-                    let reports = reports.clone();
-
-                    window.open_modal(cx, move |this, _window, cx| {
-                        this.show_close(true)
-                            .title(SharedString::from("Sent Reports"))
-                            .child(v_flex().gap_4().w_full().children({
+                        this.title(SharedString::from("Sent Reports"))
+                            .show_close(true)
+                            .child(v_flex().gap_4().children({
                                 let mut items = Vec::with_capacity(reports.len());
 
                                 for report in reports.iter() {

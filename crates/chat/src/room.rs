@@ -57,16 +57,44 @@ impl SendReport {
 
     /// Returns true if the send is pending.
     pub fn pending(&self) -> bool {
-        self.output.is_none() && self.error.is_none()
+        self.error.is_none()
+            && self
+                .output
+                .as_ref()
+                .is_some_and(|o| o.success.is_empty() && o.failed.is_empty())
     }
 
     /// Returns true if the send was successful.
     pub fn success(&self) -> bool {
-        if let Some(output) = self.output.as_ref() {
-            !output.failed.is_empty()
-        } else {
-            false
-        }
+        self.error.is_none() && self.output.as_ref().is_some_and(|o| !o.success.is_empty())
+    }
+
+    /// Returns true if the send failed.
+    pub fn failed(&self) -> bool {
+        self.error.is_some() && self.output.as_ref().is_some_and(|o| !o.failed.is_empty())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum SendStatus {
+    Ok {
+        id: EventId,
+        relay: RelayUrl,
+    },
+    Failed {
+        id: EventId,
+        relay: RelayUrl,
+        message: String,
+    },
+}
+
+impl SendStatus {
+    pub fn ok(id: EventId, relay: RelayUrl) -> Self {
+        Self::Ok { id, relay }
+    }
+
+    pub fn failed(id: EventId, relay: RelayUrl, message: String) -> Self {
+        Self::Failed { id, relay, message }
     }
 }
 
@@ -204,10 +232,8 @@ impl Room {
 
     /// Sets this room is ongoing conversation
     pub fn set_ongoing(&mut self, cx: &mut Context<Self>) {
-        if self.kind != RoomKind::Ongoing {
-            self.kind = RoomKind::Ongoing;
-            cx.notify();
-        }
+        self.kind = RoomKind::Ongoing;
+        cx.notify();
     }
 
     /// Updates the creation timestamp of the room
