@@ -92,7 +92,7 @@ impl Root {
     pub fn render_notification_layer(
         window: &mut Window,
         cx: &mut App,
-    ) -> Option<impl IntoElement> {
+    ) -> Option<impl IntoElement + use<>> {
         let root = window.root::<Root>()??;
 
         Some(
@@ -105,7 +105,10 @@ impl Root {
     }
 
     /// Render the modal layer.
-    pub fn render_modal_layer(window: &mut Window, cx: &mut App) -> Option<impl IntoElement> {
+    pub fn render_modal_layer(
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Option<impl IntoElement + use<>> {
         let root = window.root::<Root>()??;
         let active_modals = root.read(cx).active_modals.clone();
 
@@ -139,10 +142,10 @@ impl Root {
             })
             .collect::<Vec<_>>();
 
-        if let Some(ix) = show_overlay_ix {
-            if let Some(modal) = modals.get_mut(ix) {
-                modal.overlay_visible = true;
-            }
+        if let Some(ix) = show_overlay_ix
+            && let Some(modal) = modals.get_mut(ix)
+        {
+            modal.overlay_visible = true;
         }
 
         Some(div().children(modals))

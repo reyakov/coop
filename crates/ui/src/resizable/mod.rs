@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use gpui::{
-    px, Along, App, Axis, Bounds, Context, ElementId, EventEmitter, IsZero, Pixels, Window,
+    Along, App, Axis, Bounds, Context, ElementId, EventEmitter, IsZero, Pixels, Window, px,
 };
 
 mod panel;
@@ -142,10 +142,10 @@ impl ResizableState {
     pub(crate) fn remove_panel(&mut self, panel_ix: usize, cx: &mut Context<Self>) {
         self.panels.remove(panel_ix);
         self.sizes.remove(panel_ix);
-        if let Some(resizing_panel_ix) = self.resizing_panel_ix {
-            if resizing_panel_ix > panel_ix {
-                self.resizing_panel_ix = Some(resizing_panel_ix - 1);
-            }
+        if let Some(resizing_panel_ix) = self.resizing_panel_ix
+            && resizing_panel_ix > panel_ix
+        {
+            self.resizing_panel_ix = Some(resizing_panel_ix - 1);
         }
         self.adjust_to_container_size(cx);
     }

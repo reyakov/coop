@@ -238,7 +238,7 @@ dependencies = [
 
 [[package]]
 name = "assets"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -535,7 +535,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "auto_update"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "common",
@@ -986,7 +986,7 @@ dependencies = [
 
 [[package]]
 name = "chat"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "common",
@@ -1009,7 +1009,7 @@ dependencies = [
 
 [[package]]
 name = "chat_ui"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "chat",
@@ -1240,7 +1240,7 @@ dependencies = [
 
 [[package]]
 name = "common"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "bech32",
@@ -1325,7 +1325,7 @@ dependencies = [
 
 [[package]]
 name = "coop"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "assets",
@@ -1668,7 +1668,7 @@ dependencies = [
 
 [[package]]
 name = "device"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "common",
@@ -4823,7 +4823,7 @@ dependencies = [
 
 [[package]]
 name = "person"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "common",
@@ -5560,7 +5560,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 
 [[package]]
 name = "relay_auth"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "common",
@@ -6243,7 +6243,7 @@ dependencies = [
 
 [[package]]
 name = "settings"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "common",
@@ -6512,7 +6512,7 @@ dependencies = [
 
 [[package]]
 name = "state"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "common",
@@ -6851,7 +6851,7 @@ dependencies = [
 
 [[package]]
 name = "theme"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "gpui",
@@ -6988,7 +6988,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "title_bar"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "common",
@@ -7359,7 +7359,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "1.0.0-beta"
+version = "1.0.0-beta1"
 dependencies = [
  "anyhow",
  "common",

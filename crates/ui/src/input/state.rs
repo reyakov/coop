@@ -4,11 +4,11 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    actions, div, point, px, Action, App, AppContext, Bounds, ClipboardItem, Context, Entity,
-    EntityInputHandler, EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement,
-    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement as _, Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, SharedString,
-    Styled as _, Subscription, UTF16Selection, Window, WrappedLine,
+    Action, App, AppContext, Bounds, ClipboardItem, Context, Entity, EntityInputHandler,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
+    KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
+    Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription,
+    UTF16Selection, Window, WrappedLine, actions, div, point, px,
 };
 use lsp_types::Position;
 use rope::{OffsetUtf16, Rope};
@@ -25,9 +25,9 @@ use super::mask_pattern::MaskPattern;
 use super::mode::{InputMode, TabSize};
 use super::rope_ext::RopeExt;
 use super::text_wrapper::{LineItem, TextWrapper};
+use crate::Root;
 use crate::history::History;
 use crate::input::element::RIGHT_MARGIN;
-use crate::Root;
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = input, no_json)]
@@ -521,16 +521,16 @@ impl InputState {
             let new_row = new_row as usize;
             if new_row >= last_layout.visible_range.start {
                 let visible_row = new_row.saturating_sub(last_layout.visible_range.start);
-                if let Some(line) = last_layout.lines.get(visible_row) {
-                    if let Ok(x) = line.closest_index_for_position(
+                if let Some(line) = last_layout.lines.get(visible_row)
+                    && let Ok(x) = line.closest_index_for_position(
                         Point {
                             x: preferred_x,
                             y: px(0.),
                         },
                         last_layout.line_height,
-                    ) {
-                        new_offset = line_start_offset + x;
-                    }
+                    )
+                {
+                    new_offset = line_start_offset + x;
                 }
             }
         }
@@ -1355,10 +1355,10 @@ impl InputState {
     ) {
         // If there have IME marked range and is empty (Means pressed Esc to abort IME typing)
         // Clear the marked range.
-        if let Some(ime_marked_range) = &self.ime_marked_range {
-            if ime_marked_range.is_empty() {
-                self.ime_marked_range = None;
-            }
+        if let Some(ime_marked_range) = &self.ime_marked_range
+            && ime_marked_range.is_empty()
+        {
+            self.ime_marked_range = None;
         }
 
         self.selecting = true;
@@ -1842,23 +1842,21 @@ impl InputState {
 
     fn previous_boundary(&self, offset: usize) -> usize {
         let mut offset = self.text.clip_offset(offset.saturating_sub(1), Bias::Left);
-        if let Some(ch) = self.text.char_at(offset) {
-            if ch == '\r' {
-                offset -= 1;
-            }
+        if let Some(ch) = self.text.char_at(offset)
+            && ch == '\r'
+        {
+            offset -= 1;
         }
-
         offset
     }
 
     fn next_boundary(&self, offset: usize) -> usize {
         let mut offset = self.text.clip_offset(offset + 1, Bias::Right);
-        if let Some(ch) = self.text.char_at(offset) {
-            if ch == '\r' {
-                offset += 1;
-            }
+        if let Some(ch) = self.text.char_at(offset)
+            && ch == '\r'
+        {
+            offset += 1;
         }
-
         offset
     }
 
@@ -1927,10 +1925,10 @@ impl InputState {
             return true;
         }
 
-        if let Some(validate) = &self.validate {
-            if !validate(new_text, cx) {
-                return false;
-            }
+        if let Some(validate) = &self.validate
+            && !validate(new_text, cx)
+        {
+            return false;
         }
 
         if !self.mask_pattern.is_valid(new_text) {
@@ -1979,19 +1977,19 @@ impl InputState {
         self.input_bounds = new_bounds;
 
         // Update text_wrapper wrap_width if changed.
-        if let Some(last_layout) = self.last_layout.as_ref() {
-            if wrap_width_changed {
-                let wrap_width = if !self.soft_wrap {
-                    // None to disable wrapping (will use Pixels::MAX)
-                    None
-                } else {
-                    last_layout.wrap_width
-                };
+        if let Some(last_layout) = self.last_layout.as_ref()
+            && wrap_width_changed
+        {
+            let wrap_width = if !self.soft_wrap {
+                // None to disable wrapping (will use Pixels::MAX)
+                None
+            } else {
+                last_layout.wrap_width
+            };
 
-                self.text_wrapper.set_wrap_width(wrap_width, cx);
-                self.mode.update_auto_grow(&self.text_wrapper);
-                cx.notify();
-            }
+            self.text_wrapper.set_wrap_width(wrap_width, cx);
+            self.mode.update_auto_grow(&self.text_wrapper);
+            cx.notify();
         }
     }
 
@@ -2209,20 +2207,18 @@ impl EntityInputHandler for InputState {
                 break;
             }
 
-            if start_origin.is_none() {
-                if let Some(p) =
+            if start_origin.is_none()
+                && let Some(p) =
                     line.position_for_index(range.start.saturating_sub(index_offset), line_height)
-                {
-                    start_origin = Some(p + point(px(0.), y_offset));
-                }
+            {
+                start_origin = Some(p + point(px(0.), y_offset));
             }
 
-            if end_origin.is_none() {
-                if let Some(p) =
+            if end_origin.is_none()
+                && let Some(p) =
                     line.position_for_index(range.end.saturating_sub(index_offset), line_height)
-                {
-                    end_origin = Some(p + point(px(0.), y_offset));
-                }
+            {
+                end_origin = Some(p + point(px(0.), y_offset));
             }
 
             index_offset += line.len() + 1;

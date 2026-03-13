@@ -570,10 +570,10 @@ impl ChatRegistry {
 
             // Process each event and group by room hash
             for raw in events.into_iter() {
-                if let Ok(rumor) = UnsignedEvent::from_json(&raw.content) {
-                    if rumor.tags.public_keys().peekable().peek().is_some() {
-                        grouped.entry(rumor.uniq_id()).or_default().push(rumor);
-                    }
+                if let Ok(rumor) = UnsignedEvent::from_json(&raw.content)
+                    && rumor.tags.public_keys().peekable().peek().is_some()
+                {
+                    grouped.entry(rumor.uniq_id()).or_default().push(rumor);
                 }
             }
 
@@ -619,12 +619,11 @@ impl ChatRegistry {
         match self.rooms.iter().find(|e| e.read(cx).id == message.room) {
             Some(room) => {
                 room.update(cx, |this, cx| {
-                    if this.kind == RoomKind::Request {
-                        if let Some(public_key) = signer.public_key() {
-                            if message.rumor.pubkey == public_key {
-                                this.set_ongoing(cx);
-                            }
-                        }
+                    if this.kind == RoomKind::Request
+                        && let Some(public_key) = signer.public_key()
+                        && message.rumor.pubkey == public_key
+                    {
+                        this.set_ongoing(cx);
                     }
                     this.push_message(message, cx);
                 });
@@ -682,10 +681,10 @@ async fn try_unwrap(
     gift_wrap: &Event,
 ) -> Result<UnwrappedGift, Error> {
     // Try with the device signer first
-    if let Some(signer) = device_signer {
-        if let Ok(unwrapped) = try_unwrap_with(gift_wrap, signer).await {
-            return Ok(unwrapped);
-        };
+    if let Some(signer) = device_signer
+        && let Ok(unwrapped) = try_unwrap_with(gift_wrap, signer).await
+    {
+        return Ok(unwrapped);
     };
 
     // Try with the user's signer

@@ -657,11 +657,11 @@ impl NostrRegistry {
             let mut results: Vec<PublicKey> = Vec::with_capacity(FIND_LIMIT);
 
             // Return early if the query is a valid NIP-05 address
-            if let Some(task) = address_task {
-                if let Ok(public_key) = task.await {
-                    results.push(public_key);
-                    return Ok(results);
-                }
+            if let Some(task) = address_task
+                && let Ok(public_key) = task.await
+            {
+                results.push(public_key);
+                return Ok(results);
             }
 
             // Return early if the query is a valid public key

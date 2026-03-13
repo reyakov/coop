@@ -366,7 +366,11 @@ impl Sidebar {
         self.new_requests = false;
     }
 
-    fn render_list_items(&self, range: Range<usize>, cx: &Context<Self>) -> Vec<impl IntoElement> {
+    fn render_list_items(
+        &self,
+        range: Range<usize>,
+        cx: &Context<Self>,
+    ) -> Vec<impl IntoElement + use<>> {
         let chat = ChatRegistry::global(cx);
         let rooms = chat.read(cx).rooms(self.filter.read(cx), cx);
 
@@ -398,7 +402,11 @@ impl Sidebar {
     }
 
     /// Render the contact list
-    fn render_results(&self, range: Range<usize>, cx: &Context<Self>) -> Vec<impl IntoElement> {
+    fn render_results(
+        &self,
+        range: Range<usize>,
+        cx: &Context<Self>,
+    ) -> Vec<impl IntoElement + use<>> {
         let persons = PersonRegistry::global(cx);
 
         // Get the contact list
@@ -431,7 +439,11 @@ impl Sidebar {
     }
 
     /// Render the contact list
-    fn render_contacts(&self, range: Range<usize>, cx: &Context<Self>) -> Vec<impl IntoElement> {
+    fn render_contacts(
+        &self,
+        range: Range<usize>,
+        cx: &Context<Self>,
+    ) -> Vec<impl IntoElement + use<>> {
         let persons = PersonRegistry::global(cx);
 
         // Get the contact list
@@ -641,7 +653,7 @@ impl Render for Sidebar {
                                             uniform_list(
                                                 "rooms",
                                                 results.len(),
-                                                cx.processor(|this, range, _window, cx| {
+                                                cx.processor(move |this, range, _window, cx| {
                                                     this.render_results(range, cx)
                                                 }),
                                             )
@@ -668,7 +680,7 @@ impl Render for Sidebar {
                                             uniform_list(
                                                 "contacts",
                                                 contacts.len(),
-                                                cx.processor(move |this, range, _window, cx| {
+                                                cx.processor(|this, range, _window, cx| {
                                                     this.render_contacts(range, cx)
                                                 }),
                                             )

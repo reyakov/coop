@@ -296,10 +296,10 @@ impl RenderOnce for Modal {
                         let on_close = on_close.clone();
 
                         move |_, window, cx| {
-                            if let Some(on_ok) = &on_ok {
-                                if !on_ok(&ClickEvent::default(), window, cx) {
-                                    return;
-                                }
+                            if let Some(on_ok) = &on_ok
+                                && !on_ok(&ClickEvent::default(), window, cx)
+                            {
+                                return;
                             }
 
                             on_close(&ClickEvent::default(), window, cx);

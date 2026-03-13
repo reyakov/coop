@@ -228,14 +228,14 @@ impl Workspace {
     where
         P: PanelView,
     {
-        if let Some(root) = window.root::<Root>().flatten() {
-            if let Ok(workspace) = root.read(cx).view().clone().downcast::<Self>() {
-                workspace.update(cx, |this, cx| {
-                    this.dock.update(cx, |this, cx| {
-                        this.add_panel(Arc::new(panel), placement, window, cx);
-                    });
+        if let Some(root) = window.root::<Root>().flatten()
+            && let Ok(workspace) = root.read(cx).view().clone().downcast::<Self>()
+        {
+            workspace.update(cx, |this, cx| {
+                this.dock.update(cx, |this, cx| {
+                    this.add_panel(Arc::new(panel), placement, window, cx);
                 });
-            }
+            });
         }
     }
 
@@ -582,7 +582,7 @@ impl Workspace {
         window.push_notification(note, cx);
     }
 
-    fn titlebar_left(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn titlebar_left(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let nostr = NostrRegistry::global(cx);
         let signer = nostr.read(cx).signer();
         let current_user = signer.public_key();
@@ -661,7 +661,7 @@ impl Workspace {
             })
     }
 
-    fn titlebar_right(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn titlebar_right(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let relay_connected = self.relay_connected;
         let inbox_connected = self.inbox_connected;
 
@@ -802,8 +802,8 @@ impl Render for Workspace {
         let notification_layer = Root::render_notification_layer(window, cx);
 
         // Titlebar elements
-        let left = self.titlebar_left(window, cx).into_any_element();
-        let right = self.titlebar_right(window, cx).into_any_element();
+        let left = self.titlebar_left(cx).into_any_element();
+        let right = self.titlebar_right(cx).into_any_element();
 
         // Update title bar children
         self.titlebar.update(cx, |this, _cx| {

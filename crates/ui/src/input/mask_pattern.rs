@@ -225,13 +225,12 @@ impl MaskPattern {
                 }
 
                 // check if the fraction part is valid
-                if let Some(frac) = frac_part {
-                    if !frac
+                if let Some(frac) = frac_part
+                    && !frac
                         .chars()
                         .all(|ch| ch.is_ascii_digit() || Some(ch) == *separator)
-                    {
-                        return false;
-                    }
+                {
+                    return false;
                 }
 
                 true
@@ -255,10 +254,10 @@ impl MaskPattern {
 
                     if token.is_sep() {
                         // If next token is match, it's valid
-                        if let Some(next_token) = tokens.get(pos + 1) {
-                            if next_token.is_match(ch) {
-                                return true;
-                            }
+                        if let Some(next_token) = tokens.get(pos + 1)
+                            && next_token.is_match(ch)
+                        {
+                            return true;
                         }
                     }
                 }

@@ -123,16 +123,16 @@ impl Person {
 
     /// Get profile name
     pub fn name(&self) -> SharedString {
-        if let Some(display_name) = self.metadata().display_name.as_ref() {
-            if !display_name.is_empty() {
-                return SharedString::from(display_name);
-            }
+        if let Some(display_name) = self.metadata().display_name.as_ref()
+            && !display_name.is_empty()
+        {
+            return SharedString::from(display_name);
         }
 
-        if let Some(name) = self.metadata().name.as_ref() {
-            if !name.is_empty() {
-                return SharedString::from(name);
-            }
+        if let Some(name) = self.metadata().name.as_ref()
+            && !name.is_empty()
+        {
+            return SharedString::from(name);
         }
 
         SharedString::from(shorten_pubkey(self.public_key(), 4))

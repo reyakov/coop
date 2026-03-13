@@ -3,21 +3,21 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, size, uniform_list, App, AppContext, AvailableSpace, ClickEvent, Context,
-    DefiniteLength, EdgesRefinement, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyBinding, Length, ListSizingBehavior, MouseButton,
-    ParentElement, Render, RenderOnce, ScrollStrategy, SharedString, StatefulInteractiveElement,
-    StyleRefinement, Styled, Subscription, Task, UniformListScrollHandle, Window,
+    App, AppContext, AvailableSpace, ClickEvent, Context, DefiniteLength, EdgesRefinement, Entity,
+    EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, Length,
+    ListSizingBehavior, MouseButton, ParentElement, Render, RenderOnce, ScrollStrategy,
+    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Task,
+    UniformListScrollHandle, Window, div, px, size, uniform_list,
 };
 use smol::Timer;
 use theme::ActiveTheme;
 
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
 use crate::input::{InputEvent, InputState, TextInput};
-use crate::list::cache::{MeasuredEntrySize, RowEntry, RowsCache};
 use crate::list::ListDelegate;
+use crate::list::cache::{MeasuredEntrySize, RowEntry, RowsCache};
 use crate::scroll::{Scrollbar, ScrollbarHandle};
-use crate::{v_flex, Icon, IconName, IndexPath, Selectable, Sizable, Size, StyledExt};
+use crate::{Icon, IconName, IndexPath, Selectable, Sizable, Size, StyledExt, v_flex};
 
 pub(crate) fn init(cx: &mut App) {
     let context: Option<&str> = Some("List");
@@ -578,10 +578,10 @@ where
         self.prepare_items_if_needed(window, cx);
 
         // Scroll to the selected item if it is set.
-        if let Some((ix, strategy)) = self.deferred_scroll_to_index.take() {
-            if let Some(item_ix) = self.rows_cache.position_of(&ix) {
-                self.scroll_handle.scroll_to_item(item_ix, strategy);
-            }
+        if let Some((ix, strategy)) = self.deferred_scroll_to_index.take()
+            && let Some(item_ix) = self.rows_cache.position_of(&ix)
+        {
+            self.scroll_handle.scroll_to_item(item_ix, strategy);
         }
 
         let loading = self.delegate().loading(cx);

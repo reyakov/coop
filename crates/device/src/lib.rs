@@ -728,10 +728,10 @@ struct DeviceNotification;
 
 /// Verify the author of an event
 async fn verify_author(client: &Client, event: &Event) -> bool {
-    if let Some(signer) = client.signer() {
-        if let Ok(public_key) = signer.get_public_key().await {
-            return public_key == event.pubkey;
-        }
+    if let Some(signer) = client.signer()
+        && let Ok(public_key) = signer.get_public_key().await
+    {
+        return public_key == event.pubkey;
     }
     false
 }

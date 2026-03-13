@@ -2,10 +2,10 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    fill, point, px, relative, size, App, Bounds, Corners, Element, ElementId, ElementInputHandler,
-    Entity, GlobalElementId, Hitbox, IntoElement, LayoutId, MouseButton, MouseMoveEvent, Path,
-    Pixels, Point, ShapedLine, SharedString, Size, Style, TextAlign, TextRun, UnderlineStyle,
-    Window,
+    App, Bounds, Corners, Element, ElementId, ElementInputHandler, Entity, GlobalElementId, Hitbox,
+    IntoElement, LayoutId, MouseButton, MouseMoveEvent, Path, Pixels, Point, ShapedLine,
+    SharedString, Size, Style, TextAlign, TextRun, UnderlineStyle, Window, fill, point, px,
+    relative, size,
 };
 use rope::Rope;
 use smallvec::SmallVec;
@@ -348,10 +348,10 @@ impl TextElement {
         let mut rev_line_corners = line_corners.iter().rev().peekable();
         while let Some(corners) = rev_line_corners.next() {
             points.push(corners.top_left);
-            if let Some(next) = rev_line_corners.peek() {
-                if next.top_left.x > corners.top_left.x {
-                    points.push(point(next.top_left.x, corners.top_left.y));
-                }
+            if let Some(next) = rev_line_corners.peek()
+                && next.top_left.x > corners.top_left.x
+            {
+                points.push(point(next.top_left.x, corners.top_left.y));
             }
         }
 
@@ -376,10 +376,10 @@ impl TextElement {
     ) -> Option<Path<Pixels>> {
         let state = self.state.read(cx);
         let mut selected_range = state.selected_range;
-        if let Some(ime_marked_range) = &state.ime_marked_range {
-            if !ime_marked_range.is_empty() {
-                selected_range = (ime_marked_range.end..ime_marked_range.end).into();
-            }
+        if let Some(ime_marked_range) = &state.ime_marked_range
+            && !ime_marked_range.is_empty()
+        {
+            selected_range = (ime_marked_range.end..ime_marked_range.end).into();
         }
         if selected_range.is_empty() {
             return None;
@@ -830,11 +830,12 @@ impl Element for TextElement {
         }
 
         // Paint blinking cursor
-        if focused && show_cursor {
-            if let Some(mut cursor_bounds) = prepaint.cursor_bounds.take() {
-                cursor_bounds.origin.y += prepaint.cursor_scroll_offset.y;
-                window.paint_quad(fill(cursor_bounds, cx.theme().cursor));
-            }
+        if focused
+            && show_cursor
+            && let Some(mut cursor_bounds) = prepaint.cursor_bounds.take()
+        {
+            cursor_bounds.origin.y += prepaint.cursor_scroll_offset.y;
+            window.paint_quad(fill(cursor_bounds, cx.theme().cursor));
         }
 
         // Paint line numbers

@@ -475,10 +475,10 @@ impl ChatPanel {
     /// Get a message by its ID
     fn message(&self, id: &EventId) -> Option<&RenderedMessage> {
         self.messages.iter().find_map(|msg| {
-            if let Message::User(rendered) = msg {
-                if &rendered.id == id {
-                    return Some(rendered);
-                }
+            if let Message::User(rendered) = msg
+                && &rendered.id == id
+            {
+                return Some(rendered);
             }
             None
         })

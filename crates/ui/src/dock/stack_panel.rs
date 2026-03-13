@@ -70,10 +70,10 @@ impl StackPanel {
             return false;
         }
 
-        if let Some(parent) = &self.parent {
-            if let Some(parent) = parent.upgrade() {
-                return parent.read(cx).is_last_panel(cx);
-            }
+        if let Some(parent) = &self.parent
+            && let Some(parent) = parent.upgrade()
+        {
+            return parent.read(cx).is_last_panel(cx);
         }
 
         true
@@ -297,12 +297,11 @@ impl StackPanel {
 
     /// Find the first top left in the stack.
     pub fn left_top_tab_panel(&self, check_parent: bool, cx: &App) -> Option<Entity<TabPanel>> {
-        if check_parent {
-            if let Some(parent) = self.parent.as_ref().and_then(|parent| parent.upgrade()) {
-                if let Some(panel) = parent.read(cx).left_top_tab_panel(true, cx) {
-                    return Some(panel);
-                }
-            }
+        if check_parent
+            && let Some(parent) = self.parent.as_ref().and_then(|parent| parent.upgrade())
+            && let Some(panel) = parent.read(cx).left_top_tab_panel(true, cx)
+        {
+            return Some(panel);
         }
 
         let first_panel = self.panels.first();
@@ -321,12 +320,11 @@ impl StackPanel {
 
     /// Find the first top right in the stack.
     pub fn right_top_tab_panel(&self, check_parent: bool, cx: &App) -> Option<Entity<TabPanel>> {
-        if check_parent {
-            if let Some(parent) = self.parent.as_ref().and_then(|parent| parent.upgrade()) {
-                if let Some(panel) = parent.read(cx).right_top_tab_panel(true, cx) {
-                    return Some(panel);
-                }
-            }
+        if check_parent
+            && let Some(parent) = self.parent.as_ref().and_then(|parent| parent.upgrade())
+            && let Some(panel) = parent.read(cx).right_top_tab_panel(true, cx)
+        {
+            return Some(panel);
         }
 
         let panel = if self.axis.is_vertical() {

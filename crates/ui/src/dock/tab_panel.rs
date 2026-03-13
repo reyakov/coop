@@ -232,14 +232,13 @@ impl TabPanel {
             .any(|p| p.panel_id(cx) == panel.panel_id(cx))
         {
             // Set the active panel to the matched panel
-            if active {
-                if let Some(ix) = self
+            if active
+                && let Some(ix) = self
                     .panels
                     .iter()
                     .position(|p| p.panel_id(cx) == panel.panel_id(cx))
-                {
-                    self.set_active_ix(ix, window, cx);
-                }
+            {
+                self.set_active_ix(ix, window, cx);
             }
 
             return;
@@ -372,12 +371,11 @@ impl TabPanel {
 
     /// Return true if self or parent only have last panel.
     fn is_last_panel(&self, cx: &App) -> bool {
-        if let Some(parent) = &self.stack_panel {
-            if let Some(stack_panel) = parent.upgrade() {
-                if !stack_panel.read(cx).is_last_panel(cx) {
-                    return false;
-                }
-            }
+        if let Some(parent) = &self.stack_panel
+            && let Some(stack_panel) = parent.upgrade()
+            && !stack_panel.read(cx).is_last_panel(cx)
+        {
+            return false;
         }
 
         self.panels.len() <= 1
@@ -1103,10 +1101,10 @@ impl TabPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.panels.len() > 1 {
-            if let Some(panel) = self.active_panel(cx) {
-                self.remove_panel(&panel, window, cx);
-            }
+        if self.panels.len() > 1
+            && let Some(panel) = self.active_panel(cx)
+        {
+            self.remove_panel(&panel, window, cx);
         }
     }
 }

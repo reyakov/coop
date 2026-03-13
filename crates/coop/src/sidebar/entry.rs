@@ -148,26 +148,27 @@ impl RenderOnce for RoomEntry {
                 this.on_click(move |event, window, cx| {
                     handler(event, window, cx);
 
-                    if let Some(public_key) = public_key {
-                        if self.kind != Some(RoomKind::Ongoing) && screening {
-                            let screening = screening::init(public_key, window, cx);
+                    if let Some(public_key) = public_key
+                        && self.kind != Some(RoomKind::Ongoing)
+                        && screening
+                    {
+                        let screening = screening::init(public_key, window, cx);
 
-                            window.open_modal(cx, move |this, _window, _cx| {
-                                this.confirm()
-                                    .child(screening.clone())
-                                    .button_props(
-                                        ModalButtonProps::default()
-                                            .cancel_text("Ignore")
-                                            .ok_text("Response"),
-                                    )
-                                    .on_cancel(move |_event, window, cx| {
-                                        window.dispatch_action(Box::new(ClosePanel), cx);
-                                        // Prevent closing the modal on click
-                                        // modal will be automatically closed after closing panel
-                                        false
-                                    })
-                            });
-                        }
+                        window.open_modal(cx, move |this, _window, _cx| {
+                            this.confirm()
+                                .child(screening.clone())
+                                .button_props(
+                                    ModalButtonProps::default()
+                                        .cancel_text("Ignore")
+                                        .ok_text("Response"),
+                                )
+                                .on_cancel(move |_event, window, cx| {
+                                    window.dispatch_action(Box::new(ClosePanel), cx);
+                                    // Prevent closing the modal on click
+                                    // modal will be automatically closed after closing panel
+                                    false
+                                })
+                        });
                     }
                 })
             })

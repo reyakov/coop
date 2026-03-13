@@ -5,7 +5,7 @@ default-members = ["crates/coop"]
 
 [workspace.package]
 version = "1.0.0-beta1"
-edition = "2021"
+edition = "2024"
 publish = false
 
 [workspace.dependencies]

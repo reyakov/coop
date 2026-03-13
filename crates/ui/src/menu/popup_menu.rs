@@ -719,13 +719,13 @@ impl PopupMenu {
     }
 
     pub(crate) fn active_submenu(&self) -> Option<Entity<PopupMenu>> {
-        if let Some(ix) = self.selected_index {
-            if let Some(item) = self.menu_items.get(ix) {
-                return match item {
-                    PopupMenuItem::Submenu { menu, .. } => Some(menu.clone()),
-                    _ => None,
-                };
-            }
+        if let Some(ix) = self.selected_index
+            && let Some(item) = self.menu_items.get(ix)
+        {
+            return match item {
+                PopupMenuItem::Submenu { menu, .. } => Some(menu.clone()),
+                _ => None,
+            };
         }
 
         None
@@ -965,12 +965,11 @@ impl PopupMenu {
         cx: &mut Context<Self>,
     ) {
         // Do not dismiss, if click inside the parent menu
-        if let Some(parent) = self.parent_menu.as_ref() {
-            if let Some(parent) = parent.upgrade() {
-                if parent.read(cx).bounds.contains(position) {
-                    return;
-                }
-            }
+        if let Some(parent) = self.parent_menu.as_ref()
+            && let Some(parent) = parent.upgrade()
+            && parent.read(cx).bounds.contains(position)
+        {
+            return;
         }
 
         self.dismiss(&Cancel, window, cx);
