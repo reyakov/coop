@@ -14,7 +14,7 @@ use theme::{ActiveTheme, Anchor};
 
 use crate::animation::cubic_bezier;
 use crate::button::{Button, ButtonVariants as _};
-use crate::{Icon, IconName, Sizable as _, StyledExt, h_flex, v_flex};
+use crate::{Icon, IconName, Sizable as _, Size, StyledExt, h_flex, v_flex};
 
 #[derive(Debug, Clone, Copy, Default)]
 pub enum NotificationKind {
@@ -28,12 +28,18 @@ pub enum NotificationKind {
 impl NotificationKind {
     fn icon(&self, cx: &App) -> Icon {
         match self {
-            Self::Info => Icon::new(IconName::Info).text_color(cx.theme().icon),
-            Self::Success => Icon::new(IconName::CheckCircle).text_color(cx.theme().icon_accent),
-            Self::Warning => Icon::new(IconName::Warning).text_color(cx.theme().text_warning),
-            Self::Error => {
-                Icon::new(IconName::CloseCircle).text_color(cx.theme().danger_foreground)
-            }
+            Self::Info => Icon::new(IconName::Info)
+                .with_size(Size::Medium)
+                .text_color(cx.theme().icon),
+            Self::Success => Icon::new(IconName::CheckCircle)
+                .with_size(Size::Medium)
+                .text_color(cx.theme().icon_accent),
+            Self::Warning => Icon::new(IconName::Warning)
+                .with_size(Size::Medium)
+                .text_color(cx.theme().text_warning),
+            Self::Error => Icon::new(IconName::CloseCircle)
+                .with_size(Size::Medium)
+                .text_color(cx.theme().danger_foreground),
         }
     }
 }
@@ -284,9 +290,6 @@ impl Styled for Notification {
 }
 impl Render for Notification {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let closing = self.closing;
-        let placement = cx.theme().notification.placement;
-
         let content = self
             .content_builder
             .clone()
@@ -312,6 +315,11 @@ impl Render for Notification {
             _ => cx.theme().text,
         };
 
+        let closing = self.closing;
+        let has_title = self.title.is_some();
+        let only_message = !has_title && content.is_none() && action.is_none();
+        let placement = cx.theme().notification.placement;
+
         h_flex()
             .id("notification")
             .group("")
@@ -328,23 +336,38 @@ impl Render for Notification {
             .gap_2()
             .justify_start()
             .items_start()
+            .when(only_message, |this| this.items_center())
             .refine_style(&self.style)
             .when_some(icon, |this, icon| {
-                this.child(div().flex_shrink_0().child(icon))
+                this.child(div().flex_shrink_0().size_5().child(icon))
             })
             .child(
                 v_flex()
                     .flex_1()
+                    .gap_1()
                     .overflow_hidden()
                     .when_some(self.title.clone(), |this, title| {
-                        this.child(div().text_sm().font_semibold().child(title))
+                        this.child(h_flex().h_5().text_sm().font_semibold().child(title))
                     })
                     .when_some(self.message.clone(), |this, message| {
-                        this.child(div().text_sm().line_height(relative(1.25)).child(message))
+                        this.child(
+                            div()
+                                .text_sm()
+                                .when(has_title, |this| this.text_color(cx.theme().text_muted))
+                                .line_height(relative(1.3))
+                                .child(message),
+                        )
                     })
                     .when_some(content, |this, content| this.child(content))
                     .when_some(action, |this, action| {
-                        this.child(h_flex().flex_1().gap_1().justify_end().child(action))
+                        this.child(
+                            h_flex()
+                                .w_full()
+                                .flex_1()
+                                .gap_1()
+                                .justify_end()
+                                .child(action),
+                        )
                     }),
             )
             .child(

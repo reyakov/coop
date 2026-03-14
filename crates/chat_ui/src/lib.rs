@@ -154,6 +154,7 @@ impl ChatPanel {
 
         // Define all functions that will run after the current cycle
         cx.defer_in(window, |this, window, cx| {
+            this.connect(cx);
             this.handle_notifications(cx);
             this.subscribe_room_events(window, cx);
             this.get_messages(window, cx);
@@ -176,6 +177,14 @@ impl ChatPanel {
             uploading: false,
             subscriptions,
             tasks: vec![],
+        }
+    }
+
+    /// Get messaging relays and announcement for each member
+    fn connect(&mut self, cx: &mut Context<Self>) {
+        if let Some(room) = self.room.upgrade() {
+            let task = room.read(cx).connect(cx);
+            self.tasks.push(task);
         }
     }
 
@@ -247,11 +256,13 @@ impl ChatPanel {
         }));
     }
 
+    /// Subscribe to room events
     fn subscribe_room_events(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(room) = self.room.upgrade() {
-            self.subscriptions.push(
-                // Subscribe to room events
-                cx.subscribe_in(&room, window, move |this, _room, event, window, cx| {
+            self.subscriptions.push(cx.subscribe_in(
+                &room,
+                window,
+                move |this, _room, event, window, cx| {
                     match event {
                         RoomEvent::Incoming(message) => {
                             this.insert_message(message, false, cx);
@@ -260,8 +271,8 @@ impl ChatPanel {
                             this.get_messages(window, cx);
                         }
                     };
-                }),
-            );
+                },
+            ));
         }
     }
 
@@ -645,9 +656,6 @@ impl ChatPanel {
                     );
                 }
             }
-            Command::Subject => {
-                self.open_subject(window, cx);
-            }
             Command::Copy(public_key) => {
                 self.copy_author(public_key, cx);
             }
@@ -658,47 +666,6 @@ impl ChatPanel {
                 self.open_njump(public_key, cx);
             }
         }
-    }
-
-    fn open_subject(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let subject_input = self.subject_input.clone();
-
-        window.open_modal(cx, move |this, _window, cx| {
-            let subject = subject_input.read(cx).value();
-
-            this.title("Change subject")
-                .show_close(true)
-                .confirm()
-                .child(
-                    v_flex()
-                        .gap_2()
-                        .child(
-                            v_flex()
-                                .gap_1p5()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().text_muted)
-                                        .child(SharedString::from("Subject:")),
-                                )
-                                .child(TextInput::new(&subject_input).small()),
-                        )
-                        .child(
-                            div()
-                                .italic()
-                                .text_xs()
-                                .text_color(cx.theme().text_placeholder)
-                                .child(SharedString::from(
-                                    "Subject will be updated when you send a new message.",
-                                )),
-                        ),
-                )
-                .on_ok(move |_ev, window, cx| {
-                    window
-                        .dispatch_action(Box::new(Command::ChangeSubject(subject.to_string())), cx);
-                    true
-                })
-        });
     }
 
     fn open_relays(&mut self, public_key: &PublicKey, window: &mut Window, cx: &mut Context<Self>) {

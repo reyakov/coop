@@ -17,7 +17,7 @@ use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::notification::Notification;
-use ui::{Disableable, IconName, Sizable, WindowExtension, v_flex};
+use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, v_flex};
 
 const AUTH_MESSAGE: &str =
     "Approve the authentication request to allow Coop to continue sending or receiving events.";
@@ -344,8 +344,9 @@ impl RelayAuth {
                             .px_1p5()
                             .rounded_sm()
                             .text_xs()
+                            .font_semibold()
                             .bg(cx.theme().elevated_surface_background)
-                            .text_color(cx.theme().text_accent)
+                            .text_color(cx.theme().text)
                             .child(url.clone()),
                     )
                     .into_any_element()

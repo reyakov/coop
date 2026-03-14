@@ -10,7 +10,6 @@ pub enum Command {
     ChangeSubject(String),
     ChangeSigner(SignerKind),
     ToggleBackup,
-    Subject,
     Copy(PublicKey),
     Relays(PublicKey),
     Njump(PublicKey),

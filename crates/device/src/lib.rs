@@ -6,11 +6,13 @@ use std::time::Duration;
 use anyhow::{Context as AnyhowContext, Error, anyhow};
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, Global, IntoElement, ParentElement,
-    SharedString, Styled, Task, Window, div, relative,
+    SharedString, Styled, Subscription, Task, Window, div, relative,
 };
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
-use state::{Announcement, DEVICE_GIFTWRAP, DeviceState, NostrRegistry, TIMEOUT, app_name};
+use state::{
+    Announcement, DEVICE_GIFTWRAP, DeviceState, NostrRegistry, StateEvent, TIMEOUT, app_name,
+};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
@@ -48,6 +50,9 @@ pub struct DeviceRegistry {
 
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
+
+    /// Event subscription
+    _subscription: Option<Subscription>,
 }
 
 impl EventEmitter<DeviceEvent> for DeviceRegistry {}
@@ -65,16 +70,31 @@ impl DeviceRegistry {
 
     /// Create a new device registry instance
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let nostr = NostrRegistry::global(cx);
         let state = DeviceState::default();
+
+        let subscription = Some(cx.subscribe_in(
+            &nostr,
+            window,
+            |this, _state, event, _window, cx| match event {
+                StateEvent::SignerSet => {
+                    this.reset(cx);
+                }
+                StateEvent::RelayConnected => {
+                    this.get_announcement(cx);
+                }
+                _ => {}
+            },
+        ));
 
         cx.defer_in(window, |this, window, cx| {
             this.handle_notifications(window, cx);
-            this.get_announcement(cx);
         });
 
         Self {
             state,
             tasks: vec![],
+            _subscription: subscription,
         }
     }
 
@@ -254,9 +274,6 @@ impl DeviceRegistry {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
-        // Reset state before fetching announcement
-        self.reset(cx);
-
         let task: Task<Result<Event, Error>> = cx.background_spawn(async move {
             let signer = client.signer().context("Signer not found")?;
             let public_key = signer.get_public_key().await?;
@@ -358,7 +375,6 @@ impl DeviceRegistry {
                 if keys.public_key() != device_pubkey {
                     return Err(anyhow!("Key mismatch"));
                 };
-
                 Ok(keys)
             } else {
                 Err(anyhow!("Key not found"))

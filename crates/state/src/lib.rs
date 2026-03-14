@@ -44,10 +44,14 @@ impl Global for GlobalNostrRegistry {}
 /// Signer event.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateEvent {
+    /// Creating the signer
+    Creating,
     /// Connecting to the bootstrapping relay
     Connecting,
     /// Connected to the bootstrapping relay
     Connected,
+    /// Fetching the relay list
+    FetchingRelayList,
     /// User has not set up NIP-65 relays
     RelayNotConfigured,
     /// Connected to NIP-65 relays
@@ -56,6 +60,15 @@ pub enum StateEvent {
     SignerSet,
     /// An error occurred
     Error(SharedString),
+}
+
+impl StateEvent {
+    pub fn error<T>(error: T) -> Self
+    where
+        T: Into<SharedString>,
+    {
+        Self::Error(error.into())
+    }
 }
 
 /// Nostr Registry
@@ -114,7 +127,7 @@ impl NostrRegistry {
             .gossip(gossip)
             .automatic_authentication(false)
             .verify_subscriptions(false)
-            .connect_timeout(Duration::from_secs(TIMEOUT))
+            .connect_timeout(Duration::from_secs(10))
             .sleep_when_idle(SleepWhenIdle::Enabled {
                 timeout: Duration::from_secs(600),
             });
@@ -204,7 +217,7 @@ impl NostrRegistry {
                 }
                 Err(e) => {
                     this.update(cx, |_this, cx| {
-                        cx.emit(StateEvent::Error(SharedString::from(e.to_string())));
+                        cx.emit(StateEvent::error(e.to_string()));
                     })
                     .ok();
                 }
@@ -269,7 +282,7 @@ impl NostrRegistry {
                 },
                 Err(e) => {
                     this.update(cx, |_this, cx| {
-                        cx.emit(StateEvent::Error(SharedString::from(e.to_string())));
+                        cx.emit(StateEvent::error(e.to_string()));
                     })
                     .ok();
                 }
@@ -289,6 +302,9 @@ impl NostrRegistry {
         // Create a write credential task
         let write_credential = cx.write_credentials(&username, &username, &secret);
 
+        // Emit creating event
+        cx.emit(StateEvent::Creating);
+
         // Run async tasks in background
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             let signer = async_keys.into_nostr_signer();
@@ -301,7 +317,7 @@ impl NostrRegistry {
             client
                 .send_event(&event)
                 .to(BOOTSTRAP_RELAYS)
-                .ok_timeout(Duration::from_secs(TIMEOUT))
+                .ack_policy(AckPolicy::none())
                 .await?;
 
             // Construct the default metadata
@@ -355,7 +371,7 @@ impl NostrRegistry {
                 }
                 Err(e) => {
                     this.update(cx, |_this, cx| {
-                        cx.emit(StateEvent::Error(SharedString::from(e.to_string())));
+                        cx.emit(StateEvent::error(e.to_string()));
                     })
                     .ok();
                 }
@@ -453,7 +469,7 @@ impl NostrRegistry {
                 }
                 Err(e) => {
                     this.update(cx, |_this, cx| {
-                        cx.emit(StateEvent::Error(SharedString::from(e.to_string())));
+                        cx.emit(StateEvent::error(e.to_string()));
                     })
                     .ok();
                 }
@@ -500,7 +516,7 @@ impl NostrRegistry {
                 }
                 Err(e) => {
                     this.update(cx, |_this, cx| {
-                        cx.emit(StateEvent::Error(SharedString::from(e.to_string())));
+                        cx.emit(StateEvent::error(e.to_string()));
                     })
                     .ok();
                 }
@@ -545,7 +561,7 @@ impl NostrRegistry {
                         }
                         Err(e) => {
                             this.update(cx, |_this, cx| {
-                                cx.emit(StateEvent::Error(SharedString::from(e.to_string())));
+                                cx.emit(StateEvent::error(e.to_string()));
                             })
                             .ok();
                         }
@@ -553,7 +569,7 @@ impl NostrRegistry {
                 }
                 Err(e) => {
                     this.update(cx, |_this, cx| {
-                        cx.emit(StateEvent::Error(SharedString::from(e.to_string())));
+                        cx.emit(StateEvent::error(e.to_string()));
                     })
                     .ok();
                 }
@@ -561,8 +577,71 @@ impl NostrRegistry {
         }));
     }
 
+    /// Ensure the relay list is fetched for the given public key
     pub fn ensure_relay_list(&mut self, public_key: &PublicKey, cx: &mut Context<Self>) {
         let task = self.get_event(public_key, Kind::RelayList, cx);
+
+        // Emit a fetching event before starting the task
+        cx.emit(StateEvent::FetchingRelayList);
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            match task.await {
+                Ok(event) => {
+                    this.update(cx, |this, cx| {
+                        this.ensure_connection(&event, cx);
+                    })
+                    .ok();
+                }
+                Err(e) => {
+                    this.update(cx, |_this, cx| {
+                        cx.emit(StateEvent::RelayNotConfigured);
+                        cx.emit(StateEvent::error(e.to_string()));
+                    })
+                    .ok();
+                }
+            };
+        }));
+    }
+
+    /// Ensure that the user is connected to the relay specified in the NIP-65 event.
+    pub fn ensure_connection(&mut self, event: &Event, cx: &mut Context<Self>) {
+        let client = self.client();
+        // Extract the relay list from the event
+        let relays: Vec<(RelayUrl, Option<RelayMetadata>)> = nip65::extract_relay_list(event)
+            .map(|(url, metadata)| (url.to_owned(), metadata.to_owned()))
+            .collect();
+
+        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
+            for (url, metadata) in relays.into_iter() {
+                match metadata {
+                    Some(RelayMetadata::Read) => {
+                        client
+                            .add_relay(url)
+                            .capabilities(RelayCapabilities::READ)
+                            .connect_timeout(Duration::from_secs(TIMEOUT))
+                            .and_connect()
+                            .await?;
+                    }
+                    Some(RelayMetadata::Write) => {
+                        client
+                            .add_relay(url)
+                            .capabilities(RelayCapabilities::WRITE)
+                            .connect_timeout(Duration::from_secs(TIMEOUT))
+                            .and_connect()
+                            .await?;
+                    }
+                    None => {
+                        client
+                            .add_relay(url)
+                            .capabilities(RelayCapabilities::NONE)
+                            .connect_timeout(Duration::from_secs(TIMEOUT))
+                            .and_connect()
+                            .await?;
+                    }
+                }
+            }
+            Ok(())
+        });
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
@@ -575,7 +654,7 @@ impl NostrRegistry {
                 Err(e) => {
                     this.update(cx, |_this, cx| {
                         cx.emit(StateEvent::RelayNotConfigured);
-                        cx.emit(StateEvent::Error(SharedString::from(e.to_string())));
+                        cx.emit(StateEvent::error(e.to_string()));
                     })
                     .ok();
                 }

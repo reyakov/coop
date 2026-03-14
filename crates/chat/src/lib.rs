@@ -15,6 +15,7 @@ use gpui::{
 };
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
+use smol::lock::RwLock;
 use state::{DEVICE_GIFTWRAP, NostrRegistry, StateEvent, TIMEOUT, USER_GIFTWRAP};
 
 mod message;
@@ -60,8 +61,11 @@ enum Signal {
 /// Chat Registry
 #[derive(Debug)]
 pub struct ChatRegistry {
-    /// Collection of all chat rooms
+    /// Chat rooms
     rooms: Vec<Entity<Room>>,
+
+    /// Tracking events seen on which relays in the current session
+    seens: Arc<RwLock<HashMap<EventId, HashSet<RelayUrl>>>>,
 
     /// Tracking the status of unwrapping gift wrap events.
     tracking_flag: Arc<AtomicBool>,
@@ -101,12 +105,17 @@ impl ChatRegistry {
         subscriptions.push(
             // Subscribe to the signer event
             cx.subscribe(&nostr, |this, _state, event, cx| {
-                if let StateEvent::SignerSet = event {
-                    this.reset(cx);
-                    this.get_rooms(cx);
-                    this.get_contact_list(cx);
-                    this.get_messages(cx)
-                }
+                match event {
+                    StateEvent::SignerSet => {
+                        this.reset(cx);
+                        this.get_rooms(cx);
+                    }
+                    StateEvent::RelayConnected => {
+                        this.get_contact_list(cx);
+                        this.get_messages(cx)
+                    }
+                    _ => {}
+                };
             }),
         );
 
@@ -119,6 +128,7 @@ impl ChatRegistry {
 
         Self {
             rooms: vec![],
+            seens: Arc::new(RwLock::new(HashMap::default())),
             tracking_flag: Arc::new(AtomicBool::new(false)),
             signal_rx: rx,
             signal_tx: tx,
@@ -133,6 +143,7 @@ impl ChatRegistry {
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
         let status = self.tracking_flag.clone();
+        let seens = self.seens.clone();
 
         let initialized_at = Timestamp::now();
         let sub_id1 = SubscriptionId::new(DEVICE_GIFTWRAP);
@@ -148,20 +159,26 @@ impl ChatRegistry {
             let mut processed_events = HashSet::new();
 
             while let Some(notification) = notifications.next().await {
-                let ClientNotification::Message { message, .. } = notification else {
+                let ClientNotification::Message { message, relay_url } = notification else {
                     // Skip non-message notifications
                     continue;
                 };
 
                 match message {
                     RelayMessage::Event { event, .. } => {
+                        // Keep track of which relays have seen this event
+                        {
+                            let mut seens = seens.write().await;
+                            seens.entry(event.id).or_default().insert(relay_url);
+                        }
+
+                        // De-duplicate events by their ID
                         if !processed_events.insert(event.id) {
-                            // Skip if the event has already been processed
                             continue;
                         }
 
+                        // Skip non-gift wrap events
                         if event.kind != Kind::GiftWrap {
-                            // Skip non-gift wrap events
                             continue;
                         }
 
@@ -169,26 +186,21 @@ impl ChatRegistry {
                         match extract_rumor(&client, &device_signer, event.as_ref()).await {
                             Ok(rumor) => {
                                 if rumor.tags.is_empty() {
-                                    let error: SharedString =
-                                        "Message doesn't belong to any rooms".into();
+                                    let error: SharedString = "No room for message".into();
                                     tx.send_async(Signal::Error(error)).await?;
                                 }
 
-                                match rumor.created_at >= initialized_at {
-                                    true => {
-                                        let new_message = NewMessage::new(event.id, rumor);
-                                        let signal = Signal::Message(new_message);
+                                if rumor.created_at >= initialized_at {
+                                    let new_message = NewMessage::new(event.id, rumor);
+                                    let signal = Signal::Message(new_message);
 
-                                        tx.send_async(signal).await?;
-                                    }
-                                    false => {
-                                        status.store(true, Ordering::Release);
-                                    }
+                                    tx.send_async(signal).await?;
+                                } else {
+                                    status.store(true, Ordering::Release);
                                 }
                             }
                             Err(e) => {
-                                let error: SharedString =
-                                    format!("Failed to unwrap the gift wrap event: {e}").into();
+                                let error: SharedString = format!("Failed to unwrap: {e}").into();
                                 tx.send_async(Signal::Error(error)).await?;
                             }
                         }
@@ -325,6 +337,7 @@ impl ChatRegistry {
 
             while let Some((_url, res)) = stream.next().await {
                 if let Ok(event) = res {
+                    log::debug!("Got event: {:?}", event);
                     let urls: Vec<RelayUrl> = nip17::extract_owned_relay_list(event).collect();
                     return Ok(urls);
                 }
@@ -397,6 +410,24 @@ impl ChatRegistry {
             .iter()
             .filter(|room| &room.read(cx).kind == filter)
             .count()
+    }
+
+    /// Count the number of messages seen by a given relay.
+    pub fn count_messages(&self, relay_url: &RelayUrl) -> usize {
+        self.seens
+            .read_blocking()
+            .values()
+            .filter(|seen| seen.contains(relay_url))
+            .count()
+    }
+
+    /// Get the relays that have seen a given message.
+    pub fn seen_on(&self, id: &EventId) -> HashSet<RelayUrl> {
+        self.seens
+            .read_blocking()
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Add a new room to the start of list.

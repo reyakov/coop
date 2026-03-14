@@ -27,9 +27,9 @@ use crate::dialogs::{accounts, settings};
 use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list};
 use crate::sidebar;
 
+const PREPARE_MSG: &str = "Coop is preparing a new identity for you. This may take a moment...";
 const ENC_MSG: &str = "Encryption Key is a special key that used to encrypt and decrypt your messages. \
-     Your identity is completely decoupled from all encryption processes to protect your privacy.";
-
+                       Your identity is completely decoupled from all encryption processes to protect your privacy.";
 const ENC_WARN: &str = "By resetting your encryption key, you will lose access to \
                         all your encrypted messages before. This action cannot be undone.";
 
@@ -37,6 +37,7 @@ pub fn init(window: &mut Window, cx: &mut App) -> Entity<Workspace> {
     cx.new(|cx| Workspace::new(window, cx))
 }
 
+struct SignerNotifcation;
 struct RelayNotifcation;
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
@@ -107,21 +108,37 @@ impl Workspace {
             // Subscribe to the signer events
             cx.subscribe_in(&nostr, window, move |this, _state, event, window, cx| {
                 match event {
+                    StateEvent::Creating => {
+                        let note = Notification::new()
+                            .id::<SignerNotifcation>()
+                            .title("Preparing a new identity")
+                            .message(PREPARE_MSG)
+                            .autohide(false)
+                            .with_kind(NotificationKind::Info);
+
+                        window.push_notification(note, cx);
+                    }
                     StateEvent::Connecting => {
                         let note = Notification::new()
                             .id::<RelayNotifcation>()
-                            .message("Connecting to the bootstrap relay...")
-                            .with_kind(NotificationKind::Info)
-                            .icon(IconName::Relay);
+                            .message("Connecting to the bootstrap relays...")
+                            .with_kind(NotificationKind::Info);
 
                         window.push_notification(note, cx);
                     }
                     StateEvent::Connected => {
                         let note = Notification::new()
                             .id::<RelayNotifcation>()
-                            .message("Connected to the bootstrap relay")
-                            .with_kind(NotificationKind::Success)
-                            .icon(IconName::Relay);
+                            .message("Connected to the bootstrap relays")
+                            .with_kind(NotificationKind::Success);
+
+                        window.push_notification(note, cx);
+                    }
+                    StateEvent::FetchingRelayList => {
+                        let note = Notification::new()
+                            .id::<RelayNotifcation>()
+                            .message("Getting relay list...")
+                            .with_kind(NotificationKind::Info);
 
                         window.push_notification(note, cx);
                     }
@@ -136,6 +153,8 @@ impl Workspace {
                         this.set_center_layout(window, cx);
                         this.set_relay_connected(false, cx);
                         this.set_inbox_connected(false, cx);
+                        // Clear the signer notification
+                        window.clear_notification::<SignerNotifcation>(cx);
                     }
                     _ => {}
                 };
@@ -728,28 +747,49 @@ impl Workspace {
                     })
                     .when(inbox_connected, |this| this.indicator())
                     .dropdown_menu(move |this, _window, cx| {
+                        let chat = ChatRegistry::global(cx);
                         let persons = PersonRegistry::global(cx);
                         let profile = persons.read(cx).get(&public_key, cx);
 
-                        let urls: Vec<SharedString> = profile
+                        let urls: Vec<(SharedString, SharedString)> = profile
                             .messaging_relays()
                             .iter()
-                            .map(|url| SharedString::from(url.to_string()))
+                            .map(|url| {
+                                (
+                                    SharedString::from(url.to_string()),
+                                    chat.read(cx).count_messages(url).to_string().into(),
+                                )
+                            })
                             .collect();
 
                         // Header
                         let menu = this.min_w(px(260.)).label("Messaging Relays");
 
                         // Content
-                        let menu = urls.into_iter().fold(menu, |this, url| {
-                            this.item(PopupMenuItem::element(move |_window, _cx| {
+                        let menu = urls.into_iter().fold(menu, |this, (url, count)| {
+                            this.item(PopupMenuItem::element(move |_window, cx| {
                                 h_flex()
                                     .px_1()
                                     .w_full()
-                                    .gap_2()
                                     .text_sm()
-                                    .child(div().size_1p5().rounded_full().bg(gpui::green()))
-                                    .child(url.clone())
+                                    .justify_between()
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .child(
+                                                div()
+                                                    .size_1p5()
+                                                    .rounded_full()
+                                                    .bg(cx.theme().icon_accent),
+                                            )
+                                            .child(url.clone()),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .text_color(cx.theme().text_muted)
+                                            .child(count.clone()),
+                                    )
                             }))
                         });
 
