@@ -7,6 +7,13 @@ pub fn home_dir() -> &'static PathBuf {
     HOME_DIR.get_or_init(|| dirs::home_dir().expect("failed to determine home directory"))
 }
 
+/// Returns the path to the user's download directory.
+pub fn download_dir() -> &'static PathBuf {
+    static DOWNLOAD_DIR: OnceLock<PathBuf> = OnceLock::new();
+    DOWNLOAD_DIR
+        .get_or_init(|| dirs::download_dir().expect("failed to determine download directory"))
+}
+
 /// Returns the path to the configuration directory used by Coop.
 pub fn config_dir() -> &'static PathBuf {
     static CONFIG_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -55,10 +62,4 @@ pub fn support_dir() -> &'static PathBuf {
 
         config_dir().clone()
     })
-}
-
-/// Returns the path to the `nostr` file.
-pub fn nostr_file() -> &'static PathBuf {
-    static NOSTR_FILE: OnceLock<PathBuf> = OnceLock::new();
-    NOSTR_FILE.get_or_init(|| support_dir().join("nostr-db"))
 }

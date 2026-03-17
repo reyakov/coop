@@ -242,7 +242,6 @@ impl Render for ImportKey {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
-            .p_4()
             .gap_2()
             .text_sm()
             .child(

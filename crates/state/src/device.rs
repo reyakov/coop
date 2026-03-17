@@ -1,39 +1,5 @@
-use std::fmt::Display;
-
 use gpui::SharedString;
 use nostr_sdk::prelude::*;
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-pub enum DeviceState {
-    #[default]
-    Idle,
-    Requesting,
-    Set,
-}
-
-impl Display for DeviceState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DeviceState::Idle => write!(f, "Idle"),
-            DeviceState::Requesting => write!(f, "Wait for approval"),
-            DeviceState::Set => write!(f, "Encryption Key is ready"),
-        }
-    }
-}
-
-impl DeviceState {
-    pub fn idle(&self) -> bool {
-        matches!(self, DeviceState::Idle)
-    }
-
-    pub fn requesting(&self) -> bool {
-        matches!(self, DeviceState::Requesting)
-    }
-
-    pub fn set(&self) -> bool {
-        matches!(self, DeviceState::Set)
-    }
-}
 
 /// Announcement
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
