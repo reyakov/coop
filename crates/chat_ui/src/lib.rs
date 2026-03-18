@@ -379,8 +379,12 @@ impl ChatPanel {
     /// Send message in the background and wait for the response
     fn send_and_wait(&mut self, rumor: UnsignedEvent, window: &mut Window, cx: &mut Context<Self>) {
         let sent_ids = self.sent_ids.clone();
+
         // This can't fail, because we already ensured that the ID is set
         let id = rumor.id.unwrap();
+
+        // Add empty reports
+        self.insert_reports(id, vec![], cx);
 
         // Upgrade room reference
         let Some(room) = self.room.upgrade() else {
@@ -430,7 +434,7 @@ impl ChatPanel {
     /// Insert reports
     fn insert_reports(&mut self, id: EventId, reports: Vec<SendReport>, cx: &mut Context<Self>) {
         self.reports_by_id.update(cx, |this, cx| {
-            this.insert(id, reports);
+            this.entry(id).or_default().extend(reports);
             cx.notify();
         });
     }
@@ -463,14 +467,6 @@ impl ChatPanel {
             // Bulk inserting messages, so no need to scroll to the latest message
             self.insert_message(event, false, cx);
         }
-    }
-
-    /// Check if a message is pending
-    fn sent_pending(&self, id: &EventId, cx: &App) -> bool {
-        self.reports_by_id
-            .read(cx)
-            .get(id)
-            .is_some_and(|reports| reports.iter().all(|r| r.pending()))
     }
 
     /// Check if a message has any reports
@@ -802,8 +798,6 @@ impl ChatPanel {
 
         let replies = message.replies_to.as_slice();
         let has_replies = !replies.is_empty();
-
-        let sent_pending = self.sent_pending(&id, cx);
         let has_reports = self.has_reports(&id, cx);
 
         // Hide avatar setting
@@ -851,9 +845,6 @@ impl ChatPanel {
                                             .child(author.name()),
                                     )
                                     .child(message.created_at.to_human_time())
-                                    .when(sent_pending, |this| {
-                                        this.child(SharedString::from("• Sending..."))
-                                    })
                                     .when(has_reports, |this| {
                                         this.child(deferred(self.render_sent_reports(&id, cx)))
                                     }),
@@ -937,20 +928,26 @@ impl ChatPanel {
     fn render_sent_reports(&self, id: &EventId, cx: &App) -> impl IntoElement {
         let reports = self.sent_reports(id, cx);
 
+        let pending = reports
+            .as_ref()
+            .is_some_and(|reports| reports.is_empty() || reports.iter().any(|r| r.pending()));
+
         let success = reports
             .as_ref()
-            .is_some_and(|reports| reports.iter().any(|r| r.success()));
+            .is_some_and(|reports| !reports.is_empty() && reports.iter().any(|r| r.success()));
 
         let failed = reports
             .as_ref()
-            .is_some_and(|reports| reports.iter().all(|r| r.failed()));
+            .is_some_and(|reports| !reports.is_empty() && reports.iter().all(|r| r.failed()));
 
         let label = if success {
             SharedString::from("• Sent")
         } else if failed {
-            SharedString::from("• Failed")
-        } else {
+            SharedString::from("• Error")
+        } else if pending {
             SharedString::from("• Sending...")
+        } else {
+            SharedString::from("• Unknown")
         };
 
         div()
@@ -958,22 +955,24 @@ impl ChatPanel {
             .child(label)
             .when(failed, |this| this.text_color(cx.theme().text_danger))
             .when_some(reports, |this, reports| {
-                this.on_click(move |_e, window, cx| {
-                    let reports = reports.clone();
+                this.when(!pending, |this| {
+                    this.on_click(move |_e, window, cx| {
+                        let reports = reports.clone();
 
-                    window.open_modal(cx, move |this, _window, cx| {
-                        this.title(SharedString::from("Sent Reports"))
-                            .show_close(true)
-                            .child(v_flex().gap_4().children({
-                                let mut items = Vec::with_capacity(reports.len());
+                        window.open_modal(cx, move |this, _window, cx| {
+                            this.title(SharedString::from("Sent Reports"))
+                                .show_close(true)
+                                .child(v_flex().gap_4().children({
+                                    let mut items = Vec::with_capacity(reports.len());
 
-                                for report in reports.iter() {
-                                    items.push(Self::render_report(report, cx))
-                                }
+                                    for report in reports.iter() {
+                                        items.push(Self::render_report(report, cx))
+                                    }
 
-                                items
-                            }))
-                    });
+                                    items
+                                }))
+                        });
+                    })
                 })
             })
     }

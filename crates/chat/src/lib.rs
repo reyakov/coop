@@ -16,7 +16,7 @@ use gpui::{
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use smol::lock::RwLock;
-use state::{DEVICE_GIFTWRAP, NostrRegistry, StateEvent, TIMEOUT, USER_GIFTWRAP};
+use state::{CoopSigner, DEVICE_GIFTWRAP, NostrRegistry, StateEvent, TIMEOUT, USER_GIFTWRAP};
 
 mod message;
 mod room;
@@ -154,7 +154,6 @@ impl ChatRegistry {
         let rx = self.signal_rx.clone();
 
         self.tasks.push(cx.background_spawn(async move {
-            let device_signer = signer.get_encryption_signer().await;
             let mut notifications = client.notifications();
             let mut processed_events = HashSet::new();
 
@@ -183,7 +182,7 @@ impl ChatRegistry {
                         }
 
                         // Extract the rumor from the gift wrap event
-                        match extract_rumor(&client, &device_signer, event.as_ref()).await {
+                        match extract_rumor(&client, &signer, event.as_ref()).await {
                             Ok(rumor) => {
                                 if rumor.tags.is_empty() {
                                     let error: SharedString = "No room for message".into();
@@ -682,7 +681,7 @@ impl ChatRegistry {
 /// Unwraps a gift-wrapped event and processes its contents.
 async fn extract_rumor(
     client: &Client,
-    device_signer: &Option<Arc<dyn NostrSigner>>,
+    signer: &Arc<CoopSigner>,
     gift_wrap: &Event,
 ) -> Result<UnsignedEvent, Error> {
     // Try to get cached rumor first
@@ -691,7 +690,7 @@ async fn extract_rumor(
     }
 
     // Try to unwrap with the available signer
-    let unwrapped = try_unwrap(client, device_signer, gift_wrap).await?;
+    let unwrapped = try_unwrap(signer, gift_wrap).await?;
     let mut rumor = unwrapped.rumor;
 
     // Generate event id for the rumor if it doesn't have one
@@ -706,30 +705,27 @@ async fn extract_rumor(
 }
 
 /// Helper method to try unwrapping with different signers
-async fn try_unwrap(
-    client: &Client,
-    device_signer: &Option<Arc<dyn NostrSigner>>,
-    gift_wrap: &Event,
-) -> Result<UnwrappedGift, Error> {
+async fn try_unwrap(signer: &Arc<CoopSigner>, gift_wrap: &Event) -> Result<UnwrappedGift, Error> {
     // Try with the device signer first
-    if let Some(signer) = device_signer
-        && let Ok(unwrapped) = try_unwrap_with(gift_wrap, signer).await
-    {
-        return Ok(unwrapped);
-    };
+    if let Some(signer) = signer.get_encryption_signer().await {
+        log::info!("trying with encryption key");
+        if let Ok(unwrapped) = try_unwrap_with(gift_wrap, &signer).await {
+            return Ok(unwrapped);
+        }
+    }
 
-    // Try with the user's signer
-    let user_signer = client.signer().context("Signer not found")?;
-    let unwrapped = try_unwrap_with(gift_wrap, user_signer).await?;
+    // Fallback to the user's signer
+    let user_signer = signer.get().await;
+    let unwrapped = try_unwrap_with(gift_wrap, &user_signer).await?;
 
     Ok(unwrapped)
 }
 
 /// Attempts to unwrap a gift wrap event with a given signer.
-async fn try_unwrap_with(
-    gift_wrap: &Event,
-    signer: &Arc<dyn NostrSigner>,
-) -> Result<UnwrappedGift, Error> {
+async fn try_unwrap_with<T>(gift_wrap: &Event, signer: &T) -> Result<UnwrappedGift, Error>
+where
+    T: NostrSigner + 'static,
+{
     // Get the sealed event
     let seal = signer
         .nip44_decrypt(&gift_wrap.pubkey, &gift_wrap.content)

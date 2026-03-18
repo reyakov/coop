@@ -6,7 +6,7 @@ use anyhow::{Context as AnyhowContext, Error, anyhow};
 use common::config_dir;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, SharedString, Task, Window};
 use nostr_connect::prelude::*;
-use nostr_gossip_sqlite::prelude::*;
+use nostr_gossip_memory::prelude::*;
 use nostr_lmdb::prelude::*;
 use nostr_memory::prelude::*;
 use nostr_sdk::prelude::*;
@@ -114,17 +114,16 @@ impl NostrRegistry {
         // Construct the nostr npubs entity
         let npubs = cx.new(|_| vec![]);
 
-        // Construct the nostr gossip instance
-        let gossip = cx.foreground_executor().block_on(async move {
-            NostrGossipSqlite::open(config_dir().join("gossip"))
-                .await
-                .expect("Failed to initialize gossip instance")
-        });
-
         // Construct the nostr client builder
         let mut builder = ClientBuilder::default()
             .signer(signer.clone())
-            .gossip(gossip)
+            .gossip(NostrGossipMemory::unbounded())
+            .gossip_config(
+                GossipConfig::default()
+                    .no_background_refresh()
+                    .sync_idle_timeout(Duration::from_secs(TIMEOUT))
+                    .sync_initial_timeout(Duration::from_millis(600)),
+            )
             .automatic_authentication(false)
             .verify_subscriptions(false)
             .connect_timeout(Duration::from_secs(10))
@@ -189,7 +188,18 @@ impl NostrRegistry {
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             // Add search relay to the relay pool
             for url in SEARCH_RELAYS.into_iter() {
-                client.add_relay(url).await?;
+                client
+                    .add_relay(url)
+                    .capabilities(RelayCapabilities::READ)
+                    .await?;
+            }
+
+            // Add indexer relay to the relay pool
+            for url in INDEXER_RELAYS.into_iter() {
+                client
+                    .add_relay(url)
+                    .capabilities(RelayCapabilities::DISCOVERY)
+                    .await?;
             }
 
             // Add bootstrap relay to the relay pool
@@ -198,7 +208,10 @@ impl NostrRegistry {
             }
 
             // Connect to all added relays
-            client.connect().await;
+            client
+                .connect()
+                .and_wait(Duration::from_secs(TIMEOUT))
+                .await;
 
             Ok(())
         });

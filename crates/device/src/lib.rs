@@ -16,7 +16,7 @@ use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::notification::Notification;
-use ui::{Disableable, IconName, Sizable, WindowExtension, h_flex, v_flex};
+use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 const IDENTIFIER: &str = "coop:device";
 const MSG: &str = "You've requested an encryption key from another device. \
@@ -85,6 +85,9 @@ pub struct DeviceRegistry {
     /// Whether the registry is waiting for encryption key approval from other devices
     pub requesting: bool,
 
+    /// Whether there is a pending request for encryption key approval
+    pub has_pending_request: bool,
+
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
 
@@ -130,6 +133,7 @@ impl DeviceRegistry {
         Self {
             subscribing: false,
             requesting: false,
+            has_pending_request: false,
             tasks: vec![],
             _subscription: Some(subscription),
         }
@@ -205,6 +209,12 @@ impl DeviceRegistry {
     /// Set whether the registry is waiting for encryption key approval from other devices
     fn set_requesting(&mut self, requesting: bool, cx: &mut Context<Self>) {
         self.requesting = requesting;
+        cx.notify();
+    }
+
+    /// Set whether there is a pending request for encryption key approval
+    fn set_has_pending_request(&mut self, pending: bool, cx: &mut Context<Self>) {
+        self.has_pending_request = pending;
         cx.notify();
     }
 
@@ -611,7 +621,6 @@ impl DeviceRegistry {
     fn approve(&mut self, event: &Event, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
 
         // Get user's write relays
         let event = event.clone();
@@ -631,14 +640,14 @@ impl DeviceRegistry {
                 .context("Target is not a valid public key")?;
 
             // Encrypt the device keys with the user's signer
-            let payload = signer.nip44_encrypt(&target, &secret).await?;
+            let payload = keys.nip44_encrypt(&target, &secret).await?;
 
             // Construct the response event
             //
             // P tag: the current device's public key
             // p tag: the requester's public key
             let builder = EventBuilder::new(Kind::Custom(4455), payload).tags(vec![
-                Tag::custom(TagKind::custom("P"), vec![keys.public_key()]),
+                Tag::custom(TagKind::custom("P"), vec![keys.public_key().to_hex()]),
                 Tag::public_key(target),
             ]);
 
@@ -675,15 +684,15 @@ impl DeviceRegistry {
 
     /// Handle encryption request
     fn ask_for_approval(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
-        let notification = self.notification(event, cx);
+        // Ignore if there is already a pending request
+        if self.has_pending_request {
+            return;
+        }
+        self.set_has_pending_request(true, cx);
 
-        cx.spawn_in(window, async move |_this, cx| {
-            cx.update(|window, cx| {
-                window.push_notification(notification, cx);
-            })
-            .ok();
-        })
-        .detach();
+        // Show notification
+        let notification = self.notification(event, cx);
+        window.push_notification(notification, cx);
     }
 
     /// Build a notification for the encryption request.
@@ -720,13 +729,14 @@ impl DeviceRegistry {
                                     .text_sm()
                                     .child(
                                         div()
+                                            .font_semibold()
                                             .text_xs()
                                             .text_color(cx.theme().text_muted)
                                             .child(SharedString::from("Requester:")),
                                     )
                                     .child(
                                         div()
-                                            .h_7()
+                                            .h_8()
                                             .w_full()
                                             .px_2()
                                             .rounded(cx.theme().radius)
@@ -745,13 +755,14 @@ impl DeviceRegistry {
                                     .text_sm()
                                     .child(
                                         div()
+                                            .font_semibold()
                                             .text_xs()
                                             .text_color(cx.theme().text_muted)
                                             .child(SharedString::from("Client:")),
                                     )
                                     .child(
                                         div()
-                                            .h_7()
+                                            .h_8()
                                             .w_full()
                                             .px_2()
                                             .rounded(cx.theme().radius)

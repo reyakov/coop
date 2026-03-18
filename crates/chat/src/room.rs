@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
-use anyhow::Error;
+use anyhow::{Error, anyhow};
 use common::EventUtils;
 use gpui::{App, AppContext, Context, EventEmitter, SharedString, Task};
 use itertools::Itertools;
@@ -354,17 +354,7 @@ impl Room {
     pub fn connect(&self, cx: &App) -> Task<Result<(), Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-
-        let signer = nostr.read(cx).signer();
-        let sender = signer.public_key();
-
-        // Get all members, excluding the sender
-        let members: Vec<PublicKey> = self
-            .members
-            .iter()
-            .filter(|public_key| Some(**public_key) != sender)
-            .copied()
-            .collect();
+        let members = self.members();
 
         cx.background_spawn(async move {
             let opts = SubscribeAutoCloseOptions::default()
@@ -515,45 +505,46 @@ impl Room {
 
                 // Handle encryption signer requirements
                 if signer_kind.encryption() {
+                    // Receiver didn't set up a decoupled encryption key
                     if announcement.is_none() {
                         reports.push(SendReport::new(public_key).error(NO_DEKEY));
                         continue;
                     }
+
+                    // Sender didn't set up a decoupled encryption key
                     if encryption_signer.is_none() {
                         reports.push(SendReport::new(sender.public_key()).error(USER_NO_DEKEY));
                         continue;
                     }
                 }
 
-                // Determine receiver and signer
-                let (receiver, signer) = match signer_kind {
+                // Determine the signer to use
+                let signer = match signer_kind {
                     SignerKind::Auto => {
-                        if let Some(announcement) = announcement {
-                            if let Some(enc_signer) = encryption_signer.as_ref() {
-                                (announcement.public_key(), enc_signer.clone())
-                            } else {
-                                (member.public_key(), user_signer.clone())
-                            }
+                        if announcement.is_some()
+                            && let Some(encryption_signer) = encryption_signer.clone()
+                        {
+                            // Safe to unwrap due to earlier checks
+                            encryption_signer
                         } else {
-                            (member.public_key(), user_signer.clone())
+                            user_signer.clone()
                         }
                     }
                     SignerKind::Encryption => {
                         // Safe to unwrap due to earlier checks
-                        (
-                            announcement.unwrap().public_key(),
-                            encryption_signer.as_ref().unwrap().clone(),
-                        )
+                        encryption_signer.as_ref().unwrap().clone()
                     }
-                    SignerKind::User => (member.public_key(), user_signer.clone()),
+                    SignerKind::User => user_signer.clone(),
                 };
 
-                match send_gift_wrap(&client, &signer, &receiver, &rumor, public_key).await {
-                    Ok((report, _)) => {
+                // Send the gift wrap event and collect the report
+                match send_gift_wrap(&client, &signer, &member, &rumor, signer_kind).await {
+                    Ok(report) => {
                         reports.push(report);
                         sents += 1;
                     }
-                    Err(report) => {
+                    Err(error) => {
+                        let report = SendReport::new(public_key).error(error.to_string());
                         reports.push(report);
                     }
                 }
@@ -562,11 +553,32 @@ impl Room {
             // Send backup to current user if needed
             if backup && sents >= 1 {
                 let public_key = sender.public_key();
-                let signer = encryption_signer.as_ref().unwrap_or(&user_signer);
 
-                match send_gift_wrap(&client, signer, &public_key, &rumor, public_key).await {
-                    Ok((report, _)) => reports.push(report),
-                    Err(report) => reports.push(report),
+                // Determine the signer to use
+                let signer = match signer_kind {
+                    SignerKind::Auto => {
+                        if sender.announcement().is_some()
+                            && let Some(encryption_signer) = encryption_signer.clone()
+                        {
+                            // Safe to unwrap due to earlier checks
+                            encryption_signer
+                        } else {
+                            user_signer.clone()
+                        }
+                    }
+                    SignerKind::Encryption => {
+                        // Safe to unwrap due to earlier checks
+                        encryption_signer.as_ref().unwrap().clone()
+                    }
+                    SignerKind::User => user_signer.clone(),
+                };
+
+                match send_gift_wrap(&client, &signer, &sender, &rumor, signer_kind).await {
+                    Ok(report) => reports.push(report),
+                    Err(error) => {
+                        let report = SendReport::new(public_key).error(error.to_string());
+                        reports.push(report);
+                    }
                 }
             }
 
@@ -579,30 +591,50 @@ impl Room {
 async fn send_gift_wrap<T>(
     client: &Client,
     signer: &T,
-    receiver: &PublicKey,
+    receiver: &Person,
     rumor: &UnsignedEvent,
-    public_key: PublicKey,
-) -> Result<(SendReport, bool), SendReport>
+    config: &SignerKind,
+) -> Result<SendReport, Error>
 where
     T: NostrSigner + 'static,
 {
-    match EventBuilder::gift_wrap(signer, receiver, rumor.clone(), []).await {
-        Ok(event) => {
-            match client
-                .send_event(&event)
-                .to_nip17()
-                .ack_policy(AckPolicy::none())
-                .await
-            {
-                Ok(output) => Ok((
-                    SendReport::new(public_key)
-                        .gift_wrap_id(event.id)
-                        .output(output),
-                    true,
-                )),
-                Err(e) => Err(SendReport::new(public_key).error(e.to_string())),
+    let mut extra_tags = vec![];
+
+    // Determine the receiver public key based on the config
+    let receiver = match config {
+        SignerKind::Auto => {
+            if let Some(announcement) = receiver.announcement().as_ref() {
+                extra_tags.push(Tag::public_key(receiver.public_key()));
+                announcement.public_key()
+            } else {
+                receiver.public_key()
             }
         }
-        Err(e) => Err(SendReport::new(public_key).error(e.to_string())),
-    }
+        SignerKind::Encryption => {
+            if let Some(announcement) = receiver.announcement().as_ref() {
+                extra_tags.push(Tag::public_key(receiver.public_key()));
+                announcement.public_key()
+            } else {
+                return Err(anyhow!("User has no encryption announcement"));
+            }
+        }
+        SignerKind::User => receiver.public_key(),
+    };
+
+    // Construct the gift wrap event
+    let event = EventBuilder::gift_wrap(signer, &receiver, rumor.clone(), extra_tags).await?;
+
+    // Send the gift wrap event and collect the report
+    let report = client
+        .send_event(&event)
+        .to_nip17()
+        .ack_policy(AckPolicy::none())
+        .await
+        .map(|output| {
+            SendReport::new(receiver)
+                .gift_wrap_id(event.id)
+                .output(output)
+        })?;
+
+    Ok(report)
 }

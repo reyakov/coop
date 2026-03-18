@@ -23,7 +23,7 @@ nostr-lmdb = { git = "https://github.com/rust-nostr/nostr" }
 nostr-memory = { git = "https://github.com/rust-nostr/nostr" }
 nostr-connect = { git = "https://github.com/rust-nostr/nostr" }
 nostr-blossom = { git = "https://github.com/rust-nostr/nostr" }
-nostr-gossip-sqlite = { git = "https://github.com/rust-nostr/nostr" }
+nostr-gossip-memory = { git = "https://github.com/rust-nostr/nostr" }
 nostr-sdk = { git = "https://github.com/rust-nostr/nostr" }
 nostr = { git = "https://github.com/rust-nostr/nostr", features = [ "nip96", "nip59", "nip49", "nip44" ] }
 
