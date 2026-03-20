@@ -14,7 +14,7 @@ cd "$(dirname "$0")/.."
 # Configuration
 APP_ID="su.reya.coop"
 APP_NAME="Coop"
-REPO_URL="https://github.com/reyakov/coop"
+REPO_URL="https://git.reya.su/reya/coop"
 BRANDING_LIGHT="#FFE629"
 BRANDING_DARK="#FFE629"
 
@@ -173,7 +173,7 @@ modules:
     sources:
       # Main source code - specific commit
       - type: git
-        url: https://github.com/lumehq/coop.git
+        url: https://git.reya.su/reya/coop.git
         commit: "@COMMIT@"
         tag: "v@VERSION@"
 

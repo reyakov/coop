@@ -21,3 +21,6 @@ dist/
 .DS_Store
 # Added by goreleaser init:
 .intentionally-empty-file.o
+
+.cargo/
+vendor/
