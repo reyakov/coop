@@ -163,7 +163,7 @@ impl ChatRegistry {
                     continue;
                 };
 
-                match message {
+                match *message {
                     RelayMessage::Event { event, .. } => {
                         // Keep track of which relays have seen this event
                         {

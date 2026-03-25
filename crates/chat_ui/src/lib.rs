@@ -201,15 +201,12 @@ impl ChatPanel {
             let mut notifications = client.notifications();
 
             while let Some(notification) = notifications.next().await {
-                if let ClientNotification::Message {
-                    message:
-                        RelayMessage::Ok {
-                            event_id,
-                            status,
-                            message,
-                        },
-                    relay_url,
-                } = notification
+                if let ClientNotification::Message { message, relay_url } = notification
+                    && let RelayMessage::Ok {
+                        event_id,
+                        status,
+                        message,
+                    } = *message
                 {
                     let sent_ids = sent_ids.read().await;
 

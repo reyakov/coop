@@ -100,7 +100,7 @@ impl RelayAuth {
 
             while let Some(notification) = notifications.next().await {
                 if let ClientNotification::Message { relay_url, message } = notification {
-                    match message {
+                    match *message {
                         RelayMessage::Auth { challenge } => {
                             if challenges.insert(challenge.clone()) {
                                 let request = Arc::new(AuthRequest::new(challenge, relay_url));
@@ -221,31 +221,31 @@ impl RelayAuth {
 
             while let Some(notification) = notifications.next().await {
                 match notification {
-                    RelayNotification::Message {
-                        message: RelayMessage::Ok { event_id, .. },
-                    } => {
-                        if id != event_id {
-                            continue;
-                        }
-
-                        // Get all subscriptions
-                        let subscriptions = relay.subscriptions().await;
-
-                        // Re-subscribe to previous subscriptions
-                        for (id, filters) in subscriptions.into_iter() {
-                            if !filters.is_empty() {
-                                relay.send_msg(ClientMessage::req(id, filters)).await?;
+                    RelayNotification::Message { message } => {
+                        if let RelayMessage::Ok { event_id, .. } = *message {
+                            if id != event_id {
+                                continue;
                             }
-                        }
 
-                        // Re-send pending events
-                        for id in pending_events {
-                            if let Some(event) = client.database().event_by_id(&id).await? {
-                                relay.send_event(&event).await?;
+                            // Get all subscriptions
+                            let subscriptions = relay.subscriptions().await;
+
+                            // Re-subscribe to previous subscriptions
+                            for (id, filters) in subscriptions.into_iter() {
+                                if !filters.is_empty() {
+                                    relay.send_msg(ClientMessage::req(id, filters)).await?;
+                                }
                             }
-                        }
 
-                        return Ok(());
+                            // Re-send pending events
+                            for id in pending_events {
+                                if let Some(event) = client.database().event_by_id(&id).await? {
+                                    relay.send_event(&event).await?;
+                                }
+                            }
+
+                            return Ok(());
+                        }
                     }
                     RelayNotification::AuthenticationFailed => break,
                     _ => {}

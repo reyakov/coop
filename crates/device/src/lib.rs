@@ -149,10 +149,8 @@ impl DeviceRegistry {
             let mut processed_events = HashSet::new();
 
             while let Some(notification) = notifications.next().await {
-                if let ClientNotification::Message {
-                    message: RelayMessage::Event { event, .. },
-                    ..
-                } = notification
+                if let ClientNotification::Message { message, .. } = notification
+                    && let RelayMessage::Event { event, .. } = *message
                 {
                     if !processed_events.insert(event.id) {
                         // Skip if the event has already been processed

@@ -44,6 +44,7 @@ fn main() {
             cx.set_menus(vec![Menu {
                 name: "Coop".into(),
                 items: vec![MenuItem::action("Quit", Quit)],
+                disabled: false,
             }]);
 
             // Set up the window bounds

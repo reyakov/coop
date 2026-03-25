@@ -135,7 +135,7 @@ impl PersonRegistry {
                 continue;
             };
 
-            if let RelayMessage::Event { event, .. } = message {
+            if let RelayMessage::Event { event, .. } = *message {
                 // Skip if the event has already been processed
                 if !processed.insert(event.id) {
                     continue;
