@@ -2,6 +2,7 @@ use std::hash::Hash;
 use std::ops::Range;
 
 use common::{EventUtils, NostrParser};
+use gpui::SharedString;
 use nostr_sdk::prelude::*;
 
 /// New message.
@@ -20,6 +21,25 @@ impl NewMessage {
             room,
             gift_wrap,
             rumor,
+        }
+    }
+}
+
+/// Trash message.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct FailedMessage {
+    pub raw_event: String,
+    pub reason: SharedString,
+}
+
+impl FailedMessage {
+    pub fn new<T>(event: &Event, reason: T) -> Self
+    where
+        T: Into<SharedString>,
+    {
+        Self {
+            raw_event: event.as_json(),
+            reason: reason.into(),
         }
     }
 }

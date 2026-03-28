@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,7 +55,24 @@ enum Signal {
     /// Eose received from relay pool
     Eose,
     /// An error occurred
-    Error(SharedString),
+    Error(FailedMessage),
+}
+
+impl Signal {
+    pub fn message(gift_wrap: EventId, rumor: UnsignedEvent) -> Self {
+        Self::Message(NewMessage::new(gift_wrap, rumor))
+    }
+
+    pub fn eose() -> Self {
+        Self::Eose
+    }
+
+    pub fn error<T>(event: &Event, reason: T) -> Self
+    where
+        T: Into<SharedString>,
+    {
+        Self::Error(FailedMessage::new(event, reason))
+    }
 }
 
 /// Chat Registry
@@ -63,6 +80,9 @@ enum Signal {
 pub struct ChatRegistry {
     /// Chat rooms
     rooms: Vec<Entity<Room>>,
+
+    /// Events that failed to unwrap for any reason
+    trashes: Entity<BTreeSet<FailedMessage>>,
 
     /// Tracking events seen on which relays in the current session
     seens: Arc<RwLock<HashMap<EventId, HashSet<RelayUrl>>>>,
@@ -128,6 +148,7 @@ impl ChatRegistry {
 
         Self {
             rooms: vec![],
+            trashes: cx.new(|_| BTreeSet::default()),
             seens: Arc::new(RwLock::new(HashMap::default())),
             tracking_flag: Arc::new(AtomicBool::new(false)),
             signal_rx: rx,
@@ -144,6 +165,7 @@ impl ChatRegistry {
         let signer = nostr.read(cx).signer();
         let status = self.tracking_flag.clone();
         let seens = self.seens.clone();
+        let trashes = self.trashes.downgrade();
 
         let initialized_at = Timestamp::now();
         let sub_id1 = SubscriptionId::new(DEVICE_GIFTWRAP);
@@ -185,28 +207,30 @@ impl ChatRegistry {
                         match extract_rumor(&client, &signer, event.as_ref()).await {
                             Ok(rumor) => {
                                 if rumor.tags.is_empty() {
-                                    let error: SharedString = "No room for message".into();
-                                    tx.send_async(Signal::Error(error)).await?;
+                                    let signal =
+                                        Signal::error(event.as_ref(), "Recipient is missing");
+                                    tx.send_async(signal).await?;
+
+                                    continue;
                                 }
 
                                 if rumor.created_at >= initialized_at {
-                                    let new_message = NewMessage::new(event.id, rumor);
-                                    let signal = Signal::Message(new_message);
-
+                                    let signal = Signal::message(event.id, rumor);
                                     tx.send_async(signal).await?;
                                 } else {
                                     status.store(true, Ordering::Release);
                                 }
                             }
                             Err(e) => {
-                                let error: SharedString = format!("Failed to unwrap: {e}").into();
-                                tx.send_async(Signal::Error(error)).await?;
+                                let reason = format!("Failed to extract rumor: {e}");
+                                let signal = Signal::error(event.as_ref(), reason);
+                                tx.send_async(signal).await?;
                             }
                         }
                     }
                     RelayMessage::EndOfStoredEvents(id) => {
                         if id.as_ref() == &sub_id1 || id.as_ref() == &sub_id2 {
-                            tx.send_async(Signal::Eose).await?;
+                            tx.send_async(Signal::eose()).await?;
                         }
                     }
                     _ => {}
@@ -229,9 +253,10 @@ impl ChatRegistry {
                             this.get_rooms(cx);
                         })?;
                     }
-                    Signal::Error(error) => {
-                        this.update(cx, |_this, cx| {
-                            cx.emit(ChatEvent::Error(error));
+                    Signal::Error(trash) => {
+                        trashes.update(cx, |this, cx| {
+                            this.insert(trash);
+                            cx.notify();
                         })?;
                     }
                 };
@@ -685,8 +710,8 @@ async fn extract_rumor(
     gift_wrap: &Event,
 ) -> Result<UnsignedEvent, Error> {
     // Try to get cached rumor first
-    if let Ok(event) = get_rumor(client, gift_wrap.id).await {
-        return Ok(event);
+    if let Ok(rumor) = get_rumor(client, gift_wrap.id).await {
+        return Ok(rumor);
     }
 
     // Try to unwrap with the available signer
