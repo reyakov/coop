@@ -9,7 +9,8 @@ use device::{DeviceEvent, DeviceRegistry};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, Styled, Subscription, Window, div, px,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
+    relative,
 };
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
@@ -23,11 +24,11 @@ use ui::button::{Button, ButtonVariants};
 use ui::dock::{ClosePanel, DockArea, DockItem, DockPlacement, PanelView};
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::{Notification, NotificationKind};
-use ui::{Disableable, IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
+use ui::{Disableable, Icon, IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
 
 use crate::dialogs::restore::RestoreEncryption;
 use crate::dialogs::{accounts, settings};
-use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list};
+use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list, trash};
 use crate::sidebar;
 
 const PREPARE_MSG: &str = "Coop is preparing a new identity for you. This may take a moment...";
@@ -764,13 +765,48 @@ impl Workspace {
         let nostr = NostrRegistry::global(cx);
         let signer = nostr.read(cx).signer();
 
+        let trashes = ChatRegistry::global(cx);
+        let trash_messages = trashes.read(cx).count_trash_messages(cx);
+
         let Some(public_key) = signer.public_key() else {
             return div();
         };
 
         h_flex()
             .when(!cx.theme().platform.is_mac(), |this| this.pr_2())
-            .gap_3()
+            .gap_2()
+            .when(trash_messages > 0, |this| {
+                this.child(
+                    h_flex()
+                        .id("trash-messages")
+                        .h_6()
+                        .px_1()
+                        .gap_1()
+                        .rounded(cx.theme().radius)
+                        .hover(|this| this.bg(cx.theme().ghost_element_hover))
+                        .child(
+                            Icon::new(IconName::Warning)
+                                .small()
+                                .text_color(cx.theme().text_danger),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .line_height(relative(1.))
+                                .child(format!("{trash_messages}")),
+                        )
+                        .on_click(move |_ev, window, cx| {
+                            cx.stop_propagation();
+                            // Add the trash panel to the center workspace
+                            Self::add_panel(
+                                trash::init(window, cx),
+                                DockPlacement::Center,
+                                window,
+                                cx,
+                            );
+                        }),
+                )
+            })
             .child(
                 Button::new("key")
                     .icon(IconName::UserKey)

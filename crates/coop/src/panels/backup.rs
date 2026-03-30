@@ -84,11 +84,6 @@ impl BackupPanel {
     fn copy_secret(&mut self, cx: &mut Context<Self>) {
         let value = self.nsec_input.read(cx).value();
         let item = ClipboardItem::new_string(value.to_string());
-
-        #[cfg(target_os = "linux")]
-        cx.write_to_primary(item);
-
-        #[cfg(not(target_os = "linux"))]
         cx.write_to_clipboard(item);
 
         // Set the copied status to true
