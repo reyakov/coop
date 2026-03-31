@@ -87,6 +87,9 @@ pub struct ChatRegistry {
     /// Tracking events seen on which relays in the current session
     seens: Arc<RwLock<HashMap<EventId, HashSet<RelayUrl>>>>,
 
+    /// Mapping of unwrapped event ids to their gift wrap event ids
+    event_map: Arc<RwLock<HashMap<EventId, EventId>>>,
+
     /// Tracking the status of unwrapping gift wrap events.
     tracking_flag: Arc<AtomicBool>,
 
@@ -150,6 +153,7 @@ impl ChatRegistry {
             rooms: vec![],
             trashes: cx.new(|_| BTreeSet::default()),
             seens: Arc::new(RwLock::new(HashMap::default())),
+            event_map: Arc::new(RwLock::new(HashMap::default())),
             tracking_flag: Arc::new(AtomicBool::new(false)),
             signal_rx: rx,
             signal_tx: tx,
@@ -165,6 +169,7 @@ impl ChatRegistry {
         let signer = nostr.read(cx).signer();
         let status = self.tracking_flag.clone();
         let seens = self.seens.clone();
+        let event_map = self.event_map.clone();
         let trashes = self.trashes.downgrade();
 
         let initialized_at = Timestamp::now();
@@ -206,6 +211,13 @@ impl ChatRegistry {
                         // Extract the rumor from the gift wrap event
                         match extract_rumor(&client, &signer, event.as_ref()).await {
                             Ok(rumor) => {
+                                // Map the rumor id to the gift wrap event id for later lookup
+                                {
+                                    let mut event_map = event_map.write().await;
+                                    event_map.insert(rumor.id.unwrap(), event.id);
+                                }
+
+                                // Check if the rumor has a recipient
                                 if rumor.tags.is_empty() {
                                     let signal =
                                         Signal::error(event.as_ref(), "Recipient is missing");
@@ -214,6 +226,7 @@ impl ChatRegistry {
                                     continue;
                                 }
 
+                                // Check if the rumor was created after the chat was initialized (for detecting new messages)
                                 if rumor.created_at >= initialized_at {
                                     let signal = Signal::message(event.id, rumor);
                                     tx.send_async(signal).await?;
@@ -455,7 +468,15 @@ impl ChatRegistry {
         self.trashes.clone()
     }
 
-    /// Get the relays that have seen a given message.
+    /// Get the relays that have seen a given rumor id.
+    pub fn rumor_seen_on(&self, id: &EventId) -> Option<HashSet<RelayUrl>> {
+        self.event_map
+            .read_blocking()
+            .get(id)
+            .map(|id| self.seen_on(id))
+    }
+
+    /// Get the relays that have seen a given gift wrap id.
     pub fn seen_on(&self, id: &EventId) -> HashSet<RelayUrl> {
         self.seens
             .read_blocking()

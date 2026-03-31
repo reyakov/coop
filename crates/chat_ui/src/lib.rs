@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 pub use actions::*;
 use anyhow::{Context as AnyhowContext, Error};
-use chat::{Message, RenderedMessage, Room, RoomEvent, SendReport, SendStatus};
+use chat::{ChatRegistry, Message, RenderedMessage, Room, RoomEvent, SendReport, SendStatus};
 use common::RenderedTimestamp;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -658,7 +658,54 @@ impl ChatPanel {
             Command::Njump(public_key) => {
                 self.open_njump(public_key, cx);
             }
+            Command::Trace(id) => {
+                self.open_trace(id, window, cx);
+            }
         }
+    }
+
+    fn open_trace(&mut self, id: &EventId, window: &mut Window, cx: &mut Context<Self>) {
+        let chat = ChatRegistry::global(cx);
+        let seen_on = chat.read(cx).rumor_seen_on(id);
+
+        window.open_modal(cx, move |this, _window, cx| {
+            this.title("Seen on").show_close(true).child(
+                v_flex()
+                    .gap_1()
+                    .when_none(&seen_on, |this| {
+                        this.child(
+                            h_flex()
+                                .h_10()
+                                .justify_center()
+                                .text_sm()
+                                .bg(cx.theme().elevated_surface_background)
+                                .rounded(cx.theme().radius)
+                                .child("Message isn't traced yet"),
+                        )
+                    })
+                    .when_some(seen_on.as_ref(), |this, relays| {
+                        this.children({
+                            let mut items = vec![];
+
+                            for url in relays.iter() {
+                                items.push(
+                                    h_flex()
+                                        .h_7()
+                                        .px_2()
+                                        .gap_2()
+                                        .bg(cx.theme().elevated_surface_background)
+                                        .rounded(cx.theme().radius)
+                                        .text_sm()
+                                        .child(div().size_1p5().rounded_full().bg(gpui::green()))
+                                        .child(SharedString::from(url.to_string())),
+                                );
+                            }
+
+                            items
+                        })
+                    }),
+            )
+        });
     }
 
     fn open_relays(&mut self, public_key: &PublicKey, window: &mut Window, cx: &mut Context<Self>) {
@@ -1131,15 +1178,10 @@ impl ChatPanel {
                     .ghost()
                     .dropdown_menu({
                         let public_key = *public_key;
-                        let _id = *id;
+                        let id = *id;
                         move |this, _window, _cx| {
                             this.menu("Copy author", Box::new(Command::Copy(public_key)))
-                            /*
-                            .menu(
-                                "Trace",
-                                Box::new(Command::Trace(id)),
-                            )
-                            */
+                                .menu("Seen on", Box::new(Command::Trace(id)))
                         }
                     }),
             )

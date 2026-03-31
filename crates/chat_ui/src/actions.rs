@@ -13,4 +13,5 @@ pub enum Command {
     Copy(PublicKey),
     Relays(PublicKey),
     Njump(PublicKey),
+    Trace(EventId),
 }
