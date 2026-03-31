@@ -4,7 +4,7 @@ use gpui::{
     Window, div, px,
 };
 use settings::{AppSettings, AuthMode};
-use theme::{ActiveTheme, ThemeMode};
+use theme::{ActiveTheme, Theme, ThemeMode};
 use ui::button::{Button, ButtonVariants};
 use ui::group_box::{GroupBox, GroupBoxVariants};
 use ui::input::{InputState, TextInput};
@@ -33,6 +33,7 @@ impl Preferences {
         Self { file_input }
     }
 
+    /// Update the file server (blossom) URL
     fn update_file_server(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let value = self.file_input.read(cx).value();
 
@@ -44,6 +45,12 @@ impl Preferences {
                 window.push_notification(Notification::error(e.to_string()).autohide(false), cx);
             }
         }
+    }
+
+    /// Set the theme mode (light or dark)
+    fn set_theme_mode(mode: ThemeMode, window: &mut Window, cx: &mut App) {
+        AppSettings::update_theme_mode(mode, cx);
+        Theme::change(mode, Some(window), cx);
     }
 }
 
@@ -160,23 +167,16 @@ impl Render for Preferences {
                                     .ghost_alt()
                                     .small()
                                     .dropdown_menu(|this, _window, _cx| {
-                                        this.min_w(px(256.))
-                                            .item(PopupMenuItem::new("Light").on_click(
-                                                |_ev, _window, cx| {
-                                                    AppSettings::update_theme_mode(
-                                                        ThemeMode::Light,
-                                                        cx,
-                                                    );
-                                                },
-                                            ))
-                                            .item(PopupMenuItem::new("Dark").on_click(
-                                                |_ev, _window, cx| {
-                                                    AppSettings::update_theme_mode(
-                                                        ThemeMode::Dark,
-                                                        cx,
-                                                    );
-                                                },
-                                            ))
+                                        this.item(PopupMenuItem::new("Light").on_click(
+                                            |_, window, cx| {
+                                                Self::set_theme_mode(ThemeMode::Light, window, cx);
+                                            },
+                                        ))
+                                        .item(
+                                            PopupMenuItem::new("Dark").on_click(|_, window, cx| {
+                                                Self::set_theme_mode(ThemeMode::Dark, window, cx);
+                                            }),
+                                        )
                                     }),
                             ),
                     )

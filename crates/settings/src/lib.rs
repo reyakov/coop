@@ -277,23 +277,28 @@ impl AppSettings {
         self.apply_theme(window, cx);
     }
 
-    /// Apply theme
-    pub fn apply_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(name) = self.values.theme.as_ref() {
-            if let Ok(new_theme) = ThemeFamily::from_assets(name) {
-                Theme::apply_theme(Rc::new(new_theme), Some(window), cx);
-            }
-        } else {
-            Theme::apply_theme(Rc::new(ThemeFamily::default()), Some(window), cx);
-        }
-    }
-
     /// Reset theme
     pub fn reset_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.values.theme = None;
         cx.notify();
 
         self.apply_theme(window, cx);
+    }
+
+    /// Apply theme
+    pub fn apply_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(name) = self.values.theme.as_ref() {
+            let mode = self.values.theme_mode;
+
+            if let Ok(new_theme) = ThemeFamily::from_assets(name) {
+                Theme::apply_theme(Rc::new(new_theme), Some(window), cx);
+                Theme::change(mode, Some(window), cx);
+            } else {
+                log::info!("Failed to load theme: {name}");
+            }
+        } else {
+            Theme::apply_theme(Rc::new(ThemeFamily::default()), Some(window), cx);
+        }
     }
 
     /// Check if the given relay is already authenticated
