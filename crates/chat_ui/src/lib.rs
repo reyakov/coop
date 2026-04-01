@@ -471,6 +471,12 @@ impl ChatPanel {
         self.reports_by_id.read(cx).get(id).is_some()
     }
 
+    /// Check if a message was encrypted by the dekey
+    fn encrypted_by_dekey(&self, id: &EventId, cx: &App) -> bool {
+        let chat = ChatRegistry::global(cx);
+        chat.read(cx).encrypted_by_dekey(id)
+    }
+
     /// Get all sent reports for a message by its ID
     fn sent_reports(&self, id: &EventId, cx: &App) -> Option<Vec<SendReport>> {
         self.reports_by_id.read(cx).get(id).cloned()
@@ -843,6 +849,7 @@ impl ChatPanel {
         let replies = message.replies_to.as_slice();
         let has_replies = !replies.is_empty();
         let has_reports = self.has_reports(&id, cx);
+        let encrypted_by_dekey = self.encrypted_by_dekey(&id, cx);
 
         // Hide avatar setting
         let hide_avatar = AppSettings::get_hide_avatar(cx);
@@ -888,6 +895,17 @@ impl ChatPanel {
                                             .text_color(cx.theme().text)
                                             .child(author.name()),
                                     )
+                                    .when(encrypted_by_dekey, |this| {
+                                        this.child(
+                                            Button::new(format!("dekey-{ix}"))
+                                                .icon(IconName::Shield)
+                                                .ghost()
+                                                .xsmall()
+                                                .px_4()
+                                                .tooltip("Encrypted by Dekey")
+                                                .disabled(true),
+                                        )
+                                    })
                                     .child(message.created_at.to_human_time())
                                     .when(has_reports, |this| {
                                         this.child(deferred(self.render_sent_reports(&id, cx)))

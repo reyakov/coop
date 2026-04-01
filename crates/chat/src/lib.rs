@@ -75,6 +75,9 @@ impl Signal {
     }
 }
 
+type Dekey = bool;
+type GiftWrapId = EventId;
+
 /// Chat Registry
 #[derive(Debug)]
 pub struct ChatRegistry {
@@ -88,7 +91,7 @@ pub struct ChatRegistry {
     seens: Arc<RwLock<HashMap<EventId, HashSet<RelayUrl>>>>,
 
     /// Mapping of unwrapped event ids to their gift wrap event ids
-    event_map: Arc<RwLock<HashMap<EventId, EventId>>>,
+    event_map: Arc<RwLock<HashMap<EventId, (GiftWrapId, Dekey)>>>,
 
     /// Tracking the status of unwrapping gift wrap events.
     tracking_flag: Arc<AtomicBool>,
@@ -191,7 +194,10 @@ impl ChatRegistry {
                 };
 
                 match *message {
-                    RelayMessage::Event { event, .. } => {
+                    RelayMessage::Event {
+                        event,
+                        subscription_id,
+                    } => {
                         // Keep track of which relays have seen this event
                         {
                             let mut seens = seens.write().await;
@@ -214,7 +220,8 @@ impl ChatRegistry {
                                 // Map the rumor id to the gift wrap event id for later lookup
                                 {
                                     let mut event_map = event_map.write().await;
-                                    event_map.insert(rumor.id.unwrap(), event.id);
+                                    let dekey = subscription_id.as_ref() == &sub_id1;
+                                    event_map.insert(rumor.id.unwrap(), (event.id, dekey));
                                 }
 
                                 // Check if the rumor has a recipient
@@ -222,8 +229,6 @@ impl ChatRegistry {
                                     let signal =
                                         Signal::error(event.as_ref(), "Recipient is missing");
                                     tx.send_async(signal).await?;
-
-                                    continue;
                                 }
 
                                 // Check if the rumor was created after the chat was initialized (for detecting new messages)
@@ -231,6 +236,7 @@ impl ChatRegistry {
                                     let signal = Signal::message(event.id, rumor);
                                     tx.send_async(signal).await?;
                                 } else {
+                                    // Mark the chat still processing new messages
                                     status.store(true, Ordering::Release);
                                 }
                             }
@@ -473,7 +479,7 @@ impl ChatRegistry {
         self.event_map
             .read_blocking()
             .get(id)
-            .map(|id| self.seen_on(id))
+            .map(|(id, _dekey)| self.seen_on(id))
     }
 
     /// Get the relays that have seen a given gift wrap id.
@@ -483,6 +489,15 @@ impl ChatRegistry {
             .get(id)
             .cloned()
             .unwrap_or_default()
+    }
+
+    /// Check if a given rumor was encrypted by the dekey.
+    pub fn encrypted_by_dekey(&self, id: &EventId) -> bool {
+        self.event_map
+            .read_blocking()
+            .get(id)
+            .map(|(_, dekey)| *dekey)
+            .unwrap_or(false)
     }
 
     /// Add a new room to the start of list.
@@ -563,6 +578,10 @@ impl ChatRegistry {
     /// Reset the registry.
     pub fn reset(&mut self, cx: &mut Context<Self>) {
         self.rooms.clear();
+        self.trashes.update(cx, |this, cx| {
+            this.clear();
+            cx.notify();
+        });
         cx.notify();
     }
 
