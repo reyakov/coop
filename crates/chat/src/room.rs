@@ -3,7 +3,7 @@ use std::hash::{Hash, Hasher};
 use std::time::Duration;
 
 use anyhow::{Error, anyhow};
-use common::EventUtils;
+use common::EventExt;
 use gpui::{App, AppContext, Context, EventEmitter, SharedString, Task};
 use itertools::Itertools;
 use nostr_sdk::prelude::*;

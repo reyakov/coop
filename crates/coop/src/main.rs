@@ -92,13 +92,13 @@ fn main() {
                     // Initialize relay auth registry
                     relay_auth::init(window, cx);
 
-                    // Initialize app registry
-                    chat::init(window, cx);
-
                     // Initialize device signer
                     //
                     // NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
                     device::init(window, cx);
+
+                    // Initialize app registry
+                    chat::init(window, cx);
 
                     // Initialize auto update
                     auto_update::init(window, cx);

@@ -42,7 +42,7 @@ impl CoopSigner {
     /// Get public key
     ///
     /// Ensure to call this method after the signer has been initialized.
-    /// Otherwise, this method will panic.
+    /// Otherwise, it will panic.
     pub fn public_key(&self) -> Option<PublicKey> {
         *self.signer_pkey.read_blocking()
     }

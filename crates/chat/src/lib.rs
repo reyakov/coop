@@ -6,7 +6,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Error, anyhow};
-use common::EventUtils;
+use common::EventExt;
+use device::{DeviceEvent, DeviceRegistry};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::{
@@ -41,8 +42,6 @@ pub enum ChatEvent {
     CloseRoom(u64),
     /// An event to notify UI about a new chat request
     Ping,
-    /// An event to notify UI that the chat registry has subscribed to messaging relays
-    Subscribed,
     /// An error occurred
     Error(SharedString),
 }
@@ -81,6 +80,9 @@ type GiftWrapId = EventId;
 /// Chat Registry
 #[derive(Debug)]
 pub struct ChatRegistry {
+    /// Whether the chat registry is currently initializing.
+    pub initializing: bool,
+
     /// Chat rooms
     rooms: Vec<Entity<Room>>,
 
@@ -106,7 +108,7 @@ pub struct ChatRegistry {
     tasks: SmallVec<[Task<Result<(), Error>>; 2]>,
 
     /// Subscriptions
-    _subscriptions: SmallVec<[Subscription; 1]>,
+    _subscriptions: SmallVec<[Subscription; 2]>,
 }
 
 impl EventEmitter<ChatEvent> for ChatRegistry {}
@@ -125,22 +127,48 @@ impl ChatRegistry {
     /// Create a new chat registry instance
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let nostr = NostrRegistry::global(cx);
+        let device = DeviceRegistry::global(cx);
+
         let (tx, rx) = flume::unbounded::<Signal>();
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
             // Subscribe to the signer event
-            cx.subscribe(&nostr, |this, _state, event, cx| {
-                match event {
-                    StateEvent::SignerSet => {
-                        this.reset(cx);
-                        this.get_rooms(cx);
-                    }
-                    StateEvent::RelayConnected => {
-                        this.get_contact_list(cx);
-                        this.get_messages(cx)
-                    }
-                    _ => {}
+            cx.subscribe_in(&nostr, window, |this, state, event, window, cx| {
+                if event == &StateEvent::SignerSet {
+                    this.reset(cx);
+                    this.get_contact_list(cx);
+                    this.get_rooms(cx);
+
+                    let signer = state.read(cx).signer();
+                    cx.spawn_in(window, async move |this, cx| {
+                        let user_signer = signer.get().await;
+                        this.update(cx, |this, cx| {
+                            this.get_messages(user_signer, cx);
+                        })
+                        .ok();
+                    })
+                    .detach();
+                };
+            }),
+        );
+
+        subscriptions.push(
+            // Subscribe to the device event
+            cx.subscribe_in(&device, window, |_this, _s, event, window, cx| {
+                if event == &DeviceEvent::Set {
+                    let nostr = NostrRegistry::global(cx);
+                    let signer = nostr.read(cx).signer();
+
+                    cx.spawn_in(window, async move |this, cx| {
+                        if let Some(device_signer) = signer.get_encryption_signer().await {
+                            this.update(cx, |this, cx| {
+                                this.get_messages(device_signer, cx);
+                            })
+                            .ok();
+                        }
+                    })
+                    .detach();
                 };
             }),
         );
@@ -153,6 +181,7 @@ impl ChatRegistry {
         });
 
         Self {
+            initializing: true,
             rooms: vec![],
             trashes: cx.new(|_| BTreeSet::default()),
             seens: Arc::new(RwLock::new(HashMap::default())),
@@ -306,7 +335,7 @@ impl ChatRegistry {
     }
 
     /// Get contact list from relays
-    pub fn get_contact_list(&mut self, cx: &mut Context<Self>) {
+    fn get_contact_list(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
@@ -336,15 +365,18 @@ impl ChatRegistry {
         self.tasks.push(task);
     }
 
-    /// Get all messages for current user
-    pub fn get_messages(&mut self, cx: &mut Context<Self>) {
-        let task = self.subscribe(cx);
+    /// Get all messages for the provided signer
+    fn get_messages<T>(&mut self, signer: T, cx: &mut Context<Self>)
+    where
+        T: NostrSigner + 'static,
+    {
+        let task = self.subscribe_gift_wrap_events(signer, cx);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
                 Ok(_) => {
-                    this.update(cx, |_this, cx| {
-                        cx.emit(ChatEvent::Subscribed);
+                    this.update(cx, |this, cx| {
+                        this.set_initializing(false, cx);
                     })?;
                 }
                 Err(e) => {
@@ -365,6 +397,7 @@ impl ChatRegistry {
 
         cx.background_spawn(async move {
             let public_key = signer.get_public_key().await?;
+            let id = SubscriptionId::new("inbox-relay");
 
             // Construct filter for inbox relays
             let filter = Filter::new()
@@ -375,12 +408,12 @@ impl ChatRegistry {
             // Stream events from user's write relays
             let mut stream = client
                 .stream_events(filter)
+                .with_id(id)
                 .timeout(Duration::from_secs(TIMEOUT))
                 .await?;
 
             while let Some((_url, res)) = stream.next().await {
                 if let Ok(event) = res {
-                    log::debug!("Got event: {:?}", event);
                     let urls: Vec<RelayUrl> = nip17::extract_owned_relay_list(event).collect();
                     return Ok(urls);
                 }
@@ -390,18 +423,20 @@ impl ChatRegistry {
         })
     }
 
-    /// Continuously get gift wrap events for the current user in their messaging relays
-    fn subscribe(&self, cx: &App) -> Task<Result<(), Error>> {
+    /// Continuously get gift wrap events for the signer
+    fn subscribe_gift_wrap_events<T>(&self, signer: T, cx: &App) -> Task<Result<(), Error>>
+    where
+        T: NostrSigner + 'static,
+    {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
         let urls = self.get_messaging_relays(cx);
 
         cx.background_spawn(async move {
             let urls = urls.await?;
             let public_key = signer.get_public_key().await?;
             let filter = Filter::new().kind(Kind::GiftWrap).pubkey(public_key);
-            let id = SubscriptionId::new(USER_GIFTWRAP);
+            let id = SubscriptionId::new(format!("{}-msg", public_key.to_hex()));
 
             // Ensure relay connections
             for url in urls.iter() {
@@ -423,6 +458,37 @@ impl ChatRegistry {
 
             Ok(())
         })
+    }
+
+    /// Refresh the chat registry, fetching messages and contact list from relays.
+    pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reset(cx);
+        self.get_contact_list(cx);
+        self.get_rooms(cx);
+
+        let nostr = NostrRegistry::global(cx);
+        let signer = nostr.read(cx).signer();
+
+        cx.spawn_in(window, async move |this, cx| {
+            let user_signer = signer.get().await;
+            let device_signer = signer.get_encryption_signer().await;
+
+            this.update(cx, |this, cx| {
+                this.get_messages(user_signer, cx);
+
+                if let Some(device_signer) = device_signer {
+                    this.get_messages(device_signer, cx);
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Set the initializing status of the chat registry
+    fn set_initializing(&mut self, initializing: bool, cx: &mut Context<Self>) {
+        self.initializing = initializing;
+        cx.notify();
     }
 
     /// Get the loading status of the chat registry
@@ -577,6 +643,7 @@ impl ChatRegistry {
 
     /// Reset the registry.
     pub fn reset(&mut self, cx: &mut Context<Self>) {
+        self.initializing = true;
         self.rooms.clear();
         self.trashes.update(cx, |this, cx| {
             this.clear();

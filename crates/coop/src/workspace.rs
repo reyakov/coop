@@ -1,5 +1,3 @@
-use std::cell::Cell;
-use std::rc::Rc;
 use std::sync::Arc;
 
 use ::settings::AppSettings;
@@ -13,7 +11,7 @@ use gpui::{
     relative,
 };
 use nostr_sdk::prelude::*;
-use person::PersonRegistry;
+use person::{PersonRegistry, shorten_pubkey};
 use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, StateEvent};
@@ -24,7 +22,7 @@ use ui::button::{Button, ButtonVariants};
 use ui::dock::{ClosePanel, DockArea, DockItem, DockPlacement, PanelView};
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::{Notification, NotificationKind};
-use ui::{Disableable, Icon, IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
+use ui::{Icon, IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
 
 use crate::dialogs::restore::RestoreEncryption;
 use crate::dialogs::{accounts, settings};
@@ -51,7 +49,6 @@ enum Command {
     ToggleTheme,
     ToggleAccount,
 
-    RefreshRelayList,
     RefreshMessagingRelays,
     BackupEncryption,
     ImportEncryption,
@@ -73,14 +70,8 @@ pub struct Workspace {
     /// App's Dock Area
     dock: Entity<DockArea>,
 
-    /// Whether a user's relay list is connected
-    relay_connected: bool,
-
-    /// Whether the inbox is connected
-    inbox_connected: bool,
-
     /// Event subscriptions
-    _subscriptions: SmallVec<[Subscription; 6]>,
+    _subscriptions: SmallVec<[Subscription; 5]>,
 }
 
 impl Workspace {
@@ -88,7 +79,6 @@ impl Workspace {
         let chat = ChatRegistry::global(cx);
         let device = DeviceRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
-        let npubs = nostr.read(cx).npubs();
 
         let titlebar = cx.new(|_| TitleBar::new());
         let dock = cx.new(|cx| DockArea::new(window, cx));
@@ -99,15 +89,6 @@ impl Workspace {
             // Observe system appearance and update theme
             cx.observe_window_appearance(window, |_this, window, cx| {
                 Theme::sync_system_appearance(Some(window), cx);
-            }),
-        );
-
-        subscriptions.push(
-            // Observe the npubs entity
-            cx.observe_in(&npubs, window, move |this, npubs, window, cx| {
-                if !npubs.read(cx).is_empty() {
-                    this.account_selector(window, cx);
-                }
             }),
         );
 
@@ -141,27 +122,13 @@ impl Workspace {
 
                         window.push_notification(note, cx);
                     }
-                    StateEvent::FetchingRelayList => {
-                        let note = Notification::new()
-                            .id::<RelayNotifcation>()
-                            .message("Getting relay list...")
-                            .with_kind(NotificationKind::Info);
-
-                        window.push_notification(note, cx);
-                    }
-                    StateEvent::RelayNotConfigured => {
-                        this.relay_warning(window, cx);
-                    }
-                    StateEvent::RelayConnected => {
-                        window.clear_notification::<RelayNotifcation>(cx);
-                        this.set_relay_connected(true, cx);
-                    }
                     StateEvent::SignerSet => {
                         this.set_center_layout(window, cx);
-                        this.set_relay_connected(false, cx);
-                        this.set_inbox_connected(false, cx);
                         // Clear the signer notification
                         window.clear_notification::<SignerNotifcation>(cx);
+                    }
+                    StateEvent::Show => {
+                        this.account_selector(window, cx);
                     }
                     _ => {}
                 };
@@ -174,10 +141,11 @@ impl Workspace {
                 match event {
                     DeviceEvent::Requesting => {
                         const MSG: &str =
-                            "Please open the other client and approve the encryption key request";
+                            "Coop has sent a request for an encryption key. Please open the other client then approve the request.";
 
                         let note = Notification::new()
                             .id::<DeviceNotifcation>()
+                            .autohide(false)
                             .title("Wait for approval")
                             .message(MSG)
                             .with_kind(NotificationKind::Info);
@@ -187,6 +155,7 @@ impl Workspace {
                     DeviceEvent::Creating => {
                         let note = Notification::new()
                             .id::<DeviceNotifcation>()
+                            .autohide(false)
                             .message("Creating encryption key")
                             .with_kind(NotificationKind::Info);
 
@@ -197,26 +166,6 @@ impl Workspace {
                             .id::<DeviceNotifcation>()
                             .message("Encryption Key has been set")
                             .with_kind(NotificationKind::Success);
-
-                        window.push_notification(note, cx);
-                    }
-                    DeviceEvent::NotSet { reason } => {
-                        let note = Notification::new()
-                            .id::<DeviceNotifcation>()
-                            .title("Cannot setup the encryption key")
-                            .message(reason)
-                            .autohide(false)
-                            .with_kind(NotificationKind::Error);
-
-                        window.push_notification(note, cx);
-                    }
-                    DeviceEvent::NotSubscribe { reason } => {
-                        let note = Notification::new()
-                            .id::<DeviceNotifcation>()
-                            .title("Cannot getting messages")
-                            .message(reason)
-                            .autohide(false)
-                            .with_kind(NotificationKind::Error);
 
                         window.push_notification(note, cx);
                     }
@@ -255,9 +204,6 @@ impl Workspace {
                             });
                         });
                     }
-                    ChatEvent::Subscribed => {
-                        this.set_inbox_connected(true, cx);
-                    }
                     ChatEvent::Error(error) => {
                         window.push_notification(Notification::error(error).autohide(false), cx);
                     }
@@ -285,8 +231,6 @@ impl Workspace {
         Self {
             titlebar,
             dock,
-            relay_connected: false,
-            inbox_connected: false,
             _subscriptions: subscriptions,
         }
     }
@@ -316,18 +260,6 @@ impl Workspace {
             .into_iter()
             .filter_map(|panel| panel.parse::<u64>().ok())
             .collect()
-    }
-
-    /// Set whether the relay list is connected
-    fn set_relay_connected(&mut self, connected: bool, cx: &mut Context<Self>) {
-        self.relay_connected = connected;
-        cx.notify();
-    }
-
-    /// Set whether the inbox is connected
-    fn set_inbox_connected(&mut self, connected: bool, cx: &mut Context<Self>) {
-        self.inbox_connected = connected;
-        cx.notify();
     }
 
     /// Set the dock layout
@@ -414,8 +346,9 @@ impl Workspace {
             }
             Command::RefreshMessagingRelays => {
                 let chat = ChatRegistry::global(cx);
+                // Trigger a refresh of the chat registry
                 chat.update(cx, |this, cx| {
-                    this.get_messages(cx);
+                    this.refresh(window, cx);
                 });
             }
             Command::ShowRelayList => {
@@ -427,16 +360,6 @@ impl Workspace {
                         cx,
                     );
                 });
-            }
-            Command::RefreshRelayList => {
-                let nostr = NostrRegistry::global(cx);
-                let signer = nostr.read(cx).signer();
-
-                if let Some(public_key) = signer.public_key() {
-                    nostr.update(cx, |this, cx| {
-                        this.ensure_relay_list(&public_key, cx);
-                    });
-                }
             }
             Command::RefreshEncryption => {
                 let device = DeviceRegistry::global(cx);
@@ -630,55 +553,6 @@ impl Workspace {
         });
     }
 
-    fn relay_warning(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        const BODY: &str = "Coop cannot found your gossip relay list. \
-                            Maybe you haven't set it yet or relay not responsed";
-
-        let nostr = NostrRegistry::global(cx);
-        let signer = nostr.read(cx).signer();
-
-        let Some(public_key) = signer.public_key() else {
-            return;
-        };
-
-        let entity = nostr.downgrade();
-        let loading = Rc::new(Cell::new(false));
-
-        let note = Notification::new()
-            .autohide(false)
-            .id::<RelayNotifcation>()
-            .icon(IconName::Relay)
-            .title("Gossip Relays are required")
-            .message(BODY)
-            .action(move |_this, _window, _cx| {
-                let entity = entity.clone();
-                let public_key = public_key.to_owned();
-
-                Button::new("retry")
-                    .label("Retry")
-                    .small()
-                    .primary()
-                    .loading(loading.get())
-                    .disabled(loading.get())
-                    .on_click({
-                        let loading = Rc::clone(&loading);
-
-                        move |_ev, _window, cx| {
-                            // Set loading state to true
-                            loading.set(true);
-                            // Retry
-                            entity
-                                .update(cx, |this, cx| {
-                                    this.ensure_relay_list(&public_key, cx);
-                                })
-                                .ok();
-                        }
-                    })
-            });
-
-        window.push_notification(note, cx);
-    }
-
     fn titlebar_left(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let nostr = NostrRegistry::global(cx);
         let signer = nostr.read(cx).signer();
@@ -759,18 +633,23 @@ impl Workspace {
     }
 
     fn titlebar_right(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let relay_connected = self.relay_connected;
-        let inbox_connected = self.inbox_connected;
+        let chat = ChatRegistry::global(cx);
+        let initializing = chat.read(cx).initializing;
+        let trash_messages = chat.read(cx).count_trash_messages(cx);
+
+        let device = DeviceRegistry::global(cx);
+        let device_initializing = device.read(cx).initializing;
 
         let nostr = NostrRegistry::global(cx);
         let signer = nostr.read(cx).signer();
 
-        let trashes = ChatRegistry::global(cx);
-        let trash_messages = trashes.read(cx).count_trash_messages(cx);
-
         let Some(public_key) = signer.public_key() else {
             return div();
         };
+
+        let persons = PersonRegistry::global(cx);
+        let profile = persons.read(cx).get(&public_key, cx);
+        let announcement = profile.announcement();
 
         h_flex()
             .when(!cx.theme().platform.is_mac(), |this| this.pr_2())
@@ -813,53 +692,42 @@ impl Workspace {
                     .tooltip("Decoupled encryption key")
                     .small()
                     .ghost()
-                    .dropdown_menu(move |this, _window, cx| {
-                        let device = DeviceRegistry::global(cx);
-                        let subscribing = device.read(cx).subscribing;
-                        let requesting = device.read(cx).requesting;
-
+                    .loading(device_initializing)
+                    .when(device_initializing, |this| {
+                        this.label("Dekey")
+                            .xsmall()
+                            .tooltip("Loading decoupled encryption key...")
+                    })
+                    .dropdown_menu(move |this, _window, _cx| {
                         this.min_w(px(260.))
                             .label("Encryption Key")
-                            .when(requesting, |this| {
+                            .when_some(announcement.as_ref(), |this, announcement| {
+                                let name = announcement.client_name();
+                                let pkey = shorten_pubkey(announcement.public_key(), 8);
+
                                 this.item(PopupMenuItem::element(move |_window, cx| {
                                     h_flex()
-                                        .px_1()
-                                        .w_full()
-                                        .gap_2()
+                                        .gap_1()
                                         .text_sm()
                                         .child(
-                                            div()
-                                                .size_1p5()
-                                                .rounded_full()
-                                                .bg(cx.theme().icon_accent),
+                                            Icon::new(IconName::Device)
+                                                .small()
+                                                .text_color(cx.theme().icon_muted),
                                         )
-                                        .child(SharedString::from("Waiting for approval..."))
+                                        .child(name.clone())
+                                }))
+                                .item(PopupMenuItem::element(move |_window, cx| {
+                                    h_flex()
+                                        .gap_1()
+                                        .text_sm()
+                                        .child(
+                                            Icon::new(IconName::UserKey)
+                                                .small()
+                                                .text_color(cx.theme().icon_muted),
+                                        )
+                                        .child(SharedString::from(pkey.clone()))
                                 }))
                             })
-                            .item(PopupMenuItem::element(move |_window, cx| {
-                                h_flex()
-                                    .px_1()
-                                    .w_full()
-                                    .gap_2()
-                                    .text_sm()
-                                    .when(!subscribing, |this| {
-                                        this.text_color(cx.theme().text_muted)
-                                    })
-                                    .child(div().size_1p5().rounded_full().map(|this| {
-                                        if subscribing {
-                                            this.bg(cx.theme().icon_accent)
-                                        } else {
-                                            this.bg(cx.theme().icon_muted)
-                                        }
-                                    }))
-                                    .map(|this| {
-                                        if subscribing {
-                                            this.child("Listening for messages")
-                                        } else {
-                                            this.child("Idle")
-                                        }
-                                    })
-                            }))
                             .separator()
                             .menu_with_icon(
                                 "Backup",
@@ -889,17 +757,13 @@ impl Workspace {
                     .icon(IconName::Inbox)
                     .small()
                     .ghost()
-                    .loading(!inbox_connected)
-                    .disabled(!inbox_connected)
-                    .when(!inbox_connected, |this| {
-                        this.tooltip("Connecting to the user's messaging relays...")
+                    .loading(initializing)
+                    .when(initializing, |this| {
+                        this.label("Inbox")
+                            .xsmall()
+                            .tooltip("Getting inbox messages...")
                     })
-                    .when(inbox_connected, |this| this.indicator())
                     .dropdown_menu(move |this, _window, cx| {
-                        let chat = ChatRegistry::global(cx);
-                        let persons = PersonRegistry::global(cx);
-                        let profile = persons.read(cx).get(&public_key, cx);
-
                         let urls: Vec<(SharedString, SharedString)> = profile
                             .messaging_relays()
                             .iter()
@@ -950,35 +814,14 @@ impl Workspace {
                                 Box::new(Command::RefreshMessagingRelays),
                             )
                             .menu_with_icon(
-                                "Update relays",
+                                "Manage gossip relays",
+                                IconName::Relay,
+                                Box::new(Command::ShowRelayList),
+                            )
+                            .menu_with_icon(
+                                "Manage messaging relays",
                                 IconName::Settings,
                                 Box::new(Command::ShowMessaging),
-                            )
-                    }),
-            )
-            .child(
-                Button::new("relay-list")
-                    .icon(IconName::Relay)
-                    .small()
-                    .ghost()
-                    .loading(!relay_connected)
-                    .disabled(!relay_connected)
-                    .when(!relay_connected, |this| {
-                        this.tooltip("Connecting to the user's relay list...")
-                    })
-                    .when(relay_connected, |this| this.indicator())
-                    .dropdown_menu(move |this, _window, _cx| {
-                        this.label("User's Relay List")
-                            .separator()
-                            .menu_with_icon(
-                                "Reload",
-                                IconName::Refresh,
-                                Box::new(Command::RefreshRelayList),
-                            )
-                            .menu_with_icon(
-                                "Update",
-                                IconName::Settings,
-                                Box::new(Command::ShowRelayList),
                             )
                     }),
             )

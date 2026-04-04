@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Error};
 use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
-use common::{DebouncedDelay, RenderedTimestamp};
+use common::{DebouncedDelay, TimestampExt};
 use entry::RoomEntry;
 use gpui::prelude::FluentBuilder;
 use gpui::{

@@ -295,10 +295,13 @@ impl Render for Notification {
             .clone()
             .map(|builder| builder(self, window, cx));
 
-        let action = self
-            .action_builder
-            .clone()
-            .map(|builder| builder(self, window, cx).small().mr_3p5());
+        let action = self.action_builder.clone().map(|builder| {
+            builder(self, window, cx)
+                .xsmall()
+                .primary()
+                .px_3()
+                .font_semibold()
+        });
 
         let icon = match self.kind {
             None => self.icon.clone(),
@@ -360,14 +363,8 @@ impl Render for Notification {
                     })
                     .when_some(content, |this, content| this.child(content))
                     .when_some(action, |this, action| {
-                        this.child(
-                            h_flex()
-                                .w_full()
-                                .flex_1()
-                                .gap_1()
-                                .justify_end()
-                                .child(action),
-                        )
+                        this.gap_2()
+                            .child(h_flex().w_full().flex_1().justify_end().child(action))
                     }),
             )
             .child(

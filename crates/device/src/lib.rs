@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
@@ -11,12 +11,12 @@ use gpui::{
 };
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
-use state::{Announcement, DEVICE_GIFTWRAP, NostrRegistry, StateEvent, TIMEOUT, app_name};
+use state::{Announcement, NostrRegistry, StateEvent, TIMEOUT, app_name};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
-use ui::button::{Button, ButtonVariants};
-use ui::notification::Notification;
-use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::button::Button;
+use ui::notification::{Notification, NotificationKind};
+use ui::{Disableable, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 const IDENTIFIER: &str = "coop:device";
 const MSG: &str = "You've requested an encryption key from another device. \
@@ -39,10 +39,6 @@ pub enum DeviceEvent {
     Requesting,
     /// The device is creating a new encryption key
     Creating,
-    /// Encryption key is not set
-    NotSet { reason: SharedString },
-    /// An event to notify that Coop isn't subscribed to gift wrap events
-    NotSubscribe { reason: SharedString },
     /// An error occurred
     Error(SharedString),
 }
@@ -54,24 +50,6 @@ impl DeviceEvent {
     {
         Self::Error(error.into())
     }
-
-    pub fn not_subscribe<T>(reason: T) -> Self
-    where
-        T: Into<SharedString>,
-    {
-        Self::NotSubscribe {
-            reason: reason.into(),
-        }
-    }
-
-    pub fn not_set<T>(reason: T) -> Self
-    where
-        T: Into<SharedString>,
-    {
-        Self::NotSet {
-            reason: reason.into(),
-        }
-    }
 }
 
 /// Device Registry
@@ -79,14 +57,11 @@ impl DeviceEvent {
 /// NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
 #[derive(Debug)]
 pub struct DeviceRegistry {
-    /// Whether the registry is currently subscribing to gift wrap events
-    pub subscribing: bool,
-
-    /// Whether the registry is waiting for encryption key approval from other devices
-    pub requesting: bool,
+    /// Whether the registry is currently initializing
+    pub initializing: bool,
 
     /// Whether there is a pending request for encryption key approval
-    pub has_pending_request: bool,
+    pub pending_request: bool,
 
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
@@ -112,17 +87,11 @@ impl DeviceRegistry {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let nostr = NostrRegistry::global(cx);
 
-        // Get announcement when signer is set
+        // Subscribe to nostr state events
         let subscription = cx.subscribe_in(&nostr, window, |this, _e, event, _window, cx| {
-            match event {
-                StateEvent::SignerSet => {
-                    this.set_subscribing(false, cx);
-                    this.set_requesting(false, cx);
-                }
-                StateEvent::RelayConnected => {
-                    this.get_announcement(cx);
-                }
-                _ => {}
+            if event == &StateEvent::SignerSet {
+                this.set_initializing(true, cx);
+                this.get_announcement(cx);
             };
         });
 
@@ -131,9 +100,8 @@ impl DeviceRegistry {
         });
 
         Self {
-            subscribing: false,
-            requesting: false,
-            has_pending_request: false,
+            initializing: true,
+            pending_request: false,
             tasks: vec![],
             _subscription: Some(subscription),
         }
@@ -198,21 +166,15 @@ impl DeviceRegistry {
         }));
     }
 
-    /// Set whether the registry is currently subscribing to gift wrap events
-    fn set_subscribing(&mut self, subscribing: bool, cx: &mut Context<Self>) {
-        self.subscribing = subscribing;
-        cx.notify();
-    }
-
-    /// Set whether the registry is waiting for encryption key approval from other devices
-    fn set_requesting(&mut self, requesting: bool, cx: &mut Context<Self>) {
-        self.requesting = requesting;
+    /// Set whether the registry is currently initializing
+    fn set_initializing(&mut self, initializing: bool, cx: &mut Context<Self>) {
+        self.initializing = initializing;
         cx.notify();
     }
 
     /// Set whether there is a pending request for encryption key approval
-    fn set_has_pending_request(&mut self, pending: bool, cx: &mut Context<Self>) {
-        self.has_pending_request = pending;
+    fn set_pending_request(&mut self, pending: bool, cx: &mut Context<Self>) {
+        self.pending_request = pending;
         cx.notify();
     }
 
@@ -229,74 +191,12 @@ impl DeviceRegistry {
 
             // Update state
             this.update(cx, |this, cx| {
+                this.set_initializing(false, cx);
                 cx.emit(DeviceEvent::Set);
-                this.get_messages(cx);
             })?;
 
             Ok(())
         }));
-    }
-
-    /// Get all messages for encryption keys
-    fn get_messages(&mut self, cx: &mut Context<Self>) {
-        let task = self.subscribe_to_giftwrap_events(cx);
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            if let Err(e) = task.await {
-                this.update(cx, |_this, cx| {
-                    cx.emit(DeviceEvent::not_subscribe(e.to_string()));
-                })?;
-            } else {
-                this.update(cx, |this, cx| {
-                    this.set_subscribing(true, cx);
-                })?;
-            }
-            Ok(())
-        }));
-    }
-
-    /// Continuously get gift wrap events for the current user in their messaging relays
-    fn subscribe_to_giftwrap_events(&self, cx: &App) -> Task<Result<(), Error>> {
-        let persons = PersonRegistry::global(cx);
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
-
-        let Some(user) = signer.public_key() else {
-            return Task::ready(Err(anyhow!("User not found")));
-        };
-
-        let profile = persons.read(cx).get(&user, cx);
-        let relays = profile.messaging_relays().clone();
-
-        cx.background_spawn(async move {
-            let encryption = signer.get_encryption_signer().await.context("not found")?;
-            let public_key = encryption.get_public_key().await?;
-
-            let filter = Filter::new().kind(Kind::GiftWrap).pubkey(public_key);
-            let id = SubscriptionId::new(DEVICE_GIFTWRAP);
-
-            // Ensure user has relays configured
-            if relays.is_empty() {
-                return Err(anyhow!("No messaging relays found"));
-            }
-
-            // Ensure relays are connected
-            for url in relays.iter() {
-                client.add_relay(url).and_connect().await?;
-            }
-
-            // Construct target for subscription
-            let target: HashMap<RelayUrl, Filter> = relays
-                .into_iter()
-                .map(|relay| (relay, filter.clone()))
-                .collect();
-
-            // Subscribe
-            client.subscribe(target).with_id(id).await?;
-
-            Ok(())
-        })
     }
 
     /// Backup the encryption's secret key to a file
@@ -431,30 +331,27 @@ impl DeviceRegistry {
 
         // Get encryption key from the database and compare with the announcement
         let task: Task<Result<Keys, Error>> = cx.background_spawn(async move {
-            if let Ok(keys) = get_keys(&client).await {
-                if keys.public_key() != device_pubkey {
-                    return Err(anyhow!("Encryption Key doesn't match the announcement"));
-                };
-                Ok(keys)
-            } else {
-                Err(anyhow!("Encryption Key not found. Please create a new key"))
-            }
+            let keys = get_keys(&client).await?;
+
+            // Compare the public key from the announcement with the one from the database
+            if keys.public_key() != device_pubkey {
+                return Err(anyhow!("Encryption Key doesn't match the announcement"));
+            };
+
+            Ok(keys)
         });
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            match task.await {
-                Ok(keys) => {
-                    this.update(cx, |this, cx| {
-                        this.set_signer(keys, cx);
-                        this.wait_for_request(cx);
-                    })?;
-                }
-                Err(e) => {
-                    this.update(cx, |_this, cx| {
-                        cx.emit(DeviceEvent::not_set(e.to_string()));
-                    })?;
-                }
-            };
+            if let Ok(keys) = task.await {
+                this.update(cx, |this, cx| {
+                    this.set_signer(keys, cx);
+                    this.wait_for_request(cx);
+                })?;
+            } else {
+                this.update(cx, |this, cx| {
+                    this.request(cx);
+                })?;
+            }
             Ok(())
         }));
     }
@@ -467,21 +364,16 @@ impl DeviceRegistry {
 
         self.tasks.push(cx.background_spawn(async move {
             let public_key = signer.get_public_key().await?;
+            let id = SubscriptionId::new("dekey-requests");
 
             // Construct a filter for encryption key requests
-            let now = Filter::new()
+            let filter = Filter::new()
                 .kind(Kind::Custom(4454))
                 .author(public_key)
                 .since(Timestamp::now());
 
-            // Construct a filter for the last encryption key request
-            let last = Filter::new()
-                .kind(Kind::Custom(4454))
-                .author(public_key)
-                .limit(1);
-
             // Subscribe to the device key requests on user's write relays
-            client.subscribe(vec![now, last]).await?;
+            client.subscribe(vec![filter]).with_id(id).await?;
 
             Ok(())
         }));
@@ -537,7 +429,7 @@ impl DeviceRegistry {
                 }
                 Ok(None) => {
                     this.update(cx, |this, cx| {
-                        this.set_requesting(true, cx);
+                        this.set_initializing(false, cx);
                         this.wait_for_approval(cx);
 
                         cx.emit(DeviceEvent::Requesting);
@@ -602,12 +494,11 @@ impl DeviceRegistry {
                 Ok(keys) => {
                     this.update(cx, |this, cx| {
                         this.set_signer(keys, cx);
-                        this.set_requesting(false, cx);
                     })?;
                 }
                 Err(e) => {
                     this.update(cx, |_this, cx| {
-                        cx.emit(DeviceEvent::not_set(e.to_string()));
+                        cx.emit(DeviceEvent::error(e.to_string()));
                     })?;
                 }
             }
@@ -683,10 +574,10 @@ impl DeviceRegistry {
     /// Handle encryption request
     fn ask_for_approval(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
         // Ignore if there is already a pending request
-        if self.has_pending_request {
+        if self.pending_request {
             return;
         }
-        self.set_has_pending_request(true, cx);
+        self.set_pending_request(true, cx);
 
         // Show notification
         let notification = self.notification(event, cx);
@@ -706,8 +597,8 @@ impl DeviceRegistry {
         Notification::new()
             .type_id::<DeviceNotification>(key)
             .autohide(false)
-            .icon(IconName::UserKey)
-            .title(SharedString::from("New request"))
+            .with_kind(NotificationKind::Info)
+            .title("Encryption Key Request")
             .content(move |_this, _window, cx| {
                 v_flex()
                     .gap_2()
@@ -730,7 +621,7 @@ impl DeviceRegistry {
                                             .font_semibold()
                                             .text_xs()
                                             .text_color(cx.theme().text_muted)
-                                            .child(SharedString::from("Requester:")),
+                                            .child(SharedString::from("From:")),
                                     )
                                     .child(
                                         div()
@@ -777,8 +668,6 @@ impl DeviceRegistry {
 
                 Button::new("approve")
                     .label("Approve")
-                    .small()
-                    .primary()
                     .loading(loading.get())
                     .disabled(loading.get())
                     .on_click({

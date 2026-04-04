@@ -2,21 +2,21 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Error};
-use common::RenderedTimestamp;
+use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, px, relative, uniform_list, App, AppContext, Context, Div, Entity, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, Window,
+    App, AppContext, Context, Div, Entity, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, Styled, Subscription, Task, Window, div, px, relative, uniform_list,
 };
 use nostr_sdk::prelude::*;
-use person::{shorten_pubkey, Person, PersonRegistry};
-use smallvec::{smallvec, SmallVec};
-use state::{NostrAddress, NostrRegistry, BOOTSTRAP_RELAYS, TIMEOUT};
+use person::{Person, PersonRegistry, shorten_pubkey};
+use smallvec::{SmallVec, smallvec};
+use state::{BOOTSTRAP_RELAYS, NostrAddress, NostrRegistry, TIMEOUT};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::indicator::Indicator;
-use ui::{h_flex, v_flex, Icon, IconName, Sizable, StyledExt, WindowExtension};
+use ui::{Icon, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 pub fn init(public_key: PublicKey, window: &mut Window, cx: &mut App) -> Entity<Screening> {
     cx.new(|cx| Screening::new(public_key, window, cx))

@@ -1,11 +1,10 @@
 use std::sync::Arc;
 
-use anyhow::{Error, anyhow};
 use chrono::{Local, TimeZone};
 use gpui::{Image, ImageFormat, SharedString};
 use nostr_sdk::prelude::*;
-use qrcode::render::svg;
 use qrcode::QrCode;
+use qrcode::render::svg;
 
 const NOW: &str = "now";
 const SECONDS_IN_MINUTE: i64 = 60;
@@ -13,12 +12,12 @@ const MINUTES_IN_HOUR: i64 = 60;
 const HOURS_IN_DAY: i64 = 24;
 const DAYS_IN_MONTH: i64 = 30;
 
-pub trait RenderedTimestamp {
+pub trait TimestampExt {
     fn to_human_time(&self) -> SharedString;
     fn to_ago(&self) -> SharedString;
 }
 
-impl RenderedTimestamp for Timestamp {
+impl TimestampExt for Timestamp {
     fn to_human_time(&self) -> SharedString {
         let input_time = match Local.timestamp_opt(self.as_secs() as i64, 0) {
             chrono::LocalResult::Single(time) => time,
@@ -61,23 +60,11 @@ impl RenderedTimestamp for Timestamp {
     }
 }
 
-pub trait TextUtils {
-    fn to_public_key(&self) -> Result<PublicKey, Error>;
+pub trait StringExt {
     fn to_qr(&self) -> Option<Arc<Image>>;
 }
 
-impl<T: AsRef<str>> TextUtils for T {
-    fn to_public_key(&self) -> Result<PublicKey, Error> {
-        let s = self.as_ref();
-        if s.starts_with("nprofile1") {
-            Ok(Nip19Profile::from_bech32(s)?.public_key)
-        } else if s.starts_with("npub1") {
-            Ok(PublicKey::parse(s)?)
-        } else {
-            Err(anyhow!("Invalid public key"))
-        }
-    }
-
+impl<T: AsRef<str>> StringExt for T {
     fn to_qr(&self) -> Option<Arc<Image>> {
         let s = self.as_ref();
         let code = QrCode::new(s).unwrap();

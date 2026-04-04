@@ -4,7 +4,7 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::{Error, anyhow};
-use common::EventUtils;
+use common::EventExt;
 use gpui::{App, AppContext, Context, Entity, Global, Task, Window};
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};

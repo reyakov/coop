@@ -91,7 +91,7 @@ impl AccountSelector {
 
     fn login(&mut self, public_key: PublicKey, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
-        let task = nostr.read(cx).get_signer(&public_key, cx);
+        let task = nostr.read(cx).get_secret(public_key, cx);
 
         // Mark the public key as being logged in
         self.set_logging_in(public_key, cx);
@@ -117,7 +117,7 @@ impl AccountSelector {
         let nostr = NostrRegistry::global(cx);
 
         nostr.update(cx, |this, cx| {
-            this.remove_signer(&public_key, cx);
+            this.remove_secret(&public_key, cx);
         });
     }
 

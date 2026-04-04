@@ -4,7 +4,7 @@ use std::sync::Arc;
 pub use actions::*;
 use anyhow::{Context as AnyhowContext, Error};
 use chat::{ChatRegistry, Message, RenderedMessage, Room, RoomEvent, SendReport, SendStatus};
-use common::RenderedTimestamp;
+use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,

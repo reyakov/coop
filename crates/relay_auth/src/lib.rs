@@ -15,9 +15,9 @@ use settings::{AppSettings, AuthMode};
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
 use theme::ActiveTheme;
-use ui::button::{Button, ButtonVariants};
-use ui::notification::Notification;
-use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, v_flex};
+use ui::button::Button;
+use ui::notification::{Notification, NotificationKind};
+use ui::{Disableable, WindowExtension, v_flex};
 
 const AUTH_MESSAGE: &str =
     "Approve the authentication request to allow Coop to continue sending or receiving events.";
@@ -327,8 +327,8 @@ impl RelayAuth {
         Notification::new()
             .type_id::<AuthNotification>(challenge)
             .autohide(false)
-            .icon(IconName::Warning)
-            .title(SharedString::from("Authentication Required"))
+            .with_kind(NotificationKind::Info)
+            .title("Authentication Required")
             .content(move |_this, _window, cx| {
                 v_flex()
                     .gap_2()
@@ -344,7 +344,6 @@ impl RelayAuth {
                             .px_1p5()
                             .rounded_sm()
                             .text_xs()
-                            .font_semibold()
                             .bg(cx.theme().elevated_surface_background)
                             .text_color(cx.theme().text)
                             .child(url.clone()),
@@ -357,8 +356,6 @@ impl RelayAuth {
 
                 Button::new("approve")
                     .label("Approve")
-                    .small()
-                    .primary()
                     .loading(loading.get())
                     .disabled(loading.get())
                     .on_click({

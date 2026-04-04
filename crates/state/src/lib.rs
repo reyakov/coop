@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,7 +9,6 @@ use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, SharedString,
 use nostr_connect::prelude::*;
 use nostr_gossip_memory::prelude::*;
 use nostr_lmdb::prelude::*;
-use nostr_memory::prelude::*;
 use nostr_sdk::prelude::*;
 
 mod blossom;
@@ -44,18 +44,14 @@ impl Global for GlobalNostrRegistry {}
 /// Signer event.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateEvent {
-    /// Creating the signer
-    Creating,
     /// Connecting to the bootstrapping relay
     Connecting,
     /// Connected to the bootstrapping relay
     Connected,
-    /// Fetching the relay list
-    FetchingRelayList,
-    /// User has not set up NIP-65 relays
-    RelayNotConfigured,
-    /// Connected to NIP-65 relays
-    RelayConnected,
+    /// Creating the signer
+    Creating,
+    /// Show the identity dialog
+    Show,
     /// A new signer has been set
     SignerSet,
     /// An error occurred
@@ -80,16 +76,19 @@ pub struct NostrRegistry {
     /// Nostr signer
     signer: Arc<CoopSigner>,
 
-    /// Local public keys
+    /// All local stored identities
     npubs: Entity<Vec<PublicKey>>,
 
-    /// App keys
+    /// Keys directory
+    key_dir: PathBuf,
+
+    /// Master app keys used for various operations.
     ///
-    /// Used for Nostr Connect and NIP-4e operations
+    /// Example: Nostr Connect and NIP-4e operations
     app_keys: Keys,
 
     /// Tasks for asynchronous operations
-    tasks: Vec<Task<()>>,
+    tasks: Vec<Task<Result<(), Error>>>,
 }
 
 impl EventEmitter<StateEvent> for NostrRegistry {}
@@ -107,55 +106,57 @@ impl NostrRegistry {
 
     /// Create a new nostr instance
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let key_dir = config_dir().join("keys");
+        let app_keys = get_or_init_app_keys(cx).unwrap_or(Keys::generate());
+
         // Construct the nostr signer
-        let app_keys = get_or_init_app_keys().unwrap_or(Keys::generate());
         let signer = Arc::new(CoopSigner::new(app_keys.clone()));
 
-        // Construct the nostr npubs entity
-        let npubs = cx.new(|_| vec![]);
+        // Get all local stored npubs
+        let npubs = cx.new(|_| match Self::discover(&key_dir) {
+            Ok(npubs) => npubs,
+            Err(e) => {
+                log::error!("Failed to discover npubs: {e}");
+                vec![]
+            }
+        });
 
-        // Construct the nostr client builder
-        let mut builder = ClientBuilder::default()
+        // Construct the nostr lmdb instance
+        let lmdb = cx.foreground_executor().block_on(async move {
+            NostrLmdb::open(config_dir().join("nostr"))
+                .await
+                .expect("Failed to initialize database")
+        });
+
+        // Construct the nostr client
+        let client = ClientBuilder::default()
             .signer(signer.clone())
+            .database(lmdb)
             .gossip(NostrGossipMemory::unbounded())
-            .gossip_config(
-                GossipConfig::default()
-                    .no_background_refresh()
-                    .sync_idle_timeout(Duration::from_secs(TIMEOUT))
-                    .sync_initial_timeout(Duration::from_millis(600)),
-            )
             .automatic_authentication(false)
-            .verify_subscriptions(false)
             .connect_timeout(Duration::from_secs(10))
             .sleep_when_idle(SleepWhenIdle::Enabled {
                 timeout: Duration::from_secs(600),
-            });
-
-        // Add database if not in debug mode
-        if !cfg!(debug_assertions) {
-            // Construct the nostr lmdb instance
-            let lmdb = cx.foreground_executor().block_on(async move {
-                NostrLmdb::open(config_dir().join("nostr"))
-                    .await
-                    .expect("Failed to initialize database")
-            });
-            builder = builder.database(lmdb);
-        } else {
-            builder = builder.database(MemoryDatabase::unbounded())
-        }
-
-        // Build the nostr client
-        let client = builder.build();
+            })
+            .build();
 
         // Run at the end of current cycle
         cx.defer_in(window, |this, _window, cx| {
             this.connect(cx);
+            // Create an identity if none exists
+            if this.npubs.read(cx).is_empty() {
+                this.create_identity(cx);
+            } else {
+                // Show the identity dialog
+                cx.emit(StateEvent::Show);
+            }
         });
 
         Self {
             client,
             signer,
             npubs,
+            key_dir,
             app_keys,
             tasks: vec![],
         }
@@ -179,6 +180,33 @@ impl NostrRegistry {
     /// Get the app keys
     pub fn keys(&self) -> Keys {
         self.app_keys.clone()
+    }
+
+    /// Discover all npubs in the keys directory
+    fn discover(dir: &PathBuf) -> Result<Vec<PublicKey>, Error> {
+        // Ensure keys directory exists
+        std::fs::create_dir_all(dir)?;
+
+        let files = std::fs::read_dir(dir)?;
+        let mut entries = Vec::new();
+        let mut npubs: Vec<PublicKey> = Vec::new();
+
+        for file in files.flatten() {
+            let metadata = file.metadata()?;
+            let modified_time = metadata.modified()?;
+            let name = file.file_name().into_string().unwrap().replace(".npub", "");
+            entries.push((modified_time, name));
+        }
+
+        // Sort by modification time (most recent first)
+        entries.sort_by(|a, b| b.0.cmp(&a.0));
+
+        for (_, name) in entries {
+            let public_key = PublicKey::parse(&name)?;
+            npubs.push(public_key);
+        }
+
+        Ok(npubs)
     }
 
     /// Connect to the bootstrapping relays
@@ -219,104 +247,142 @@ impl NostrRegistry {
         // Emit connecting event
         cx.emit(StateEvent::Connecting);
 
-        self.tasks
-            .push(cx.spawn(async move |this, cx| match task.await {
-                Ok(_) => {
-                    this.update(cx, |this, cx| {
-                        cx.emit(StateEvent::Connected);
-                        this.get_npubs(cx);
-                    })
-                    .ok();
-                }
-                Err(e) => {
-                    this.update(cx, |_this, cx| {
-                        cx.emit(StateEvent::error(e.to_string()));
-                    })
-                    .ok();
-                }
-            }));
-    }
-
-    /// Get all used npubs
-    fn get_npubs(&mut self, cx: &mut Context<Self>) {
-        let npubs = self.npubs.downgrade();
-
-        let task: Task<Result<Vec<PublicKey>, Error>> = cx.background_spawn(async move {
-            let dir = config_dir().join("keys");
-            // Ensure keys directory exists
-            smol::fs::create_dir_all(&dir).await?;
-
-            let mut files = smol::fs::read_dir(&dir).await?;
-            let mut entries = Vec::new();
-
-            while let Some(Ok(entry)) = files.next().await {
-                let metadata = entry.metadata().await?;
-                let modified_time = metadata.modified()?;
-                let name = entry
-                    .file_name()
-                    .into_string()
-                    .unwrap()
-                    .replace(".npub", "");
-
-                entries.push((modified_time, name));
-            }
-
-            // Sort by modification time (most recent first)
-            entries.sort_by(|a, b| b.0.cmp(&a.0));
-
-            let mut npubs = Vec::new();
-
-            for (_, name) in entries {
-                let public_key = PublicKey::parse(&name)?;
-                npubs.push(public_key);
-            }
-
-            Ok(npubs)
-        });
-
         self.tasks.push(cx.spawn(async move |this, cx| {
-            match task.await {
-                Ok(public_keys) => match public_keys.is_empty() {
-                    true => {
-                        this.update(cx, |this, cx| {
-                            this.create_identity(cx);
-                        })
-                        .ok();
-                    }
-                    false => {
-                        // TODO: auto login
-                        npubs
-                            .update(cx, |this, cx| {
-                                this.extend(public_keys);
-                                cx.notify();
-                            })
-                            .ok();
-                    }
-                },
-                Err(e) => {
-                    this.update(cx, |_this, cx| {
-                        cx.emit(StateEvent::error(e.to_string()));
-                    })
-                    .ok();
-                }
+            if let Err(e) = task.await {
+                this.update(cx, |_this, cx| {
+                    cx.emit(StateEvent::error(e.to_string()));
+                })?;
+            } else {
+                this.update(cx, |_this, cx| {
+                    cx.emit(StateEvent::Connected);
+                })?;
             }
+
+            Ok(())
         }));
     }
 
+    /// Get the secret for a given npub.
+    pub fn get_secret(
+        &self,
+        public_key: PublicKey,
+        cx: &App,
+    ) -> Task<Result<Arc<dyn NostrSigner>, Error>> {
+        let npub = public_key.to_bech32().unwrap();
+        let key_path = self.key_dir.join(format!("{}.npub", npub));
+        let app_keys = self.app_keys.clone();
+
+        if let Ok(payload) = std::fs::read_to_string(key_path) {
+            if !payload.is_empty() {
+                cx.background_spawn(async move {
+                    let decrypted = app_keys.nip44_decrypt(&public_key, &payload).await?;
+                    let secret = SecretKey::parse(&decrypted)?;
+                    let keys = Keys::new(secret);
+
+                    Ok(keys.into_nostr_signer())
+                })
+            } else {
+                self.get_secret_keyring(&npub, cx)
+            }
+        } else {
+            self.get_secret_keyring(&npub, cx)
+        }
+    }
+
+    /// Get the secret for a given npub in the OS credentials store.
+    #[deprecated = "Use get_secret instead"]
+    fn get_secret_keyring(
+        &self,
+        user: &str,
+        cx: &App,
+    ) -> Task<Result<Arc<dyn NostrSigner>, Error>> {
+        let read = cx.read_credentials(user);
+        let app_keys = self.app_keys.clone();
+
+        cx.background_spawn(async move {
+            let (_, secret) = read
+                .await
+                .map_err(|_| anyhow!("Failed to get signer. Please re-import the secret key"))?
+                .ok_or_else(|| anyhow!("Failed to get signer. Please re-import the secret key"))?;
+
+            // Try to parse as a direct secret key first
+            if let Ok(secret_key) = SecretKey::from_slice(&secret) {
+                return Ok(Keys::new(secret_key).into_nostr_signer());
+            }
+
+            // Convert the secret into string
+            let sec = String::from_utf8(secret)
+                .map_err(|_| anyhow!("Failed to parse secret as UTF-8"))?;
+
+            // Try to parse as a NIP-46 URI
+            let uri =
+                NostrConnectUri::parse(&sec).map_err(|_| anyhow!("Failed to parse NIP-46 URI"))?;
+
+            let timeout = Duration::from_secs(NOSTR_CONNECT_TIMEOUT);
+            let mut nip46 = NostrConnect::new(uri, app_keys, timeout, None)?;
+
+            // Set the auth URL handler
+            nip46.auth_url_handler(CoopAuthUrlHandler);
+
+            Ok(nip46.into_nostr_signer())
+        })
+    }
+
+    /// Add a new npub to the keys directory
+    fn write_secret(
+        &self,
+        public_key: PublicKey,
+        secret: String,
+        cx: &App,
+    ) -> Task<Result<(), Error>> {
+        let npub = public_key.to_bech32().unwrap();
+        let key_path = self.key_dir.join(format!("{}.npub", npub));
+        let app_keys = self.app_keys.clone();
+
+        cx.background_spawn(async move {
+            // If the secret starts with "bunker://" (nostr connect), use it directly; otherwise, encrypt it
+            let content = if secret.starts_with("bunker://") {
+                secret
+            } else {
+                app_keys.nip44_encrypt(&public_key, &secret).await?
+            };
+
+            // Write the encrypted secret to the keys directory
+            smol::fs::write(key_path, &content).await?;
+
+            Ok(())
+        })
+    }
+
+    /// Remove a secret
+    pub fn remove_secret(&mut self, public_key: &PublicKey, cx: &mut Context<Self>) {
+        let public_key = public_key.to_owned();
+        let npub = public_key.to_bech32().unwrap();
+
+        let keys_dir = config_dir().join("keys");
+        let key_path = keys_dir.join(format!("{}.npub", npub));
+
+        // Remove the secret file from the keys directory
+        std::fs::remove_file(key_path).ok();
+
+        self.npubs.update(cx, |this, cx| {
+            this.retain(|k| k != &public_key);
+            cx.notify();
+        });
+    }
+
     /// Create a new identity
-    fn create_identity(&mut self, cx: &mut Context<Self>) {
+    pub fn create_identity(&mut self, cx: &mut Context<Self>) {
         let client = self.client();
         let keys = Keys::generate();
         let async_keys = keys.clone();
 
-        let username = keys.public_key().to_bech32().unwrap();
-        let secret = keys.secret_key().to_secret_bytes();
-
-        // Create a write credential task
-        let write_credential = cx.write_credentials(&username, &username, &secret);
-
         // Emit creating event
         cx.emit(StateEvent::Creating);
+
+        // Create the write secret task
+        let write_secret =
+            self.write_secret(keys.public_key(), keys.secret_key().to_secret_hex(), cx);
 
         // Run async tasks in background
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
@@ -362,14 +428,10 @@ impl NostrRegistry {
             let event = EventBuilder::nip17_relay_list(relays).sign(&signer).await?;
 
             // Publish messaging relay list event
-            client
-                .send_event(&event)
-                .to_nip65()
-                .ack_policy(AckPolicy::none())
-                .await?;
+            client.send_event(&event).to_nip65().await?;
 
             // Write user's credentials to the system keyring
-            write_credential.await?;
+            write_secret.await?;
 
             Ok(())
         });
@@ -379,56 +441,17 @@ impl NostrRegistry {
                 Ok(_) => {
                     this.update(cx, |this, cx| {
                         this.set_signer(keys, cx);
-                    })
-                    .ok();
+                    })?;
                 }
                 Err(e) => {
                     this.update(cx, |_this, cx| {
                         cx.emit(StateEvent::error(e.to_string()));
-                    })
-                    .ok();
+                    })?;
                 }
             };
+
+            Ok(())
         }));
-    }
-
-    /// Get the signer in keyring by username
-    pub fn get_signer(
-        &self,
-        public_key: &PublicKey,
-        cx: &App,
-    ) -> Task<Result<Arc<dyn NostrSigner>, Error>> {
-        let username = public_key.to_bech32().unwrap();
-        let app_keys = self.app_keys.clone();
-        let read_credential = cx.read_credentials(&username);
-
-        cx.spawn(async move |_cx| {
-            let (_, secret) = read_credential
-                .await
-                .map_err(|_| anyhow!("Failed to get signer. Please re-import the secret key"))?
-                .ok_or_else(|| anyhow!("Failed to get signer. Please re-import the secret key"))?;
-
-            // Try to parse as a direct secret key first
-            if let Ok(secret_key) = SecretKey::from_slice(&secret) {
-                return Ok(Keys::new(secret_key).into_nostr_signer());
-            }
-
-            // Convert the secret into string
-            let sec = String::from_utf8(secret)
-                .map_err(|_| anyhow!("Failed to parse secret as UTF-8"))?;
-
-            // Try to parse as a NIP-46 URI
-            let uri =
-                NostrConnectUri::parse(&sec).map_err(|_| anyhow!("Failed to parse NIP-46 URI"))?;
-
-            let timeout = Duration::from_secs(NOSTR_CONNECT_TIMEOUT);
-            let mut nip46 = NostrConnect::new(uri, app_keys, timeout, None)?;
-
-            // Set the auth URL handler
-            nip46.auth_url_handler(CoopAuthUrlHandler);
-
-            Ok(nip46.into_nostr_signer())
-        })
     }
 
     /// Set the signer for the nostr client and verify the public key
@@ -449,15 +472,6 @@ impl NostrRegistry {
             let signer = client.signer().context("Signer not found")?;
             let public_key = signer.get_public_key().await?;
 
-            let npub = public_key.to_bech32().unwrap();
-            let keys_dir = config_dir().join("keys");
-
-            // Ensure keys directory exists
-            smol::fs::create_dir_all(&keys_dir).await?;
-
-            let key_path = keys_dir.join(format!("{}.npub", npub));
-            smol::fs::write(key_path, "").await?;
-
             log::info!("Signer's public key: {}", public_key);
             Ok(public_key)
         });
@@ -465,9 +479,7 @@ impl NostrRegistry {
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
                 Ok(public_key) => {
-                    // Update states
                     this.update(cx, |this, cx| {
-                        this.ensure_relay_list(&public_key, cx);
                         // Add public key to npubs if not already present
                         this.npubs.update(cx, |this, cx| {
                             if !this.contains(&public_key) {
@@ -475,65 +487,43 @@ impl NostrRegistry {
                                 cx.notify();
                             }
                         });
+
                         // Emit signer changed event
                         cx.emit(StateEvent::SignerSet);
-                    })
-                    .ok();
+                    })?;
                 }
                 Err(e) => {
                     this.update(cx, |_this, cx| {
                         cx.emit(StateEvent::error(e.to_string()));
-                    })
-                    .ok();
+                    })?;
                 }
             };
-        }));
-    }
 
-    /// Remove a signer from the keyring
-    pub fn remove_signer(&mut self, public_key: &PublicKey, cx: &mut Context<Self>) {
-        let public_key = public_key.to_owned();
-        let npub = public_key.to_bech32().unwrap();
-        let keys_dir = config_dir().join("keys");
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            let key_path = keys_dir.join(format!("{}.npub", npub));
-            smol::fs::remove_file(key_path).await.ok();
-
-            this.update(cx, |this, cx| {
-                this.npubs().update(cx, |this, cx| {
-                    this.retain(|k| k != &public_key);
-                    cx.notify();
-                });
-            })
-            .ok();
+            Ok(())
         }));
     }
 
     /// Add a key signer to keyring
     pub fn add_key_signer(&mut self, keys: &Keys, cx: &mut Context<Self>) {
         let keys = keys.clone();
-        let username = keys.public_key().to_bech32().unwrap();
-        let secret = keys.secret_key().to_secret_bytes();
-
-        // Write the credential to the keyring
-        let write_credential = cx.write_credentials(&username, "keys", &secret);
+        let write_secret =
+            self.write_secret(keys.public_key(), keys.secret_key().to_secret_hex(), cx);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            match write_credential.await {
+            match write_secret.await {
                 Ok(_) => {
                     this.update(cx, |this, cx| {
                         this.set_signer(keys, cx);
-                    })
-                    .ok();
+                    })?;
                 }
                 Err(e) => {
                     this.update(cx, |_this, cx| {
                         cx.emit(StateEvent::error(e.to_string()));
-                    })
-                    .ok();
+                    })?;
                 }
             };
+
+            Ok(())
         }));
     }
 
@@ -554,152 +544,33 @@ impl NostrRegistry {
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
                 Ok((public_key, uri)) => {
-                    let username = public_key.to_bech32().unwrap();
-                    let write_credential = this
-                        .read_with(cx, |_this, cx| {
-                            cx.write_credentials(
-                                &username,
-                                "nostrconnect",
-                                uri.to_string().as_bytes(),
-                            )
-                        })
-                        .unwrap();
+                    // Create the write secret task
+                    let write_secret = this.read_with(cx, |this, cx| {
+                        this.write_secret(public_key, uri.to_string(), cx)
+                    })?;
 
-                    match write_credential.await {
+                    match write_secret.await {
                         Ok(_) => {
                             this.update(cx, |this, cx| {
                                 this.set_signer(nip46, cx);
-                            })
-                            .ok();
+                            })?;
                         }
                         Err(e) => {
                             this.update(cx, |_this, cx| {
                                 cx.emit(StateEvent::error(e.to_string()));
-                            })
-                            .ok();
+                            })?;
                         }
                     }
                 }
                 Err(e) => {
                     this.update(cx, |_this, cx| {
                         cx.emit(StateEvent::error(e.to_string()));
-                    })
-                    .ok();
+                    })?;
                 }
             };
-        }));
-    }
 
-    /// Ensure the relay list is fetched for the given public key
-    pub fn ensure_relay_list(&mut self, public_key: &PublicKey, cx: &mut Context<Self>) {
-        let task = self.get_event(public_key, Kind::RelayList, cx);
-
-        // Emit a fetching event before starting the task
-        cx.emit(StateEvent::FetchingRelayList);
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            match task.await {
-                Ok(event) => {
-                    this.update(cx, |this, cx| {
-                        this.ensure_connection(&event, cx);
-                    })
-                    .ok();
-                }
-                Err(e) => {
-                    this.update(cx, |_this, cx| {
-                        cx.emit(StateEvent::RelayNotConfigured);
-                        cx.emit(StateEvent::error(e.to_string()));
-                    })
-                    .ok();
-                }
-            };
-        }));
-    }
-
-    /// Ensure that the user is connected to the relay specified in the NIP-65 event.
-    pub fn ensure_connection(&mut self, event: &Event, cx: &mut Context<Self>) {
-        let client = self.client();
-        // Extract the relay list from the event
-        let relays: Vec<(RelayUrl, Option<RelayMetadata>)> = nip65::extract_relay_list(event)
-            .map(|(url, metadata)| (url.to_owned(), metadata.to_owned()))
-            .collect();
-
-        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            for (url, metadata) in relays.into_iter() {
-                match metadata {
-                    Some(RelayMetadata::Read) => {
-                        client
-                            .add_relay(url)
-                            .capabilities(RelayCapabilities::READ)
-                            .connect_timeout(Duration::from_secs(TIMEOUT))
-                            .and_connect()
-                            .await?;
-                    }
-                    Some(RelayMetadata::Write) => {
-                        client
-                            .add_relay(url)
-                            .capabilities(RelayCapabilities::WRITE)
-                            .connect_timeout(Duration::from_secs(TIMEOUT))
-                            .and_connect()
-                            .await?;
-                    }
-                    None => {
-                        client
-                            .add_relay(url)
-                            .capabilities(RelayCapabilities::NONE)
-                            .connect_timeout(Duration::from_secs(TIMEOUT))
-                            .and_connect()
-                            .await?;
-                    }
-                }
-            }
             Ok(())
-        });
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            match task.await {
-                Ok(_) => {
-                    this.update(cx, |_this, cx| {
-                        cx.emit(StateEvent::RelayConnected);
-                    })
-                    .ok();
-                }
-                Err(e) => {
-                    this.update(cx, |_this, cx| {
-                        cx.emit(StateEvent::RelayNotConfigured);
-                        cx.emit(StateEvent::error(e.to_string()));
-                    })
-                    .ok();
-                }
-            };
         }));
-    }
-
-    /// Get an event with the given author and kind.
-    pub fn get_event(
-        &self,
-        author: &PublicKey,
-        kind: Kind,
-        cx: &App,
-    ) -> Task<Result<Event, Error>> {
-        let client = self.client();
-        let public_key = *author;
-
-        cx.background_spawn(async move {
-            let filter = Filter::new().kind(kind).author(public_key).limit(1);
-            let mut stream = client
-                .stream_events(filter)
-                .timeout(Duration::from_millis(800))
-                .await?;
-
-            while let Some((_url, res)) = stream.next().await {
-                if let Ok(event) = res {
-                    return Ok(event);
-                }
-            }
-
-            Err(anyhow!("No event found"))
-        })
     }
 
     /// Get the public key of a NIP-05 address
@@ -857,29 +728,33 @@ impl NostrRegistry {
     }
 }
 
-/// Get or create a new app keys
-fn get_or_init_app_keys() -> Result<Keys, Error> {
-    let dir = config_dir().join(".app_keys");
-
-    let content = match std::fs::read(&dir) {
-        Ok(content) => content,
-        Err(_) => {
-            // Generate new keys if file doesn't exist
-            let keys = Keys::generate();
-            let secret_key = keys.secret_key();
-
-            // Create directory and write secret key
-            std::fs::create_dir_all(dir.parent().unwrap())?;
-            std::fs::write(&dir, secret_key.to_secret_bytes())?;
-
-            return Ok(keys);
+/// Get or create new app keys
+fn get_or_init_app_keys(cx: &App) -> Result<Keys, Error> {
+    let read = cx.read_credentials(CLIENT_NAME);
+    let stored_keys: Option<Keys> = cx.foreground_executor().block_on(async move {
+        if let Ok(Some((_, secret))) = read.await {
+            SecretKey::from_slice(&secret).map(Keys::new).ok()
+        } else {
+            None
         }
-    };
+    });
 
-    let secret_key = SecretKey::from_slice(&content)?;
-    let keys = Keys::new(secret_key);
+    if let Some(keys) = stored_keys {
+        Ok(keys)
+    } else {
+        let keys = Keys::generate();
+        let user = keys.public_key().to_hex();
+        let secret = keys.secret_key().to_secret_bytes();
+        let write = cx.write_credentials(CLIENT_NAME, &user, &secret);
 
-    Ok(keys)
+        cx.foreground_executor().block_on(async move {
+            if let Err(e) = write.await {
+                log::error!("Keyring not available or panic: {e}")
+            }
+        });
+
+        Ok(keys)
+    }
 }
 
 fn default_relay_list() -> Vec<(RelayUrl, Option<RelayMetadata>)> {
@@ -911,7 +786,7 @@ fn default_messaging_relays() -> Vec<RelayUrl> {
     vec![
         RelayUrl::parse("wss://nos.lol").unwrap(),
         RelayUrl::parse("wss://nip17.com").unwrap(),
-        RelayUrl::parse("wss://relay.0xchat.com").unwrap(),
+        RelayUrl::parse("wss://auth.nostr1.com").unwrap(),
     ]
 }
 

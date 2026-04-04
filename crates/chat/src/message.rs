@@ -1,7 +1,7 @@
 use std::hash::Hash;
 use std::ops::Range;
 
-use common::{EventUtils, NostrParser};
+use common::{EventExt, NostrParser};
 use gpui::SharedString;
 use nostr_sdk::prelude::*;
 

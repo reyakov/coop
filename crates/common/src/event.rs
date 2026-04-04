@@ -3,12 +3,12 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
 
-pub trait EventUtils {
+pub trait EventExt {
     fn uniq_id(&self) -> u64;
     fn extract_public_keys(&self) -> Vec<PublicKey>;
 }
 
-impl EventUtils for Event {
+impl EventExt for Event {
     fn uniq_id(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         let mut pubkeys: Vec<PublicKey> = self.extract_public_keys();
@@ -25,7 +25,7 @@ impl EventUtils for Event {
     }
 }
 
-impl EventUtils for UnsignedEvent {
+impl EventExt for UnsignedEvent {
     fn uniq_id(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
         let mut pubkeys: Vec<PublicKey> = vec![];

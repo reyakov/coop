@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use common::TextUtils;
+use common::StringExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AppContext, Context, Entity, Image, IntoElement, ParentElement, Render, SharedString, Styled,
