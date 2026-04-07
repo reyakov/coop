@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
-default-members = ["crates/coop"]
+members = ["crates/*", "desktop", "web", "mobile"]
+default-members = ["desktop"]
 
 [workspace.package]
 version = "1.0.0-beta3"

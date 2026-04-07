@@ -98,9 +98,9 @@ cp $(find_libs) "${coop_dir}/lib"
 
 # Icons
 mkdir -p "${coop_dir}/share/icons/hicolor/512x512/apps"
-cp "crates/coop/resources/icon.png" "${coop_dir}/share/icons/hicolor/512x512/apps/coop.png"
+cp "desktop/resources/icon.png" "${coop_dir}/share/icons/hicolor/512x512/apps/coop.png"
 mkdir -p "${coop_dir}/share/icons/hicolor/1024x1024/apps"
-cp "crates/coop/resources/icon@2x.png" "${coop_dir}/share/icons/hicolor/1024x1024/apps/coop.png"
+cp "desktop/resources/icon@2x.png" "${coop_dir}/share/icons/hicolor/1024x1024/apps/coop.png"
 
 # .desktop
 export DO_STARTUP_NOTIFY="true"
@@ -110,7 +110,7 @@ export APP_ARGS="%U"
 export APP_NAME="Coop"
 
 mkdir -p "${coop_dir}/share/applications"
-envsubst < "crates/coop/resources/coop.desktop.in" > "${coop_dir}/share/applications/coop.desktop"
+envsubst < "desktop/resources/coop.desktop.in" > "${coop_dir}/share/applications/coop.desktop"
 
 # Create archive out of everything that's in the temp directory
 arch=$(uname -m)

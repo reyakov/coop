@@ -93,7 +93,7 @@ echo "      Created flathub/release-info.xml"
 # Step 4: Generate the metainfo file with release info
 echo "[4/5] Generating metainfo.xml..."
 export APP_ID APP_NAME BRANDING_LIGHT BRANDING_DARK
-cat crates/coop/resources/flatpak/coop.metainfo.xml.in | \
+cat desktop/resources/flatpak/coop.metainfo.xml.in | \
     sed -e "/@release_info@/r flathub/release-info.xml" -e '/@release_info@/d' \
     > flathub/${APP_ID}.metainfo.xml
 echo "      Created flathub/${APP_ID}.metainfo.xml"
@@ -153,8 +153,8 @@ modules:
       - install -Dm755 target/release/coop /app/bin/coop
 
       # Install icons
-      - install -Dm644 crates/coop/resources/icon.png /app/share/icons/hicolor/512x512/apps/su.reya.coop.png
-      - install -Dm644 crates/coop/resources/icon@2x.png /app/share/icons/hicolor/1024x1024/apps/su.reya.coop.png
+      - install -Dm644 desktop/resources/icon.png /app/share/icons/hicolor/512x512/apps/su.reya.coop.png
+      - install -Dm644 desktop/resources/icon@2x.png /app/share/icons/hicolor/1024x1024/apps/su.reya.coop.png
 
       # Install desktop file
       - |
@@ -164,7 +164,7 @@ modules:
         export APP_CLI="coop"
         export APP_ARGS="%U"
         export DO_STARTUP_NOTIFY="true"
-        envsubst < crates/coop/resources/coop.desktop.in > coop.desktop
+        envsubst < desktop/resources/coop.desktop.in > coop.desktop
         install -Dm644 coop.desktop /app/share/applications/su.reya.coop.desktop
 
       # Install metainfo (use pre-generated one with release info)

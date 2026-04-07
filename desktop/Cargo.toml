@@ -15,7 +15,7 @@ description = "Chat Freely, Stay Private on Nostr"
 identifier = "su.reya.coop"
 category = "SocialNetworking"
 version = "1.0.0-beta3"
-out-dir = "../../dist"
+out-dir = "../dist"
 before-packaging-command = "cargo build --release"
 resources = ["Cargo.toml", "src"]
 icons = [
@@ -27,19 +27,19 @@ icons = [
 ]
 
 [dependencies]
-assets = { path = "../assets" }
-ui = { path = "../ui" }
-title_bar = { path = "../title_bar" }
-theme = { path = "../theme" }
-common = { path = "../common" }
-state = { path = "../state" }
-device = { path = "../device" }
-chat = { path = "../chat" }
-chat_ui = { path = "../chat_ui" }
-settings = { path = "../settings" }
-auto_update = { path = "../auto_update" }
-person = { path = "../person" }
-relay_auth = { path = "../relay_auth" }
+assets = { path = "../crates/assets" }
+ui = { path = "../crates/ui" }
+title_bar = { path = "../crates/title_bar" }
+theme = { path = "../crates/theme" }
+common = { path = "../crates/common" }
+state = { path = "../crates/state" }
+device = { path = "../crates/device" }
+chat = { path = "../crates/chat" }
+chat_ui = { path = "../crates/chat_ui" }
+settings = { path = "../crates/settings" }
+auto_update = { path = "../crates/auto_update" }
+person = { path = "../crates/person" }
+relay_auth = { path = "../crates/relay_auth" }
 
 gpui.workspace = true
 gpui_platform.workspace = true

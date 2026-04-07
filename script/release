@@ -13,7 +13,7 @@ fi
 
 NEW_VERSION="$1"
 WORKSPACE_CARGO="Cargo.toml"
-CRATE_CARGO="crates/coop/Cargo.toml"
+CRATE_CARGO="desktop/Cargo.toml"
 
 # Check if both Cargo.toml files exist
 if [ ! -f "$WORKSPACE_CARGO" ]; then

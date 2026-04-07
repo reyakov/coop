@@ -50,7 +50,7 @@
         },
         {
           "type": "dir",
-          "path": "./crates/coop/resources"
+          "path": "./desktop/resources"
         }
       ]
     }

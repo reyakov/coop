@@ -1,0 +1,51 @@
+[package]
+name = "coop_mobile"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "coop_mobile"
+crate-type = ["cdylib", "staticlib", "lib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "coop_mobile"
+path = "src/main.rs"
+
+[dependencies]
+assets = { path = "../crates/assets" }
+ui = { path = "../crates/ui" }
+theme = { path = "../crates/theme" }
+common = { path = "../crates/common" }
+state = { path = "../crates/state" }
+device = { path = "../crates/device" }
+chat = { path = "../crates/chat" }
+settings = { path = "../crates/settings" }
+person = { path = "../crates/person" }
+relay_auth = { path = "../crates/relay_auth" }
+
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui_tokio.workspace = true
+gpui-mobile = { git = "https://github.com/itsbalamurali/gpui-mobile" }
+
+nostr-connect.workspace = true
+nostr-sdk.workspace = true
+
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+smallvec.workspace = true
+smol.workspace = true
+futures.workspace = true
+oneshot.workspace = true
+tracing-subscriber.workspace = true
+
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android_logger = "0.15"
+android-activity = { version = "0.6", features = ["native-activity"] }

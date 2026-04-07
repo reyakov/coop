@@ -24,7 +24,7 @@ export ICON_FILE="icon"
 export CHANNEL="stable"
 
 # Generate manifest
-envsubst < "crates/coop/resources/flatpak/manifest-template.json" > "$APP_ID.json"
+envsubst < "desktop/resources/flatpak/manifest-template.json" > "$APP_ID.json"
 
 # Build Flatpak
 flatpak-builder --user --install --force-clean build "$APP_ID.json"
