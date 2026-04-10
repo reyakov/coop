@@ -253,6 +253,13 @@ impl ChatRegistry {
                                     event_map.insert(rumor.id.unwrap(), (event.id, dekey));
                                 }
 
+                                if rumor.kind != Kind::PrivateDirectMessage
+                                    || rumor.kind != Kind::Custom(15)
+                                {
+                                    log::info!("Rumor is not releated to NIP17");
+                                    continue;
+                                }
+
                                 // Check if the rumor has a recipient
                                 if rumor.tags.is_empty() {
                                     let signal =
