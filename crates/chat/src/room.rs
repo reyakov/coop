@@ -401,8 +401,8 @@ impl Room {
                 .into_iter()
                 .filter_map(|event| UnsignedEvent::from_json(&event.content).ok())
                 .filter(|event| {
-                    // Filter out private direct messages and file messages
-                    event.kind != Kind::PrivateDirectMessage && event.kind != Kind::Custom(15)
+                    // Only process private direct messages and file messages
+                    event.kind == Kind::PrivateDirectMessage || event.kind == Kind::Custom(15)
                 })
                 .sorted_by_key(|message| message.created_at)
                 .collect();
