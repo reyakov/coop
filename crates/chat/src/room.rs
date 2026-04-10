@@ -602,7 +602,8 @@ async fn send_gift_wrap<T>(
 where
     T: NostrSigner + 'static,
 {
-    let mut extra_tags = vec![];
+    let k_tag = Tag::custom(TagKind::k(), vec!["14"]);
+    let mut extra_tags = vec![k_tag];
 
     // Determine the receiver public key based on the config
     let receiver = match config {
