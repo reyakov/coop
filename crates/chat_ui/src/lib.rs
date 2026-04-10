@@ -4,14 +4,14 @@ use std::sync::Arc;
 pub use actions::*;
 use anyhow::{Context as AnyhowContext, Error};
 use chat::{ChatRegistry, Message, RenderedMessage, Room, RoomEvent, SendReport, SendStatus};
-use common::TimestampExt;
+use common::{TimestampExt, coop_cache};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, MouseButton,
-    ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, StatefulInteractiveElement,
-    Styled, StyledImage, Subscription, Task, WeakEntity, Window, deferred, div, img, list, px, red,
-    relative, svg, white,
+    ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, SharedUri,
+    StatefulInteractiveElement, Styled, StyledImage, Subscription, Task, WeakEntity, Window,
+    deferred, div, img, list, px, red, relative, svg, white,
 };
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
@@ -914,7 +914,8 @@ impl ChatPanel {
                             .when(has_replies, |this| {
                                 this.children(self.render_message_replies(replies, cx))
                             })
-                            .child(rendered_text),
+                            .child(rendered_text)
+                            .child(self.render_media(&message.media, cx)),
                     ),
             )
             .child(
@@ -939,6 +940,55 @@ impl ChatPanel {
             }))
             .hover(|this| this.bg(cx.theme().surface_background))
             .into_any_element()
+    }
+
+    fn render_media(&self, media: &[SharedUri], cx: &Context<Self>) -> impl IntoElement {
+        // No media: return empty div
+        if media.is_empty() {
+            return div();
+        };
+
+        // Single media item: render full-width image
+        if media.len() == 1 {
+            return div().child(
+                img(media[0].clone())
+                    .border_1()
+                    .border_color(cx.theme().border_variant)
+                    .h(px(250.))
+                    .object_fit(ObjectFit::Cover)
+                    .rounded(cx.theme().radius),
+            );
+        }
+
+        // Multiple media items: render in a row
+        div()
+            .w_full()
+            .flex_1()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap_2()
+            .children({
+                let mut items = vec![];
+
+                for (ix, item) in media.iter().enumerate() {
+                    items.push(
+                        div()
+                            .id(format!("media-{ix}"))
+                            .flex_grow_0()
+                            .flex_shrink_0()
+                            .child(
+                                img(item.clone())
+                                    .h_32()
+                                    .border_1()
+                                    .border_color(cx.theme().border_variant)
+                                    .rounded(cx.theme().radius),
+                            ),
+                    );
+                }
+
+                items
+            })
     }
 
     fn render_message_replies(
@@ -1435,6 +1485,7 @@ impl Focusable for ChatPanel {
 impl Render for ChatPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
+            .image_cache(coop_cache(self.id.clone(), 100))
             .on_action(cx.listener(Self::on_command))
             .size_full()
             .when(*self.subject_bar.read(cx), |this| {

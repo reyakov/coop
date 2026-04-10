@@ -4,18 +4,18 @@ use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Error};
 use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
-use common::{DebouncedDelay, TimestampExt};
+use common::{DebouncedDelay, TimestampExt, coop_cache};
 use entry::RoomEntry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, RetainAllImageCache, SharedString, Styled, Subscription, Task,
-    UniformListScrollHandle, Window, div, uniform_list,
+    ParentElement, Render, SharedString, Styled, Subscription, Task, UniformListScrollHandle,
+    Window, div, uniform_list,
 };
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use smallvec::{SmallVec, smallvec};
-use state::{FIND_DELAY, NostrRegistry};
+use state::{FIND_DELAY, IMAGE_CACHE_SIZE, NostrRegistry};
 use theme::{ActiveTheme, SIDEBAR_WIDTH, TABBAR_HEIGHT};
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
@@ -38,9 +38,6 @@ pub struct Sidebar {
     name: SharedString,
     focus_handle: FocusHandle,
     scroll_handle: UniformListScrollHandle,
-
-    /// Image cache
-    image_cache: Entity<RetainAllImageCache>,
 
     /// Find input state
     find_input: Entity<InputState>,
@@ -141,7 +138,6 @@ impl Sidebar {
             name: "Sidebar".into(),
             focus_handle: cx.focus_handle(),
             scroll_handle: UniformListScrollHandle::new(),
-            image_cache: RetainAllImageCache::new(cx),
             find_input,
             find_debouncer: DebouncedDelay::new(),
             find_results,
@@ -507,7 +503,7 @@ impl Render for Sidebar {
         };
 
         v_flex()
-            .image_cache(self.image_cache.clone())
+            .image_cache(coop_cache("sidebar", IMAGE_CACHE_SIZE))
             .size_full()
             .gap_2()
             .child(

@@ -15,6 +15,9 @@ pub const KEYRING: &str = "Coop Safe Storage";
 /// Default timeout for subscription
 pub const TIMEOUT: u64 = 2;
 
+/// Default image cache size
+pub const IMAGE_CACHE_SIZE: usize = 20;
+
 /// Default delay for searching
 pub const FIND_DELAY: u64 = 600;
 

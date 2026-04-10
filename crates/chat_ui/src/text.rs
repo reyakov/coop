@@ -69,6 +69,7 @@ impl RenderedText {
 
     pub fn element(&self, id: ElementId, window: &Window, cx: &App) -> AnyElement {
         let code_background = cx.theme().elevated_surface_background;
+        let color = cx.theme().text_accent;
 
         InteractiveText::new(
             id,
@@ -100,6 +101,7 @@ impl RenderedText {
                                 }
                             }
                             Highlight::Mention => HighlightStyle {
+                                color: Some(color),
                                 underline: Some(UnderlineStyle {
                                     thickness: 1.0.into(),
                                     ..Default::default()

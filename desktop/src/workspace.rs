@@ -2,19 +2,19 @@ use std::sync::Arc;
 
 use ::settings::AppSettings;
 use chat::{ChatEvent, ChatRegistry};
-use common::download_dir;
+use common::{CoopImageCache, download_dir};
 use device::{DeviceEvent, DeviceRegistry};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div, px,
-    relative,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
+    image_cache, px, relative,
 };
 use nostr_sdk::prelude::*;
 use person::{PersonRegistry, shorten_pubkey};
 use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
-use state::{NostrRegistry, StateEvent};
+use state::{IMAGE_CACHE_SIZE, NostrRegistry, StateEvent};
 use theme::{ActiveTheme, SIDEBAR_WIDTH, Theme, ThemeRegistry};
 use title_bar::TitleBar;
 use ui::avatar::Avatar;
@@ -70,6 +70,9 @@ pub struct Workspace {
     /// App's Dock Area
     dock: Entity<DockArea>,
 
+    /// App's Image Cache
+    image_cache: Entity<CoopImageCache>,
+
     /// Event subscriptions
     _subscriptions: SmallVec<[Subscription; 5]>,
 }
@@ -82,6 +85,7 @@ impl Workspace {
 
         let titlebar = cx.new(|_| TitleBar::new());
         let dock = cx.new(|cx| DockArea::new(window, cx));
+        let image_cache = CoopImageCache::new(IMAGE_CACHE_SIZE, cx);
 
         let mut subscriptions = smallvec![];
 
@@ -231,6 +235,7 @@ impl Workspace {
         Self {
             titlebar,
             dock,
+            image_cache,
             _subscriptions: subscriptions,
         }
     }
@@ -848,13 +853,17 @@ impl Render for Workspace {
             .relative()
             .size_full()
             .child(
-                v_flex()
+                image_cache(self.image_cache.clone())
                     .relative()
                     .size_full()
-                    // Title Bar
-                    .child(self.titlebar.clone())
-                    // Dock
-                    .child(self.dock.clone()),
+                    .child(
+                        v_flex()
+                            .size_full()
+                            // Title Bar
+                            .child(self.titlebar.clone())
+                            // Dock
+                            .child(self.dock.clone()),
+                    ),
             )
             // Notifications
             .children(notification_layer)

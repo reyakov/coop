@@ -1,8 +1,8 @@
 use std::hash::Hash;
 use std::ops::Range;
 
-use common::{EventExt, NostrParser};
-use gpui::SharedString;
+use common::{EventExt, NostrParser, extract_and_remove_media_urls};
+use gpui::{SharedString, SharedUri};
 use nostr_sdk::prelude::*;
 
 /// New message.
@@ -132,6 +132,8 @@ pub struct RenderedMessage {
     pub author: PublicKey,
     /// The content/text of the message
     pub content: String,
+    /// List of media URLs in the message
+    pub media: Vec<SharedUri>,
     /// Message created time as unix timestamp
     pub created_at: Timestamp,
     /// List of mentioned public keys in the message
@@ -144,11 +146,13 @@ impl From<&Event> for RenderedMessage {
     fn from(val: &Event) -> Self {
         let mentions = extract_mentions(&val.content);
         let replies_to = extract_reply_ids(&val.tags);
+        let (media, string) = extract_and_remove_media_urls(&val.content);
 
         Self {
             id: val.id,
             author: val.pubkey,
-            content: val.content.clone(),
+            content: string,
+            media,
             created_at: val.created_at,
             mentions,
             replies_to,
@@ -160,12 +164,14 @@ impl From<&UnsignedEvent> for RenderedMessage {
     fn from(val: &UnsignedEvent) -> Self {
         let mentions = extract_mentions(&val.content);
         let replies_to = extract_reply_ids(&val.tags);
+        let (media, string) = extract_and_remove_media_urls(&val.content);
 
         Self {
             // Event ID must be known
             id: val.id.unwrap(),
             author: val.pubkey,
-            content: val.content.clone(),
+            content: string,
+            media,
             created_at: val.created_at,
             mentions,
             replies_to,
@@ -177,12 +183,14 @@ impl From<&NewMessage> for RenderedMessage {
     fn from(val: &NewMessage) -> Self {
         let mentions = extract_mentions(&val.rumor.content);
         let replies_to = extract_reply_ids(&val.rumor.tags);
+        let (media, string) = extract_and_remove_media_urls(&val.rumor.content);
 
         Self {
             // Event ID must be known
             id: val.rumor.id.unwrap(),
             author: val.rumor.pubkey,
-            content: val.rumor.content.clone(),
+            content: string,
+            media,
             created_at: val.rumor.created_at,
             mentions,
             replies_to,
