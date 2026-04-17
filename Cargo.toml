@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "desktop", "web", "mobile"]
+members = ["crates/*", "desktop", "web"]
 default-members = ["desktop"]
 
 [workspace.package]
