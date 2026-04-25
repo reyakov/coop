@@ -5,12 +5,12 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Animation, AnimationExt, AnyElement, App, AppContext, ClickEvent, Context, DismissEvent,
-    ElementId, Entity, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _,
-    Render, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription,
-    Window, div, px, relative,
+    Anchor, Animation, AnimationExt, AnyElement, App, AppContext, ClickEvent, Context,
+    DismissEvent, ElementId, Entity, EventEmitter, InteractiveElement as _, IntoElement,
+    ParentElement as _, Render, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
+    Subscription, Window, div, px, relative,
 };
-use theme::{ActiveTheme, Anchor};
+use theme::ActiveTheme;
 
 use crate::animation::cubic_bezier;
 use crate::button::{Button, ButtonVariants as _};
@@ -288,6 +288,7 @@ impl Styled for Notification {
         &mut self.style
     }
 }
+
 impl Render for Notification {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let content = self
@@ -423,12 +424,17 @@ impl Render for Notification {
                                 let y_offset = px(0.) + delta * px(45.);
                                 that.top(px(0.) + y_offset)
                             }
+                            _ => that,
                         }
                     } else {
                         let opacity = delta;
                         let y_offset = match placement {
-                            placement if placement.is_top() => px(-45.) + delta * px(45.),
-                            placement if placement.is_bottom() => px(45.) - delta * px(45.),
+                            Anchor::TopLeft | Anchor::TopRight | Anchor::TopCenter => {
+                                px(-45.) + delta * px(45.)
+                            }
+                            Anchor::BottomLeft | Anchor::BottomRight | Anchor::BottomCenter => {
+                                px(45.) - delta * px(45.)
+                            }
                             _ => px(0.),
                         };
                         this.top(px(0.) + y_offset)

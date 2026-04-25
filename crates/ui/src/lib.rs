@@ -1,4 +1,3 @@
-pub use anchored::*;
 pub use element_ext::ElementExt;
 pub use event::InteractiveElementExt;
 pub use focusable::FocusableCycle;
@@ -34,7 +33,6 @@ pub mod switch;
 pub mod tab;
 pub mod tooltip;
 
-mod anchored;
 mod element_ext;
 mod event;
 mod focusable;

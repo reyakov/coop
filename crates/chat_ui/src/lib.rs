@@ -1421,7 +1421,7 @@ impl ChatPanel {
             .icon(IconName::Emoji)
             .ghost()
             .large()
-            .dropdown_menu_with_anchor(gpui::Corner::BottomLeft, move |this, _window, _cx| {
+            .dropdown_menu_with_anchor(gpui::Anchor::BottomLeft, move |this, _window, _cx| {
                 this.horizontal()
                     .menu("👍", Box::new(Command::Insert("👍")))
                     .menu("👎", Box::new(Command::Insert("👎")))

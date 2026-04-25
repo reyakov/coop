@@ -1,14 +1,15 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    anchored, deferred, div, px, App, AppContext as _, ClickEvent, Context, DismissEvent, Entity,
-    Focusable, InteractiveElement as _, IntoElement, KeyBinding, MouseButton, OwnedMenu,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    App, AppContext as _, ClickEvent, Context, DismissEvent, Entity, Focusable,
+    InteractiveElement as _, IntoElement, KeyBinding, MouseButton, OwnedMenu, ParentElement,
+    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, anchored,
+    deferred, div, px,
 };
 
 use crate::actions::{Cancel, SelectLeft, SelectRight};
 use crate::button::{Button, ButtonVariants};
 use crate::menu::PopupMenu;
-use crate::{h_flex, Selectable, Sizable};
+use crate::{Selectable, Sizable, h_flex};
 
 const CONTEXT: &str = "AppMenuBar";
 
@@ -241,7 +242,7 @@ impl Render for AppMenu {
             .when(is_selected, |this| {
                 this.child(deferred(
                     anchored()
-                        .anchor(gpui::Corner::TopLeft)
+                        .anchor(gpui::Anchor::TopLeft)
                         .snap_to_window_with_margin(px(8.))
                         .child(
                             div()

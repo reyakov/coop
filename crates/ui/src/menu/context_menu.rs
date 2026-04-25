@@ -3,10 +3,10 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    anchored, deferred, div, px, AnyElement, App, Context, Corner, DismissEvent, Element,
-    ElementId, Entity, Focusable, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, Pixels, Point,
-    StyleRefinement, Styled, Subscription, Window,
+    Anchor, AnyElement, App, Context, DismissEvent, Element, ElementId, Entity, Focusable,
+    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, InteractiveElement, IntoElement,
+    MouseButton, MouseDownEvent, ParentElement, Pixels, Point, StyleRefinement, Styled,
+    Subscription, Window, anchored, deferred, div, px,
 };
 
 use crate::menu::PopupMenu;
@@ -41,7 +41,7 @@ pub struct ContextMenu<E: ParentElement + Styled + Sized> {
     menu: Option<Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>>,
     // This is not in use, just for style refinement forwarding.
     _ignore_style: StyleRefinement,
-    anchor: Corner,
+    anchor: Anchor,
 }
 
 impl<E: ParentElement + Styled> ContextMenu<E> {
@@ -51,7 +51,7 @@ impl<E: ParentElement + Styled> ContextMenu<E> {
             id: id.into(),
             element: Some(element),
             menu: None,
-            anchor: Corner::TopLeft,
+            anchor: Anchor::TopLeft,
             _ignore_style: StyleRefinement::default(),
         }
     }

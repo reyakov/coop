@@ -1,10 +1,9 @@
-use gpui::{Pixels, px};
-use serde::{Deserialize, Serialize};
+use gpui::{Anchor, Pixels, px};
 
-use crate::{Anchor, Edges, TITLEBAR_HEIGHT};
+use crate::{Edges, TITLEBAR_HEIGHT};
 
 /// The settings for notifications.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NotificationSettings {
     /// The placement of the notification, default: [`Anchor::TopRight`]
     pub placement: Anchor,
