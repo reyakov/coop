@@ -133,6 +133,12 @@ impl NostrRegistry {
             .signer(signer.clone())
             .database(lmdb)
             .gossip(NostrGossipMemory::unbounded())
+            .gossip_config(
+                GossipConfig::default()
+                    .sync_initial_timeout(Duration::from_millis(100))
+                    .sync_idle_timeout(Duration::from_millis(100))
+                    .no_background_refresh(),
+            )
             .automatic_authentication(false)
             .connect_timeout(Duration::from_secs(10))
             .sleep_when_idle(SleepWhenIdle::Enabled {
