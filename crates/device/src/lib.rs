@@ -11,7 +11,7 @@ use gpui::{
 };
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
-use state::{Announcement, NostrRegistry, StateEvent, TIMEOUT, app_name};
+use state::{Announcement, CLIENT_NAME, NostrRegistry, StateEvent, TIMEOUT};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::Button;
@@ -301,7 +301,7 @@ impl DeviceRegistry {
             // Construct an announcement event
             let builder = EventBuilder::new(Kind::Custom(10044), "").tags(vec![
                 Tag::custom(TagKind::custom("n"), vec![n]),
-                Tag::client(app_name()),
+                Tag::client(CLIENT_NAME),
             ]);
 
             // Sign the event with user's signer
@@ -406,7 +406,7 @@ impl DeviceRegistry {
                     // Construct an event for device key request
                     let builder = EventBuilder::new(Kind::Custom(4454), "").tags(vec![
                         Tag::custom(TagKind::custom("P"), vec![app_pubkey]),
-                        Tag::client(app_name()),
+                        Tag::client(CLIENT_NAME),
                     ]);
 
                     // Sign the event with user's signer

@@ -1,5 +1,3 @@
-use std::sync::OnceLock;
-
 /// Client name (Application name)
 pub const CLIENT_NAME: &str = "Coop";
 
@@ -51,15 +49,3 @@ pub const BOOTSTRAP_RELAYS: [&str; 3] = [
     "wss://relay.primal.net",
     "wss://user.kindpag.es",
 ];
-
-static APP_NAME: OnceLock<String> = OnceLock::new();
-
-/// Get the app name
-pub fn app_name() -> &'static String {
-    APP_NAME.get_or_init(|| {
-        let devicename = whoami::devicename();
-        let platform = whoami::platform();
-
-        format!("{CLIENT_NAME} on {platform} ({devicename})")
-    })
-}
