@@ -1,0 +1,71 @@
+[package]
+name = "coop"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "coop"
+path = "src/main.rs"
+
+[package.metadata.packager]
+name = "Coop"
+product-name = "Coop"
+description = "Chat Freely, Stay Private on Nostr"
+identifier = "su.reya.coop"
+category = "SocialNetworking"
+version = "1.0.0-beta3"
+out-dir = "../dist"
+before-packaging-command = "cargo build --release"
+resources = ["Cargo.toml", "src"]
+icons = [
+    "resources/32x32.png",
+    "resources/128x128.png",
+    "resources/128x128@2x.png",
+    "resources/icon.icns",
+    "resources/icon.ico",
+]
+
+[dependencies]
+assets = { path = "../crates/assets" }
+ui = { path = "../crates/ui" }
+title_bar = { path = "../crates/title_bar" }
+theme = { path = "../crates/theme" }
+common = { path = "../crates/common" }
+state = { path = "../crates/state" }
+device = { path = "../crates/device" }
+chat = { path = "../crates/chat" }
+chat_ui = { path = "../crates/chat_ui" }
+settings = { path = "../crates/settings" }
+auto_update = { path = "../crates/auto_update" }
+person = { path = "../crates/person" }
+relay_auth = { path = "../crates/relay_auth" }
+
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui_linux.workspace = true
+gpui_windows.workspace = true
+gpui_macos.workspace = true
+gpui_tokio.workspace = true
+reqwest_client.workspace = true
+
+nostr-connect.workspace = true
+nostr-sdk.workspace = true
+
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+itertools.workspace = true
+log.workspace = true
+smallvec.workspace = true
+smol.workspace = true
+futures.workspace = true
+oneshot.workspace = true
+webbrowser.workspace = true
+tracing-subscriber.workspace = true
+
+indexset = "0.12.3"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Temporary workaround https://github.com/zed-industries/zed/issues/47168
+core-text = "=21.0.0"
