@@ -45,7 +45,7 @@ jobs:
       # Windows and macOS builds using cargo-packager
       - name: Build with cargo-packager (Windows/macOS)
         if: runner.os != 'Linux'
-        working-directory: crates/coop
+        working-directory: desktop
         run: |
           cargo install cargo-packager --locked
           cargo packager --release
@@ -154,13 +154,13 @@ jobs:
 
       - name: Create draft release
         id: create_release
-        uses: softprops/action-gh-release@v2
+        uses: akkuman/gitea-release-action@v1
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: ${{ steps.version.outputs.tag }}
+          server_url: "https://git.reya.su/"
+          repository: "reya/coop"
+          token: ${{ secrets.GITEA_TOKEN }}
           draft: true
           prerelease: false
-          generate_release_notes: true
           files: |
             artifacts/**/*
 

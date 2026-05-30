@@ -1,12 +1,12 @@
 ![Coop](/docs/coop.png)
 
 <p>
-    <a href="https://github.com/lumehq/coop/actions/workflows/rust.yml">
-      <img alt="Actions" src="https://github.com/lumehq/coop/actions/workflows/rust.yml/badge.svg">
+    <a href="https://github.com/reyakov/coop/actions/workflows/rust.yml">
+      <img alt="Actions" src="https://github.com/reyakov/coop/actions/workflows/rust.yml/badge.svg">
     </a>
-    <img alt="GitHub repo size" src="https://img.shields.io/github/repo-size/lumehq/coop">
-    <img alt="GitHub issues" src="https://img.shields.io/github/issues-raw/lumehq/coop">
-    <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/lumehq/coop">
+    <img alt="GitHub repo size" src="https://img.shields.io/github/repo-size/reyakov/coop">
+    <img alt="GitHub issues" src="https://img.shields.io/github/issues-raw/reyakov/coop">
+    <img alt="GitHub pull requests" src="https://img.shields.io/github/issues-pr/reyakov/coop">
 </p>
 
 Coop is a simple, fast, and reliable nostr client for secure messaging across all platforms.
@@ -36,7 +36,7 @@ To install Coop, follow these steps:
 
 1. **Download the Latest Release**:
 
-   - Visit the [Coop Releases page on GitHub](https://github.com/lumehq/coop/releases).
+   - Visit the [Coop Releases page on GitHub](https://github.com/reyakov/coop/releases).
    - Download the package that matches your operating system (Windows, macOS, or Linux).
 
 2. **Install**:
@@ -65,7 +65,7 @@ Coop is built using Rust and GPUI. All Nostr related stuffs handled by [Rust Nos
 1. Clone the repository:
 
    ```bash
-   git clone https://github.com/lumehq/coop.git
+   git clone https://github.com/reyakov/coop.git
    cd coop
    ```
 
@@ -118,7 +118,7 @@ For more information, see the [Contributing](#contributing) section.
 - [Rust Nostr](https://github.com/rust-nostr/nostr/)
 - [GPUI](https://www.gpui.rs/)
 - [GPUI Components](https://github.com/longbridge/gpui-component/)
-- [Coop Issue Tracker](https://github.com/lumehq/coop/issues/)
+- [Coop Issue Tracker](https://github.com/reyakov/coop/issues/)
 
 ### License
 
