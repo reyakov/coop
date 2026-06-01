@@ -220,14 +220,6 @@ impl NostrRegistry {
         let client = self.client();
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            // Add search relay to the relay pool
-            for url in SEARCH_RELAYS.into_iter() {
-                client
-                    .add_relay(url)
-                    .capabilities(RelayCapabilities::READ)
-                    .await?;
-            }
-
             // Add indexer relay to the relay pool
             for url in INDEXER_RELAYS.into_iter() {
                 client
@@ -631,6 +623,18 @@ impl NostrRegistry {
             {
                 results.push(public_key);
                 return Ok(results);
+            }
+
+            // Add search relay to the relay pool
+            for url in SEARCH_RELAYS.into_iter() {
+                if client.relay(url).await.is_ok() {
+                    client
+                        .add_relay(url)
+                        .capabilities(RelayCapabilities::READ)
+                        .await?;
+                } else {
+                    return Err(anyhow!("Failed to add search relay: {}", url));
+                }
             }
 
             // Return early if the query is a valid public key
