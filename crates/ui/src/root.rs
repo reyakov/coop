@@ -385,6 +385,7 @@ impl Render for Root {
                                     blur_radius: CLIENT_SIDE_DECORATION_SHADOW / 2.,
                                     spread_radius: px(0.),
                                     offset: point(px(0.0), px(0.0)),
+                                    inset: false,
                                 }])
                             }),
                     })

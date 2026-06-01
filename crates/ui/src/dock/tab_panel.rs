@@ -750,7 +750,7 @@ impl TabPanel {
                 div()
                     .id("tab-bar-empty-space")
                     .h_full()
-                    .flex_grow()
+                    .flex_grow_1()
                     .min_w_16()
                     .when(state.droppable, |this| {
                         let view = cx.entity();
