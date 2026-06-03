@@ -7,7 +7,7 @@ use settings::{AppSettings, AuthMode};
 use theme::{ActiveTheme, Theme, ThemeMode};
 use ui::button::{Button, ButtonVariants};
 use ui::group_box::{GroupBox, GroupBoxVariants};
-use ui::input::{InputState, TextInput};
+use ui::input::{Input, InputState};
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::Notification;
 use ui::switch::Switch;
@@ -218,7 +218,7 @@ impl Render for Preferences {
                             .child(
                                 h_flex()
                                     .gap_1()
-                                    .child(TextInput::new(&self.file_input).text_xs().small())
+                                    .child(Input::new(&self.file_input).text_xs().small())
                                     .child(
                                         Button::new("update-file-server")
                                             .icon(IconName::Check)

@@ -10,7 +10,7 @@ use state::KEYRING;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
-use ui::input::{InputState, TextInput};
+use ui::input::{Input, InputState};
 use ui::{IconName, Sizable, StyledExt, divider, v_flex};
 
 const MSG: &str = "Store your account keys in a safe location. \
@@ -40,8 +40,8 @@ pub struct BackupPanel {
 
 impl BackupPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let npub_input = cx.new(|cx| InputState::new(window, cx).disabled(true));
-        let nsec_input = cx.new(|cx| InputState::new(window, cx).disabled(true).masked(true));
+        let npub_input = cx.new(|cx| InputState::new(window, cx));
+        let nsec_input = cx.new(|cx| InputState::new(window, cx).masked(true));
 
         // Run at the end of current cycle
         cx.defer_in(window, |this, window, cx| {
@@ -156,7 +156,7 @@ impl Render for BackupPanel {
                                     .child(SharedString::from("Public Key:")),
                             )
                             .child(
-                                TextInput::new(&self.npub_input)
+                                Input::new(&self.npub_input)
                                     .small()
                                     .bordered(false)
                                     .disabled(true),
@@ -174,7 +174,7 @@ impl Render for BackupPanel {
                                     .child(SharedString::from("Secret Key:")),
                             )
                             .child(
-                                TextInput::new(&self.nsec_input)
+                                Input::new(&self.nsec_input)
                                     .small()
                                     .bordered(false)
                                     .disabled(true),

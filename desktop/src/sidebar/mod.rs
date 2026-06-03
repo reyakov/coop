@@ -20,7 +20,7 @@ use theme::{ActiveTheme, SIDEBAR_WIDTH, TABBAR_HEIGHT};
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
 use ui::indicator::Indicator;
-use ui::input::{InputEvent, InputState, TextInput};
+use ui::input::{Input, InputEvent, InputState};
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
 use ui::{Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
@@ -252,7 +252,6 @@ impl Sidebar {
     fn set_finding(&mut self, status: bool, _window: &mut Window, cx: &mut Context<Self>) {
         // Disable the input to prevent duplicate requests
         self.find_input.update(cx, |this, cx| {
-            this.set_disabled(status, cx);
             this.set_loading(status, cx);
         });
         // Set the search status
@@ -513,7 +512,7 @@ impl Render for Sidebar {
                     .border_color(cx.theme().border)
                     .bg(cx.theme().tab_background)
                     .child(
-                        TextInput::new(&self.find_input)
+                        Input::new(&self.find_input)
                             .appearance(false)
                             .bordered(false)
                             .small()

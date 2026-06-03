@@ -11,7 +11,7 @@ use smallvec::{SmallVec, smallvec};
 use state::{CoopAuthUrlHandler, NostrRegistry, StateEvent};
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
-use ui::input::{InputEvent, InputState, TextInput};
+use ui::input::{Input, InputEvent, InputState};
 use ui::{Disableable, v_flex};
 
 #[derive(Debug)]
@@ -250,7 +250,7 @@ impl Render for ImportKey {
                     .text_sm()
                     .text_color(cx.theme().text_muted)
                     .child("nsec or bunker://")
-                    .child(TextInput::new(&self.key_input)),
+                    .child(Input::new(&self.key_input)),
             )
             .when(
                 self.key_input.read(cx).value().starts_with("ncryptsec1"),
@@ -261,7 +261,7 @@ impl Render for ImportKey {
                             .text_sm()
                             .text_color(cx.theme().text_muted)
                             .child("Password:")
-                            .child(TextInput::new(&self.pass_input)),
+                            .child(Input::new(&self.pass_input)),
                     )
                 },
             )

@@ -22,5 +22,6 @@ uuid = "1.10"
 regex = "1"
 image = "0.25.1"
 lsp-types = "0.97.0"
-rope = { git = "https://github.com/zed-industries/zed" }
+ropey = { version = "=2.0.0-beta.1", features = ["metric_lines_lf", "metric_utf16"] }
 sum_tree = { git = "https://github.com/zed-industries/zed" }
+tree-sitter = "0.26"

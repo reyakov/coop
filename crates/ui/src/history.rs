@@ -1,6 +1,8 @@
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 
+/// A HistoryItem represents a single change in the history.
+/// It must implement Clone and PartialEq to be used in the History.
 pub trait HistoryItem: Clone + PartialEq {
     fn version(&self) -> usize;
     fn set_version(&mut self, version: usize);
@@ -22,10 +24,11 @@ pub struct History<I: HistoryItem> {
     redos: Vec<I>,
     last_changed_at: Instant,
     version: usize,
-    max_undo: usize,
+    pub(crate) ignore: bool,
+    max_undos: usize,
     group_interval: Option<Duration>,
+    grouping: bool,
     unique: bool,
-    pub ignore: bool,
 }
 
 impl<I> History<I>
@@ -39,15 +42,16 @@ where
             ignore: false,
             last_changed_at: Instant::now(),
             version: 0,
-            max_undo: 1000,
+            max_undos: 1000,
             group_interval: None,
+            grouping: false,
             unique: false,
         }
     }
 
     /// Set the maximum number of undo steps to keep, defaults to 1000.
-    pub fn max_undo(mut self, max_undo: usize) -> Self {
-        self.max_undo = max_undo;
+    pub fn max_undos(mut self, max_undos: usize) -> Self {
+        self.max_undos = max_undos;
         self
     }
 
@@ -64,10 +68,20 @@ where
         self
     }
 
+    /// Start grouping changes, this will prevent the version from being incremented until `end_grouping` is called.
+    pub fn start_grouping(&mut self) {
+        self.grouping = true;
+    }
+
+    /// End grouping changes, this will allow the version to be incremented again.
+    pub fn end_grouping(&mut self) {
+        self.grouping = false;
+    }
+
     /// Increment the version number if the last change was made more than `GROUP_INTERVAL` milliseconds ago.
     fn inc_version(&mut self) -> usize {
         let t = Instant::now();
-        if Some(self.last_changed_at.elapsed()) > self.group_interval {
+        if !self.grouping && Some(self.last_changed_at.elapsed()) > self.group_interval {
             self.version += 1;
         }
 
@@ -80,10 +94,11 @@ where
         self.version
     }
 
+    /// Push a new change to the history.
     pub fn push(&mut self, item: I) {
         let version = self.inc_version();
 
-        if self.undos.len() >= self.max_undo {
+        if self.undos.len() >= self.max_undos {
             self.undos.remove(0);
         }
 
@@ -113,6 +128,7 @@ where
         self.redos.clear();
     }
 
+    /// Undo the last change and return the changes that were undone.
     pub fn undo(&mut self) -> Option<Vec<I>> {
         if let Some(first_change) = self.undos.pop() {
             let mut changes = vec![first_change.clone()];
@@ -135,6 +151,7 @@ where
         }
     }
 
+    /// Redo the last undone change and return the changes that were redone.
     pub fn redo(&mut self) -> Option<Vec<I>> {
         if let Some(first_change) = self.redos.pop() {
             let mut changes = vec![first_change.clone()];

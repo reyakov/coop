@@ -13,7 +13,7 @@ use smol::Timer;
 use theme::ActiveTheme;
 
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
-use crate::input::{InputEvent, InputState, TextInput};
+use crate::input::{Input, InputEvent, InputState};
 use crate::list::ListDelegate;
 use crate::list::cache::{MeasuredEntrySize, RowEntry, RowsCache};
 use crate::scroll::{Scrollbar, ScrollbarHandle};
@@ -288,7 +288,7 @@ where
                     });
                 });
             }
-            InputEvent::PressEnter { secondary } => self.on_action_confirm(
+            InputEvent::PressEnter { secondary, .. } => self.on_action_confirm(
                 &Confirm {
                     secondary: *secondary,
                 },
@@ -632,10 +632,10 @@ where
                         .border_b_1()
                         .border_color(cx.theme().border)
                         .child(
-                            TextInput::new(&input)
+                            Input::new(&input)
                                 .with_size(self.options.size)
                                 .appearance(false)
-                                .cleanable()
+                                .cleanable(true)
                                 .p_0()
                                 .prefix(
                                     Icon::new(IconName::Search).text_color(cx.theme().text_muted),

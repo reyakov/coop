@@ -14,7 +14,7 @@ use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
-use ui::input::{InputEvent, InputState, TextInput};
+use ui::input::{Input, InputEvent, InputState};
 use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, divider, h_flex, v_flex};
 
 const MSG: &str = "Messaging Relays are relays that hosted all your messages. \
@@ -317,10 +317,10 @@ impl Render for MessagingRelayPanel {
                                     .gap_1()
                                     .w_full()
                                     .child(
-                                        TextInput::new(&self.input)
+                                        Input::new(&self.input)
                                             .small()
                                             .bordered(false)
-                                            .cleanable(),
+                                            .cleanable(true),
                                     )
                                     .child(
                                         Button::new("add")

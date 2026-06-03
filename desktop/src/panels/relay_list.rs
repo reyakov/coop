@@ -15,7 +15,7 @@ use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
-use ui::input::{InputEvent, InputState, TextInput};
+use ui::input::{Input, InputEvent, InputState};
 use ui::menu::DropdownMenu;
 use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, divider, h_flex, v_flex};
 
@@ -369,10 +369,10 @@ impl Render for RelayListPanel {
                                     .gap_1()
                                     .w_full()
                                     .child(
-                                        TextInput::new(&self.input)
+                                        Input::new(&self.input)
                                             .small()
                                             .bordered(false)
-                                            .cleanable(),
+                                            .cleanable(true),
                                     )
                                     .child(
                                         Button::new("metadata")

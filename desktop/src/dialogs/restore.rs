@@ -10,7 +10,7 @@ use gpui::{
 use nostr_connect::prelude::*;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
-use ui::input::{InputEvent, InputState, TextInput};
+use ui::input::{Input, InputEvent, InputState};
 use ui::{WindowExtension, v_flex};
 
 #[derive(Debug)]
@@ -107,7 +107,7 @@ impl Render for RestoreEncryption {
                     .text_sm()
                     .text_color(cx.theme().text_muted)
                     .child("Secret Key")
-                    .child(TextInput::new(&self.key_input)),
+                    .child(Input::new(&self.key_input)),
             )
             .child(
                 Button::new("restore")

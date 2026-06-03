@@ -16,7 +16,7 @@ use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
-use ui::input::{InputEvent, InputState, TextInput};
+use ui::input::{Input, InputEvent, InputState};
 use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<ContactListPanel> {
@@ -301,10 +301,10 @@ impl Render for ContactListPanel {
                                 .gap_1()
                                 .w_full()
                                 .child(
-                                    TextInput::new(&self.input)
+                                    Input::new(&self.input)
                                         .small()
                                         .bordered(false)
-                                        .cleanable(),
+                                        .cleanable(true),
                                 )
                                 .child(
                                     Button::new("add")

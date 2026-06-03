@@ -24,7 +24,7 @@ use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
-use ui::input::{InputEvent, InputState, TextInput};
+use ui::input::{Input, InputEvent, InputState};
 use ui::menu::DropdownMenu;
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
@@ -119,7 +119,6 @@ impl ChatPanel {
             InputState::new(window, cx)
                 .placeholder(format!("Message {}", name))
                 .auto_grow(1, 20)
-                .prevent_new_line_on_enter()
                 .clean_on_escape()
         });
 
@@ -1498,7 +1497,7 @@ impl Render for ChatPanel {
                         .border_b_1()
                         .border_color(cx.theme().border)
                         .child(
-                            TextInput::new(&self.subject_input)
+                            Input::new(&self.subject_input)
                                 .text_sm()
                                 .small()
                                 .bordered(false),
@@ -1553,12 +1552,7 @@ impl Render for ChatPanel {
                                         this.upload(window, cx);
                                     })),
                             )
-                            .child(
-                                TextInput::new(&self.input)
-                                    .appearance(false)
-                                    .text_sm()
-                                    .flex_1(),
-                            )
+                            .child(Input::new(&self.input).appearance(false).text_sm().flex_1())
                             .child(
                                 h_flex()
                                     .pl_1()

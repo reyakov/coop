@@ -319,14 +319,14 @@ impl MaskPattern {
                         if fraction == &Some(0) {
                             int_with_sep
                         } else {
-                            format!("{int_with_sep}.{frac}")
+                            format!("{}.{}", int_with_sep, frac)
                         }
                     } else {
                         int_with_sep
                     };
 
                     let final_str = if let Some(sign) = maybe_signed {
-                        format!("{sign}{final_str}")
+                        format!("{}{}", sign, final_str)
                     } else {
                         final_str
                     };

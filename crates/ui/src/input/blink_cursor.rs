@@ -1,9 +1,14 @@
 use std::time::Duration;
 
-use gpui::{px, Context, Pixels};
+use gpui::{Context, Pixels, Task, px};
 
 static INTERVAL: Duration = Duration::from_millis(500);
 static PAUSE_DELAY: Duration = Duration::from_millis(300);
+
+// On Windows, Linux, we should use integer to avoid blurry cursor.
+#[cfg(not(target_os = "macos"))]
+pub(super) const CURSOR_WIDTH: Pixels = px(2.);
+#[cfg(target_os = "macos")]
 pub(super) const CURSOR_WIDTH: Pixels = px(1.5);
 
 /// To manage the Input cursor blinking.
@@ -12,10 +17,12 @@ pub(super) const CURSOR_WIDTH: Pixels = px(1.5);
 /// Every loop will notify the view to update the `visible`, and Input will observe this update to touch repaint.
 ///
 /// The input painter will check if this in visible state, then it will draw the cursor.
-pub struct BlinkCursor {
+pub(crate) struct BlinkCursor {
     visible: bool,
     paused: bool,
     epoch: usize,
+
+    _task: Task<()>,
 }
 
 impl BlinkCursor {
@@ -24,6 +31,7 @@ impl BlinkCursor {
             visible: false,
             paused: false,
             epoch: 0,
+            _task: Task::ready(()),
         }
     }
 
@@ -53,14 +61,12 @@ impl BlinkCursor {
 
         // Schedule the next blink
         let epoch = self.next_epoch();
-        cx.spawn(async move |this, cx| {
+        self._task = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(INTERVAL).await;
-
             if let Some(this) = this.upgrade() {
                 this.update(cx, |this, cx| this.blink(epoch, cx));
             }
-        })
-        .detach();
+        });
     }
 
     pub fn visible(&self) -> bool {
@@ -76,7 +82,7 @@ impl BlinkCursor {
 
         // delay 500ms to start the blinking
         let epoch = self.next_epoch();
-        cx.spawn(async move |this, cx| {
+        self._task = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(PAUSE_DELAY).await;
 
             if let Some(this) = this.upgrade() {
@@ -85,13 +91,6 @@ impl BlinkCursor {
                     this.blink(epoch, cx);
                 });
             }
-        })
-        .detach();
-    }
-}
-
-impl Default for BlinkCursor {
-    fn default() -> Self {
-        Self::new()
+        });
     }
 }

@@ -15,7 +15,7 @@ use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
-use ui::input::{InputState, TextInput};
+use ui::input::{Input, InputState};
 use ui::notification::Notification;
 use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
@@ -65,7 +65,7 @@ impl ProfilePanel {
         // Use multi-line input for bio
         let bio_input = cx.new(|cx| {
             InputState::new(window, cx)
-                .multi_line()
+                .multi_line(true)
                 .auto_grow(3, 8)
                 .placeholder("A short introduce about you.")
         });
@@ -352,7 +352,7 @@ impl Render for ProfilePanel {
                             .text_color(cx.theme().text_muted)
                             .child(SharedString::from("What should people call you?")),
                     )
-                    .child(TextInput::new(&self.name_input).bordered(false).small()),
+                    .child(Input::new(&self.name_input).bordered(false).small()),
             )
             .child(
                 v_flex()
@@ -363,7 +363,7 @@ impl Render for ProfilePanel {
                             .text_color(cx.theme().text_muted)
                             .child(SharedString::from("A short introduction about you:")),
                     )
-                    .child(TextInput::new(&self.bio_input).bordered(false).small()),
+                    .child(Input::new(&self.bio_input).bordered(false).small()),
             )
             .child(
                 v_flex()
@@ -374,7 +374,7 @@ impl Render for ProfilePanel {
                             .text_color(cx.theme().text_muted)
                             .child(SharedString::from("Website:")),
                     )
-                    .child(TextInput::new(&self.website_input).bordered(false).small()),
+                    .child(Input::new(&self.website_input).bordered(false).small()),
             )
             .child(
                 v_flex()
