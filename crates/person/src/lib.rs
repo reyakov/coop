@@ -242,7 +242,7 @@ impl PersonRegistry {
 
     /// Set messaging relays for a person
     fn set_messaging_relays(&mut self, event: &Event, cx: &mut App) {
-        let urls: Vec<RelayUrl> = nip17::extract_relay_list(event).cloned().collect();
+        let urls: Vec<RelayUrl> = nip17::extract_relay_list(event).collect();
 
         if let Some(person) = self.persons.get(&event.pubkey) {
             person.update(cx, |person, cx| {

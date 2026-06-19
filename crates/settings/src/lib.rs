@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::rc::Rc;
 
@@ -20,13 +19,15 @@ macro_rules! setting_accessors {
             $(
                 paste::paste! {
                     pub fn [<get_ $field>](cx: &App) -> $type {
-                        Self::global(cx).read(cx).values.$field.clone()
+                        Self::global(cx).read(cx).inner.read(cx).$field.clone()
                     }
 
                     pub fn [<update_ $field>](value: $type, cx: &mut App) {
                         Self::global(cx).update(cx, |this, cx| {
-                            this.values.$field = value;
-                            cx.notify();
+                            this.inner.update(cx, |inner, cx| {
+                                inner.$field = value;
+                                cx.notify();
+                            });
                         });
                     }
                 }
@@ -40,9 +41,9 @@ setting_accessors! {
     pub theme_mode: ThemeMode,
     pub hide_avatar: bool,
     pub screening: bool,
+    pub nip4e: bool,
     pub auth_mode: AuthMode,
-    pub trusted_relays: HashSet<RelayUrl>,
-    pub room_configs: HashMap<u64, RoomConfig>,
+    pub trusted_relays: Vec<String>,
     pub file_server: Url,
 }
 
@@ -66,10 +67,10 @@ impl Display for AuthMode {
 /// Signer kind
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SignerKind {
-    #[default]
     Auto,
-    User,
     Encryption,
+    #[default]
+    User,
 }
 
 impl SignerKind {
@@ -97,7 +98,7 @@ impl RoomConfig {
     pub fn new() -> Self {
         Self {
             backup: true,
-            signer_kind: SignerKind::Auto,
+            signer_kind: SignerKind::default(),
         }
     }
 
@@ -137,14 +138,14 @@ pub struct Settings {
     /// Enable screening for unknown chat requests
     pub screening: bool,
 
+    /// Enable decoupling encryption key
+    pub nip4e: bool,
+
     /// Authentication mode
     pub auth_mode: AuthMode,
 
     /// Trusted relays; Coop will automatically authenticate with these relays
-    pub trusted_relays: HashSet<RelayUrl>,
-
-    /// Configuration for each chat room
-    pub room_configs: HashMap<u64, RoomConfig>,
+    pub trusted_relays: Vec<String>,
 
     /// Server for blossom media attachments
     pub file_server: Url,
@@ -157,9 +158,9 @@ impl Default for Settings {
             theme_mode: ThemeMode::default(),
             hide_avatar: false,
             screening: true,
+            nip4e: false,
             auth_mode: AuthMode::default(),
-            trusted_relays: HashSet::default(),
-            room_configs: HashMap::default(),
+            trusted_relays: vec![],
             file_server: Url::parse("https://blossom.band/").unwrap(),
         }
     }
@@ -178,7 +179,7 @@ impl Global for GlobalAppSettings {}
 /// Application settings
 pub struct AppSettings {
     /// Settings
-    values: Settings,
+    inner: Entity<Settings>,
 
     /// Event subscriptions
     _subscriptions: SmallVec<[Subscription; 2]>,
@@ -196,11 +197,12 @@ impl AppSettings {
     }
 
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let inner = cx.new(|_| Settings::default());
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
             // Observe and automatically save settings on changes
-            cx.observe_self(|this, cx| {
+            cx.observe(&inner, |this, _inner, cx| {
                 this.save(cx);
             }),
         );
@@ -211,15 +213,17 @@ impl AppSettings {
         });
 
         Self {
-            values: Settings::default(),
+            inner,
             _subscriptions: subscriptions,
         }
     }
 
     /// Update settings
     fn set_settings(&mut self, settings: Settings, cx: &mut Context<Self>) {
-        self.values = settings;
-        cx.notify();
+        self.inner.update(cx, |this, cx| {
+            *this = settings;
+            cx.notify();
+        });
     }
 
     /// Load settings
@@ -249,19 +253,16 @@ impl AppSettings {
 
     /// Save settings
     pub fn save(&mut self, cx: &mut Context<Self>) {
-        let settings = self.values.clone();
+        let settings = self.inner.read(cx);
 
-        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let path = config_dir().join(".settings");
-            let content = serde_json::to_string(&settings)?;
-
-            // Write settings to file
-            smol::fs::write(&path, content).await?;
-
-            Ok(())
-        });
-
-        task.detach();
+        if let Ok(content) = serde_json::to_string(&settings) {
+            cx.background_spawn(async move {
+                let path = config_dir().join(".settings");
+                // Write settings to file
+                smol::fs::write(&path, content).await.ok();
+            })
+            .detach();
+        }
     }
 
     /// Set theme
@@ -270,8 +271,10 @@ impl AppSettings {
         T: Into<String>,
     {
         // Update settings
-        self.values.theme = Some(theme.into());
-        cx.notify();
+        self.inner.update(cx, |this, cx| {
+            this.theme = Some(theme.into());
+            cx.notify();
+        });
 
         // Apply the new theme
         self.apply_theme(window, cx);
@@ -279,16 +282,17 @@ impl AppSettings {
 
     /// Reset theme
     pub fn reset_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.values.theme = None;
-        cx.notify();
-
+        self.inner.update(cx, |this, cx| {
+            this.theme = None;
+            cx.notify();
+        });
         self.apply_theme(window, cx);
     }
 
     /// Apply theme
     pub fn apply_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(name) = self.values.theme.as_ref() {
-            let mode = self.values.theme_mode;
+        if let Some(name) = self.inner.read(cx).theme.as_ref() {
+            let mode = self.inner.read(cx).theme_mode;
 
             if let Ok(new_theme) = ThemeFamily::from_assets(name) {
                 Theme::apply_theme(Rc::new(new_theme), Some(window), cx);
@@ -301,26 +305,32 @@ impl AppSettings {
         }
     }
 
+    /// Check if decoupling encryption key is enabled
+    pub fn is_nip4e_enabled(&self, cx: &App) -> bool {
+        self.inner.read(cx).nip4e
+    }
+
     /// Check if the given relay is already authenticated
-    pub fn trusted_relay(&self, url: &RelayUrl, _cx: &App) -> bool {
-        self.values.trusted_relays.iter().any(|relay| {
-            relay.as_str_without_trailing_slash() == url.as_str_without_trailing_slash()
-        })
+    pub fn trusted_relay(&self, url: &RelayUrl, cx: &App) -> bool {
+        self.inner
+            .read(cx)
+            .trusted_relays
+            .iter()
+            .any(|relay| relay == url.as_str_without_trailing_slash())
     }
 
     /// Add a relay to the trusted list
     pub fn add_trusted_relay(&mut self, url: &RelayUrl, cx: &mut Context<Self>) {
-        self.values.trusted_relays.insert(url.clone());
-        cx.notify();
-    }
-
-    /// Add a room configuration
-    pub fn add_room_config(&mut self, id: u64, config: RoomConfig, cx: &mut Context<Self>) {
-        self.values
-            .room_configs
-            .entry(id)
-            .and_modify(|this| *this = config)
-            .or_default();
-        cx.notify();
+        self.inner.update(cx, |this, cx| {
+            if !this
+                .trusted_relays
+                .iter()
+                .any(|relay| relay == url.as_str_without_trailing_slash())
+            {
+                this.trusted_relays
+                    .push(url.as_str_without_trailing_slash().to_string());
+                cx.notify();
+            }
+        });
     }
 }

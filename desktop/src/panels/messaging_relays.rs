@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use anyhow::{Context as AnyhowContext, Error, anyhow};
+use anyhow::{Error, anyhow};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -83,17 +83,18 @@ impl MessagingRelayPanel {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
-        let task: Task<Result<Vec<RelayUrl>, Error>> = cx.background_spawn(async move {
-            let signer = client.signer().context("Signer not found")?;
-            let public_key = signer.get_public_key().await?;
+        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
+            return;
+        };
 
+        let task: Task<Result<Vec<RelayUrl>, Error>> = cx.background_spawn(async move {
             let filter = Filter::new()
                 .kind(Kind::InboxRelays)
                 .author(public_key)
                 .limit(1);
 
             if let Some(event) = client.database().query(filter).await?.first_owned() {
-                Ok(nip17::extract_owned_relay_list(event).collect())
+                Ok(nip17::extract_relay_list(&event).collect())
             } else {
                 Err(anyhow!("Not found."))
             }
@@ -171,11 +172,15 @@ impl MessagingRelayPanel {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return;
+        };
+
         // Construct event tags
         let tags: Vec<Tag> = self
             .relays
             .iter()
-            .map(|relay| Tag::relay(relay.clone()))
+            .map(|relay| Nip17Tag::Relay(relay.to_owned()).to_tag())
             .collect();
 
         // Set updating state
@@ -183,8 +188,10 @@ impl MessagingRelayPanel {
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             // Construct nip17 event builder
-            let builder = EventBuilder::new(Kind::InboxRelays, "").tags(tags);
-            let event = client.sign_event_builder(builder).await?;
+            let event = EventBuilder::new(Kind::InboxRelays, "")
+                .tags(tags)
+                .finalize_async(&signer)
+                .await?;
 
             // Set messaging relays
             client.send_event(&event).to_nip65().await?;

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use anyhow::{Context as AnyhowContext, Error};
+use anyhow::Error;
 use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -78,12 +78,13 @@ impl Screening {
         let client = nostr.read(cx).client();
         let public_key = self.public_key;
 
-        let task: Task<Result<bool, Error>> = cx.background_spawn(async move {
-            let signer = client.signer().context("Signer not found")?;
-            let signer_pubkey = signer.get_public_key().await?;
+        let Some(current_user) = nostr.read(cx).signer_pubkey(cx) else {
+            return;
+        };
 
+        let task: Task<Result<bool, Error>> = cx.background_spawn(async move {
             // Check if user is in contact list
-            let contacts = client.database().contacts_public_keys(signer_pubkey).await;
+            let contacts = client.database().contacts_public_keys(current_user).await;
             let followed = contacts.unwrap_or_default().contains(&public_key);
 
             Ok(followed)
@@ -105,16 +106,17 @@ impl Screening {
         let client = nostr.read(cx).client();
         let public_key = self.public_key;
 
-        let task: Task<Result<Vec<PublicKey>, Error>> = cx.background_spawn(async move {
-            let signer = client.signer().context("Signer not found")?;
-            let signer_pubkey = signer.get_public_key().await?;
+        let Some(current_user) = nostr.read(cx).signer_pubkey(cx) else {
+            return;
+        };
 
+        let task: Task<Result<Vec<PublicKey>, Error>> = cx.background_spawn(async move {
             // Check mutual contacts
             let filter = Filter::new().kind(Kind::ContactList).pubkey(public_key);
             let mut mutual_contacts = vec![];
 
             if let Ok(events) = client.database().query(filter).await {
-                for event in events.into_iter().filter(|ev| ev.pubkey != signer_pubkey) {
+                for event in events.into_iter().filter(|ev| ev.pubkey != current_user) {
                     mutual_contacts.push(event.pubkey);
                 }
             }
@@ -224,10 +226,20 @@ impl Screening {
         let client = nostr.read(cx).client();
         let public_key = self.public_key;
 
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return;
+        };
+
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let tag = Tag::public_key_report(public_key, Report::Impersonation);
-            let builder = EventBuilder::report(vec![tag], "");
-            let event = client.sign_event_builder(builder).await?;
+            let tag = Nip56Tag::PublicKey {
+                public_key,
+                report: Report::Impersonation,
+            }
+            .to_tag();
+
+            let event = EventBuilder::report(vec![tag], "")
+                .finalize_async(&signer)
+                .await?;
 
             // Send the report to the public relays
             client.send_event(&event).to(BOOTSTRAP_RELAYS).await?;

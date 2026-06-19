@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use anyhow::{Context as AnyhowContext, Error};
+use anyhow::Error;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -82,11 +82,12 @@ impl ContactListPanel {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
-        let task: Task<Result<HashSet<PublicKey>, Error>> = cx.background_spawn(async move {
-            let signer = client.signer().context("Signer not found")?;
-            let public_key = signer.get_public_key().await?;
-            let contact_list = client.database().contacts_public_keys(public_key).await?;
+        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
+            return;
+        };
 
+        let task: Task<Result<HashSet<PublicKey>, Error>> = cx.background_spawn(async move {
+            let contact_list = client.database().contacts_public_keys(public_key).await?;
             Ok(contact_list)
         });
 
@@ -157,6 +158,10 @@ impl ContactListPanel {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return;
+        };
+
         // Get contacts
         let contacts: Vec<Contact> = self
             .contacts
@@ -169,8 +174,9 @@ impl ContactListPanel {
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             // Construct contact list event builder
-            let builder = EventBuilder::contact_list(contacts);
-            let event = client.sign_event_builder(builder).await?;
+            let event = ContactListBuilder::new(contacts)
+                .finalize_async(&signer)
+                .await?;
 
             // Set contact list
             client.send_event(&event).to_nip65().await?;

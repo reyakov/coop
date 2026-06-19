@@ -18,7 +18,7 @@ impl EventExt for Event {
     }
 
     fn extract_public_keys(&self) -> Vec<PublicKey> {
-        let mut public_keys: Vec<PublicKey> = self.tags.public_keys().copied().collect();
+        let mut public_keys: Vec<PublicKey> = self.tags.public_keys().collect();
         public_keys.push(self.pubkey);
 
         public_keys.into_iter().unique().collect()
@@ -46,7 +46,7 @@ impl EventExt for UnsignedEvent {
     }
 
     fn extract_public_keys(&self) -> Vec<PublicKey> {
-        let mut public_keys: Vec<PublicKey> = self.tags.public_keys().copied().collect();
+        let mut public_keys: Vec<PublicKey> = self.tags.public_keys().collect();
         public_keys.push(self.pubkey);
         public_keys.into_iter().unique().sorted().collect()
     }

@@ -131,11 +131,14 @@ impl Element for EditorScrollbar {
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
-        let mut style = Style::default();
-        style.position = Position::Absolute;
-        style.size.width = relative(1.).into();
-        style.size.height = relative(1.).into();
-
+        let style = Style {
+            position: Position::Absolute,
+            size: Size {
+                width: relative(1.).into(),
+                height: relative(1.).into(),
+            },
+            ..Default::default()
+        };
         (window.request_layout(style, [], cx), ())
     }
 
@@ -309,13 +312,12 @@ impl TextElement {
         let mut cursor_bounds = None;
 
         // If the input has a fixed height (Otherwise is auto-grow), we need to add a bottom margin to the input.
-        let top_bottom_margin = if state.mode.is_auto_grow() {
-            line_height
-        } else if visible_range.len() < BOTTOM_MARGIN_ROWS * 8 {
-            line_height
-        } else {
-            BOTTOM_MARGIN_ROWS * line_height
-        };
+        let top_bottom_margin =
+            if state.mode.is_auto_grow() || visible_range.len() < BOTTOM_MARGIN_ROWS * 8 {
+                line_height
+            } else {
+                BOTTOM_MARGIN_ROWS * line_height
+            };
 
         // The cursor corresponds to the current cursor position in the text no only the line.
         let mut cursor_pos = None;

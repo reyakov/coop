@@ -10,6 +10,7 @@ state = { path = "../state" }
 person = { path = "../person" }
 ui = { path = "../ui" }
 theme = { path = "../theme" }
+settings = { path = "../settings" }
 
 gpui.workspace = true
 nostr-sdk.workspace = true

@@ -29,7 +29,6 @@ icons = [
 [dependencies]
 assets = { path = "../crates/assets" }
 ui = { path = "../crates/ui" }
-title_bar = { path = "../crates/title_bar" }
 theme = { path = "../crates/theme" }
 common = { path = "../crates/common" }
 state = { path = "../crates/state" }

@@ -16,38 +16,31 @@ use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
 use state::{IMAGE_CACHE_SIZE, NostrRegistry, StateEvent};
 use theme::{ActiveTheme, SIDEBAR_WIDTH, Theme, ThemeRegistry};
-use title_bar::TitleBar;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{ClosePanel, DockArea, DockItem, DockPlacement, PanelView};
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::{Notification, NotificationKind};
-use ui::{Icon, IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
+use ui::{Icon, IconName, Root, Sizable, TitleBar, WindowExtension, h_flex, v_flex};
 
+use crate::dialogs::import::ImportIdentity;
 use crate::dialogs::restore::RestoreEncryption;
-use crate::dialogs::{accounts, settings};
+use crate::dialogs::settings;
 use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list, trash};
 use crate::sidebar;
-
-const PREPARE_MSG: &str = "Coop is preparing a new identity for you. This may take a moment...";
-const ENC_MSG: &str = "Encryption Key is a special key that used to encrypt and decrypt your messages. \
-                       Your identity is completely decoupled from all encryption processes to protect your privacy.";
-const ENC_WARN: &str = "By resetting your encryption key, you will lose access to \
-                        all your encrypted messages before. This action cannot be undone.";
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Workspace> {
     cx.new(|cx| Workspace::new(window, cx))
 }
 
 struct DeviceNotifcation;
-struct SignerNotifcation;
 struct RelayNotifcation;
+struct MsgRelayNotification;
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = workspace, no_json)]
 enum Command {
     ToggleTheme,
-    ToggleAccount,
 
     RefreshMessagingRelays,
     BackupEncryption,
@@ -64,9 +57,6 @@ enum Command {
 }
 
 pub struct Workspace {
-    /// App's Title Bar
-    titlebar: Entity<TitleBar>,
-
     /// App's Dock Area
     dock: Entity<DockArea>,
 
@@ -74,7 +64,7 @@ pub struct Workspace {
     image_cache: Entity<CoopImageCache>,
 
     /// Event subscriptions
-    _subscriptions: SmallVec<[Subscription; 5]>,
+    _subscriptions: SmallVec<[Subscription; 6]>,
 }
 
 impl Workspace {
@@ -82,8 +72,8 @@ impl Workspace {
         let chat = ChatRegistry::global(cx);
         let device = DeviceRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
+        let signer = nostr.read(cx).signer.clone();
 
-        let titlebar = cx.new(|_| TitleBar::new());
         let dock = cx.new(|cx| DockArea::new(window, cx));
         let image_cache = CoopImageCache::new(IMAGE_CACHE_SIZE, cx);
 
@@ -97,19 +87,20 @@ impl Workspace {
         );
 
         subscriptions.push(
-            // Subscribe to the signer events
-            cx.subscribe_in(&nostr, window, move |this, _state, event, window, cx| {
-                match event {
-                    StateEvent::Creating => {
-                        let note = Notification::new()
-                            .id::<SignerNotifcation>()
-                            .title("Preparing a new identity")
-                            .message(PREPARE_MSG)
-                            .autohide(false)
-                            .with_kind(NotificationKind::Info);
+            // Observe the signer
+            cx.observe_in(&signer, window, |this, signer, window, cx| {
+                if signer.read(cx).is_some() {
+                    this.set_center_layout(window, cx);
+                } else {
+                    this.import_identity(window, cx);
+                }
+            }),
+        );
 
-                        window.push_notification(note, cx);
-                    }
+        subscriptions.push(
+            // Subscribe to the nostr events
+            cx.subscribe_in(&nostr, window, move |this, state, event, window, cx| {
+                match event {
                     StateEvent::Connecting => {
                         let note = Notification::new()
                             .id::<RelayNotifcation>()
@@ -125,14 +116,10 @@ impl Workspace {
                             .with_kind(NotificationKind::Success);
 
                         window.push_notification(note, cx);
-                    }
-                    StateEvent::SignerSet => {
-                        this.set_center_layout(window, cx);
-                        // Clear the signer notification
-                        window.clear_notification::<SignerNotifcation>(cx);
-                    }
-                    StateEvent::Show => {
-                        this.account_selector(window, cx);
+
+                        if state.read(cx).signer.read(cx).is_none() {
+                            this.import_identity(window, cx);
+                        }
                     }
                     _ => {}
                 };
@@ -145,7 +132,7 @@ impl Workspace {
                 match event {
                     DeviceEvent::Requesting => {
                         const MSG: &str =
-                            "Coop has sent a request for an encryption key. Please open the other client then approve the request.";
+                            "Please open other client and approve the request for encryption key.";
 
                         let note = Notification::new()
                             .id::<DeviceNotifcation>()
@@ -156,12 +143,25 @@ impl Workspace {
 
                         window.push_notification(note, cx);
                     }
-                    DeviceEvent::Creating => {
+                    DeviceEvent::NotSet => {
+                        const MSG: &str =
+                            "User're not setup encryption key yet. Do you want to create one?";
+
                         let note = Notification::new()
                             .id::<DeviceNotifcation>()
-                            .autohide(false)
-                            .message("Creating encryption key")
-                            .with_kind(NotificationKind::Info);
+                            .message(MSG)
+                            .with_kind(NotificationKind::Info)
+                            .action(|_this, _window, _cx| {
+                                Button::new("retry").label("Retry").on_click(
+                                    move |_this, window, cx| {
+                                        let device = DeviceRegistry::global(cx);
+                                        device.update(cx, |this, cx| {
+                                            this.set_announcement(Keys::generate(), cx);
+                                        });
+                                        window.clear_notification::<DeviceNotifcation>(cx);
+                                    },
+                                )
+                            });
 
                         window.push_notification(note, cx);
                     }
@@ -184,6 +184,27 @@ impl Workspace {
             // Observe all events emitted by the chat registry
             cx.subscribe_in(&chat, window, move |this, chat, ev, window, cx| {
                 match ev {
+                    ChatEvent::InboxRelayNotFound => {
+                        const MSG: &str = "Messaging Relays not found. Cannot receive messages.";
+
+                        window.push_notification(
+                            Notification::warning(MSG)
+                                .id::<MsgRelayNotification>()
+                                .autohide(false)
+                                .action(|_this, _window, _cx| {
+                                    Button::new("retry").label("Retry").on_click(
+                                        move |_this, window, cx| {
+                                            let chat = ChatRegistry::global(cx);
+                                            chat.update(cx, |this, cx| {
+                                                this.get_metadata(cx);
+                                            });
+                                            window.clear_notification::<MsgRelayNotification>(cx);
+                                        },
+                                    )
+                                }),
+                            cx,
+                        );
+                    }
                     ChatEvent::OpenRoom(id) => {
                         if let Some(room) = chat.read(cx).room(id, cx) {
                             this.dock.update(cx, |this, cx| {
@@ -233,7 +254,6 @@ impl Workspace {
         });
 
         Self {
-            titlebar,
             dock,
             image_cache,
             _subscriptions: subscriptions,
@@ -306,9 +326,8 @@ impl Workspace {
             }
             Command::ShowProfile => {
                 let nostr = NostrRegistry::global(cx);
-                let signer = nostr.read(cx).signer();
 
-                if let Some(public_key) = signer.public_key() {
+                if let Some(public_key) = nostr.read(cx).signer_pubkey(cx) {
                     self.dock.update(cx, |this, cx| {
                         this.add_panel(
                             Arc::new(profile::init(public_key, window, cx)),
@@ -353,7 +372,7 @@ impl Workspace {
                 let chat = ChatRegistry::global(cx);
                 // Trigger a refresh of the chat registry
                 chat.update(cx, |this, cx| {
-                    this.refresh(window, cx);
+                    this.refresh(cx);
                 });
             }
             Command::ShowRelayList => {
@@ -377,9 +396,6 @@ impl Workspace {
             }
             Command::ToggleTheme => {
                 self.theme_selector(window, cx);
-            }
-            Command::ToggleAccount => {
-                self.account_selector(window, cx);
             }
             Command::BackupEncryption => {
                 let device = DeviceRegistry::global(cx).downgrade();
@@ -423,6 +439,12 @@ impl Workspace {
     }
 
     fn confirm_reset_encryption(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        const ENC_MSG: &str = "Encryption Key is a special key that used to encrypt and decrypt your messages. \
+                               Your identity is completely decoupled from all encryption processes to protect your privacy.";
+
+        const ENC_WARN: &str = "By resetting your encryption key, you will lose access to \
+                                all your encrypted messages before. This action cannot be undone.";
+
         let device = DeviceRegistry::global(cx);
         let ent = device.downgrade();
 
@@ -457,24 +479,22 @@ impl Workspace {
 
     fn import_encryption(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let restore = cx.new(|cx| RestoreEncryption::new(window, cx));
-
         window.open_modal(cx, move |this, _window, _cx| {
-            this.width(px(520.))
+            this.width(px(420.))
                 .title("Restore Encryption")
                 .child(restore.clone())
         });
     }
 
-    fn account_selector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let accounts = accounts::init(window, cx);
+    fn import_identity(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let import = cx.new(|cx| ImportIdentity::new(window, cx));
 
         window.open_modal(cx, move |this, _window, _cx| {
-            this.width(px(520.))
-                .title("Continue with")
+            this.width(px(420.))
                 .show_close(false)
-                .keyboard(false)
                 .overlay_closable(false)
-                .child(accounts.clone())
+                .title("Import Identity")
+                .child(import.clone())
         });
     }
 
@@ -560,8 +580,7 @@ impl Workspace {
 
     fn titlebar_left(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let nostr = NostrRegistry::global(cx);
-        let signer = nostr.read(cx).signer();
-        let current_user = signer.public_key();
+        let current_user = nostr.read(cx).signer_pubkey(cx);
 
         h_flex()
             .flex_shrink_0()
@@ -571,7 +590,7 @@ impl Workspace {
                     div()
                         .text_xs()
                         .text_color(cx.theme().text_muted)
-                        .child(SharedString::from("Choose an account to continue...")),
+                        .child(SharedString::from("Import your identity to continue")),
                 )
             })
             .when_some(current_user.as_ref(), |this, public_key| {
@@ -623,11 +642,6 @@ impl Workspace {
                                 )
                                 .separator()
                                 .menu_with_icon(
-                                    "Accounts",
-                                    IconName::Group,
-                                    Box::new(Command::ToggleAccount),
-                                )
-                                .menu_with_icon(
                                     "Settings",
                                     IconName::Settings,
                                     Box::new(Command::ShowSettings),
@@ -639,16 +653,12 @@ impl Workspace {
 
     fn titlebar_right(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let chat = ChatRegistry::global(cx);
-        let initializing = chat.read(cx).initializing;
         let trash_messages = chat.read(cx).count_trash_messages(cx);
 
-        let device = DeviceRegistry::global(cx);
-        let device_initializing = device.read(cx).initializing;
-
+        let is_nip4e_enabled = AppSettings::get_nip4e(cx);
         let nostr = NostrRegistry::global(cx);
-        let signer = nostr.read(cx).signer();
 
-        let Some(public_key) = signer.public_key() else {
+        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
             return div();
         };
 
@@ -691,83 +701,75 @@ impl Workspace {
                         }),
                 )
             })
-            .child(
-                Button::new("key")
-                    .icon(IconName::UserKey)
-                    .tooltip("Decoupled encryption key")
-                    .small()
-                    .ghost()
-                    .loading(device_initializing)
-                    .when(device_initializing, |this| {
-                        this.label("Dekey")
-                            .xsmall()
-                            .tooltip("Loading decoupled encryption key...")
-                    })
-                    .dropdown_menu(move |this, _window, _cx| {
-                        this.min_w(px(260.))
-                            .label("Encryption Key")
-                            .when_some(announcement.as_ref(), |this, announcement| {
-                                let name = announcement.client_name();
-                                let pkey = shorten_pubkey(announcement.public_key(), 8);
+            .when(is_nip4e_enabled, |this| {
+                this.child(
+                    Button::new("key")
+                        .icon(IconName::UserKey)
+                        .tooltip("Decoupled encryption key")
+                        .small()
+                        .ghost()
+                        .dropdown_menu(move |this, _window, _cx| {
+                            this.min_w(px(260.))
+                                .label("Encryption Key")
+                                .when_some(announcement.as_ref(), |this, announcement| {
+                                    let name = announcement.client_name();
+                                    let pkey = shorten_pubkey(announcement.public_key(), 8);
 
-                                this.item(PopupMenuItem::element(move |_window, cx| {
-                                    h_flex()
-                                        .gap_1()
-                                        .text_sm()
-                                        .child(
-                                            Icon::new(IconName::Device)
-                                                .small()
-                                                .text_color(cx.theme().icon_muted),
-                                        )
-                                        .child(name.clone())
-                                }))
-                                .item(PopupMenuItem::element(move |_window, cx| {
-                                    h_flex()
-                                        .gap_1()
-                                        .text_sm()
-                                        .child(
-                                            Icon::new(IconName::UserKey)
-                                                .small()
-                                                .text_color(cx.theme().icon_muted),
-                                        )
-                                        .child(SharedString::from(pkey.clone()))
-                                }))
-                            })
-                            .separator()
-                            .menu_with_icon(
-                                "Backup",
-                                IconName::Shield,
-                                Box::new(Command::BackupEncryption),
-                            )
-                            .menu_with_icon(
-                                "Restore from secret key",
-                                IconName::Usb,
-                                Box::new(Command::ImportEncryption),
-                            )
-                            .separator()
-                            .menu_with_icon(
-                                "Reload",
-                                IconName::Refresh,
-                                Box::new(Command::RefreshEncryption),
-                            )
-                            .menu_with_icon(
-                                "Reset",
-                                IconName::Warning,
-                                Box::new(Command::ResetEncryption),
-                            )
-                    }),
-            )
+                                    this.item(PopupMenuItem::element(move |_window, cx| {
+                                        h_flex()
+                                            .gap_1()
+                                            .text_sm()
+                                            .child(
+                                                Icon::new(IconName::Device)
+                                                    .small()
+                                                    .text_color(cx.theme().icon_muted),
+                                            )
+                                            .child(name.clone())
+                                    }))
+                                    .item(
+                                        PopupMenuItem::element(move |_window, cx| {
+                                            h_flex()
+                                                .gap_1()
+                                                .text_sm()
+                                                .child(
+                                                    Icon::new(IconName::UserKey)
+                                                        .small()
+                                                        .text_color(cx.theme().icon_muted),
+                                                )
+                                                .child(SharedString::from(pkey.clone()))
+                                        }),
+                                    )
+                                })
+                                .separator()
+                                .menu_with_icon(
+                                    "Backup",
+                                    IconName::Shield,
+                                    Box::new(Command::BackupEncryption),
+                                )
+                                .menu_with_icon(
+                                    "Restore from secret key",
+                                    IconName::Usb,
+                                    Box::new(Command::ImportEncryption),
+                                )
+                                .separator()
+                                .menu_with_icon(
+                                    "Reload",
+                                    IconName::Refresh,
+                                    Box::new(Command::RefreshEncryption),
+                                )
+                                .menu_with_icon(
+                                    "Reset",
+                                    IconName::Warning,
+                                    Box::new(Command::ResetEncryption),
+                                )
+                        }),
+                )
+            })
             .child(
                 Button::new("inbox")
                     .icon(IconName::Inbox)
                     .small()
                     .ghost()
-                    .loading(initializing)
-                    .when(initializing, |this| {
-                        this.label("Inbox")
-                            .xsmall()
-                            .tooltip("Getting inbox messages...")
-                    })
                     .dropdown_menu(move |this, _window, cx| {
                         let urls: Vec<(SharedString, SharedString)> = profile
                             .messaging_relays()
@@ -838,15 +840,6 @@ impl Render for Workspace {
         let modal_layer = Root::render_modal_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
 
-        // Titlebar elements
-        let left = self.titlebar_left(cx).into_any_element();
-        let right = self.titlebar_right(cx).into_any_element();
-
-        // Update title bar children
-        self.titlebar.update(cx, |this, _cx| {
-            this.set_children(vec![left, right]);
-        });
-
         div()
             .id(SharedString::from("workspace"))
             .on_action(cx.listener(Self::on_command))
@@ -860,7 +853,11 @@ impl Render for Workspace {
                         v_flex()
                             .size_full()
                             // Title Bar
-                            .child(self.titlebar.clone())
+                            .child(
+                                TitleBar::new()
+                                    .child(self.titlebar_left(cx))
+                                    .child(self.titlebar_right(cx)),
+                            )
                             // Dock
                             .child(self.dock.clone()),
                     ),

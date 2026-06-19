@@ -16,14 +16,15 @@ impl From<&Event> for Announcement {
         let public_key = val
             .tags
             .iter()
-            .find(|tag| tag.kind().as_str() == "n")
+            .find(|tag| tag.kind() == "n")
             .and_then(|tag| tag.content())
             .and_then(|c| PublicKey::parse(c).ok())
             .unwrap_or(val.pubkey);
 
         let client_name = val
             .tags
-            .find(TagKind::Client)
+            .iter()
+            .find(|tag| tag.kind() == "client")
             .and_then(|tag| tag.content())
             .map(|c| c.to_string());
 

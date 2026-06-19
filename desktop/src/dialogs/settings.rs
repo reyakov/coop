@@ -56,17 +56,16 @@ impl Preferences {
 
 impl Render for Preferences {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        const SCREENING: &str =
-            "When opening a request, a popup will appear to help you identify the sender.";
-        const AVATAR: &str =
-            "Hide all avatar pictures to improve performance and protect your privacy.";
-        const MODE: &str =
-            "Choose whether to use the selected light or dark theme, or to follow the OS.";
+        const SCREENING: &str = "Show an screening dialog to verify the unknown sender.";
+        const AVATAR: &str = "Hide all avatar pictures to improve performance.";
+        const MODE: &str = "Use the selected light or dark theme, or to follow the OS.";
+        const NIP4E: &str = "Use a dedicated key to encrypt and decrypt messages.";
         const AUTH: &str = "Choose the authentication behavior for relays.";
         const RESET: &str = "Reset the theme to the default one.";
 
         let screening = AppSettings::get_screening(cx);
         let hide_avatar = AppSettings::get_hide_avatar(cx);
+        let nip4e = AppSettings::get_nip4e(cx);
         let auth_mode = AppSettings::get_auth_mode(cx);
         let theme_mode = AppSettings::get_theme_mode(cx);
 
@@ -205,6 +204,21 @@ impl Render for Preferences {
                                         })
                                     }),
                             ),
+                    ),
+            )
+            .child(
+                GroupBox::new()
+                    .id("experiments")
+                    .title("Experiments")
+                    .fill()
+                    .child(
+                        Switch::new("nip4e")
+                            .label("Decoupling Encryption Key")
+                            .description(NIP4E)
+                            .checked(nip4e)
+                            .on_click(move |_, _window, cx| {
+                                AppSettings::update_nip4e(!nip4e, cx);
+                            }),
                     ),
             )
             .child(

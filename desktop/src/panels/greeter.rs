@@ -30,9 +30,8 @@ impl GreeterPanel {
 
     fn add_profile_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
-        let signer = nostr.read(cx).signer();
 
-        if let Some(public_key) = signer.public_key() {
+        if let Some(public_key) = nostr.read(cx).signer_pubkey(cx) {
             cx.spawn_in(window, async move |_this, cx| {
                 cx.update(|window, cx| {
                     Workspace::add_panel(

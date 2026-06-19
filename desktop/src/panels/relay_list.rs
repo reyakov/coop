@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use anyhow::{Context as AnyhowContext, Error, anyhow};
+use anyhow::{Error, anyhow};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
@@ -100,18 +100,19 @@ impl RelayListPanel {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
+        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
+            return;
+        };
+
         let task: Task<Result<Vec<(RelayUrl, Option<RelayMetadata>)>, Error>> = cx
             .background_spawn(async move {
-                let signer = client.signer().context("Signer not found")?;
-                let public_key = signer.get_public_key().await?;
-
                 let filter = Filter::new()
                     .kind(Kind::RelayList)
                     .author(public_key)
                     .limit(1);
 
                 if let Some(event) = client.database().query(filter).await?.first_owned() {
-                    Ok(nip65::extract_owned_relay_list(event).collect())
+                    Ok(nip65::extract_relay_list(&event).collect())
                 } else {
                     Err(anyhow!("Not found."))
                 }
@@ -207,6 +208,10 @@ impl RelayListPanel {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return;
+        };
+
         // Get all relays
         let relays = self.relays.clone();
 
@@ -214,8 +219,9 @@ impl RelayListPanel {
         self.set_updating(true, cx);
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let builder = EventBuilder::relay_list(relays);
-            let event = client.sign_event_builder(builder).await?;
+            let event = EventBuilder::relay_list(relays)
+                .finalize_async(&signer)
+                .await?;
 
             // Set relay list for current user
             client.send_event(&event).await?;

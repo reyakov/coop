@@ -7,15 +7,14 @@ use gpui::{
     Subscription, Task, Window, div,
 };
 use nostr_connect::prelude::*;
-use smallvec::{SmallVec, smallvec};
-use state::{CoopAuthUrlHandler, NostrRegistry, StateEvent};
+use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::input::{Input, InputEvent, InputState};
-use ui::{Disableable, v_flex};
+use ui::{Disableable, WindowExtension, v_flex};
 
 #[derive(Debug)]
-pub struct ImportKey {
+pub struct ImportIdentity {
     /// Secret key input
     key_input: Entity<InputState>,
 
@@ -25,72 +24,42 @@ pub struct ImportKey {
     /// Error message
     error: Entity<Option<SharedString>>,
 
-    /// Countdown timer for nostr connect
-    countdown: Entity<Option<u64>>,
-
     /// Whether the user is currently loading
     loading: bool,
 
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
 
-    /// Event subscriptions
-    _subscriptions: SmallVec<[Subscription; 2]>,
+    /// Input subscription
+    _subscription: Option<Subscription>,
 }
 
-impl ImportKey {
+impl ImportIdentity {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let nostr = NostrRegistry::global(cx);
         let key_input = cx.new(|cx| InputState::new(window, cx).masked(true));
         let pass_input = cx.new(|cx| InputState::new(window, cx).masked(true));
         let error = cx.new(|_| None);
-        let countdown = cx.new(|_| None);
 
-        let mut subscriptions = smallvec![];
-
-        subscriptions.push(
-            // Subscribe to key input events and process login when the user presses enter
+        let input_subscription =
             cx.subscribe_in(&key_input, window, |this, _input, event, window, cx| {
                 if let InputEvent::PressEnter { .. } = event {
                     this.login(window, cx);
                 };
-            }),
-        );
-
-        subscriptions.push(
-            // Subscribe to the nostr signer event
-            cx.subscribe_in(&nostr, window, |this, _state, event, _window, cx| {
-                if let StateEvent::Error(e) = event {
-                    this.set_error(e, cx);
-                }
-            }),
-        );
+            });
 
         Self {
             key_input,
             pass_input,
             error,
-            countdown,
             loading: false,
             tasks: vec![],
-            _subscriptions: subscriptions,
+            _subscription: Some(input_subscription),
         }
     }
 
     fn login(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.loading {
-            return;
-        };
-        // Prevent duplicate login requests
-        self.set_loading(true, cx);
-
         let value = self.key_input.read(cx).value();
         let password = self.pass_input.read(cx).value();
-
-        if value.starts_with("bunker://") {
-            self.bunker(&value, window, cx);
-            return;
-        }
 
         if value.starts_with("ncryptsec1") {
             self.ncryptsec(value, password, window, cx);
@@ -103,50 +72,12 @@ impl ImportKey {
 
             // Update the signer
             nostr.update(cx, |this, cx| {
-                this.add_key_signer(&keys, cx);
+                this.set_signer(keys, cx);
             });
+            window.close_modal(cx);
         } else {
             self.set_error("Invalid key", cx);
         }
-    }
-
-    fn bunker(&mut self, content: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Ok(uri) = NostrConnectUri::parse(content) else {
-            self.set_error("Bunker is not valid", cx);
-            return;
-        };
-
-        let nostr = NostrRegistry::global(cx);
-        let app_keys = nostr.read(cx).keys();
-        let timeout = Duration::from_secs(30);
-
-        // Construct the nostr connect signer
-        let mut signer = NostrConnect::new(uri, app_keys.clone(), timeout, None).unwrap();
-
-        // Handle auth url with the default browser
-        signer.auth_url_handler(CoopAuthUrlHandler);
-
-        // Set signer in the background
-        nostr.update(cx, |this, cx| {
-            this.add_nip46_signer(&signer, cx);
-        });
-
-        // Start countdown
-        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            for i in (0..=30).rev() {
-                if i == 0 {
-                    this.update(cx, |this, cx| {
-                        this.set_countdown(None, cx);
-                    })?;
-                } else {
-                    this.update(cx, |this, cx| {
-                        this.set_countdown(Some(i), cx);
-                    })?;
-                }
-                cx.background_executor().timer(Duration::from_secs(1)).await;
-            }
-            Ok(())
-        }));
     }
 
     fn ncryptsec<S>(&mut self, content: S, pwd: S, window: &mut Window, cx: &mut Context<Self>)
@@ -179,9 +110,10 @@ impl ImportKey {
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             match task.await {
                 Ok(keys) => {
-                    nostr.update(cx, |this, cx| {
-                        this.add_key_signer(&keys, cx);
-                    });
+                    nostr.update_in(cx, |this, window, cx| {
+                        this.set_signer(keys, cx);
+                        window.close_modal(cx);
+                    })?;
                 }
                 Err(e) => {
                     this.update(cx, |this, cx| {
@@ -198,12 +130,6 @@ impl ImportKey {
     where
         S: Into<SharedString>,
     {
-        // Reset the log in state
-        self.set_loading(false, cx);
-
-        // Reset the countdown
-        self.set_countdown(None, cx);
-
         // Update error message
         self.error.update(cx, |this, cx| {
             *this = Some(message.into());
@@ -224,22 +150,12 @@ impl ImportKey {
             Ok(())
         }));
     }
-
-    fn set_loading(&mut self, status: bool, cx: &mut Context<Self>) {
-        self.loading = status;
-        cx.notify();
-    }
-
-    fn set_countdown(&mut self, i: Option<u64>, cx: &mut Context<Self>) {
-        self.countdown.update(cx, |this, cx| {
-            *this = i;
-            cx.notify();
-        });
-    }
 }
 
-impl Render for ImportKey {
+impl Render for ImportIdentity {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        const MSG: &str = "Coop isn't stored your identity secret in local device. Everything will be reset on the next login.";
+
         v_flex()
             .size_full()
             .gap_2()
@@ -249,7 +165,7 @@ impl Render for ImportKey {
                     .gap_1()
                     .text_sm()
                     .text_color(cx.theme().text_muted)
-                    .child("nsec or bunker://")
+                    .child("nsec or ncryptsec://")
                     .child(Input::new(&self.key_input)),
             )
             .when(
@@ -265,6 +181,7 @@ impl Render for ImportKey {
                     )
                 },
             )
+            .child(div().text_xs().text_color(cx.theme().text_muted).child(MSG))
             .child(
                 Button::new("login")
                     .label("Continue")
@@ -275,18 +192,6 @@ impl Render for ImportKey {
                         this.login(window, cx);
                     })),
             )
-            .when_some(self.countdown.read(cx).as_ref(), |this, i| {
-                this.child(
-                    div()
-                        .text_xs()
-                        .text_center()
-                        .text_color(cx.theme().text_muted)
-                        .child(SharedString::from(format!(
-                            "Approve connection request from your signer in {} seconds",
-                            i
-                        ))),
-                )
-            })
             .when_some(self.error.read(cx).as_ref(), |this, error| {
                 this.child(
                     div()

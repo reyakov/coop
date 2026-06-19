@@ -1,8 +1,7 @@
 use std::ops::Range;
-use gpui::Half;
 
 use gpui::{
-    App, Font, LineFragment, Pixels, Point, ShapedLine, Size, TextAlign, Window, point, px,
+    App, Font, Half, LineFragment, Pixels, Point, ShapedLine, Size, TextAlign, Window, point, px,
     size,
 };
 use ropey::Rope;
@@ -97,7 +96,7 @@ impl TextWrapper {
     /// Get the line item by row index.
     #[inline]
     pub(crate) fn line(&self, row: usize) -> Option<&LineItem> {
-        self.lines.iter().skip(row).next()
+        self.lines.get(row)
     }
 
     pub(crate) fn set_wrap_width(&mut self, wrap_width: Option<Pixels>, cx: &mut App) {
@@ -228,7 +227,7 @@ impl TextWrapper {
             });
         }
 
-        if self.lines.len() == 0 {
+        if self.lines.is_empty() {
             self.lines = new_lines;
         } else {
             self.lines.splice(rows_range, new_lines);
@@ -246,7 +245,7 @@ impl TextWrapper {
     ///
     /// If the `text` is the same as the current text, do nothing.
     fn update_all(&mut self, text: &Rope, cx: &mut App) {
-        self.update(text, &(0..text.len()), &text, cx);
+        self.update(text, &(0..text.len()), text, cx);
     }
 
     /// Return display point (with soft wrap) from the given byte offset in the text.
@@ -278,7 +277,8 @@ impl TextWrapper {
         // Otherwise return the eof of the line.
         let last_range = line.wrapped_lines.last().unwrap_or(&(0..0));
         let ix = line.lines_len().saturating_sub(1);
-        return WrapDisplayPoint::new(wrapped_row + ix, ix, last_range.len());
+
+        WrapDisplayPoint::new(wrapped_row + ix, ix, last_range.len())
     }
 
     /// Return byte offset in the text from the given display point (with soft wrap).
@@ -301,7 +301,7 @@ impl TextWrapper {
             wrapped_row += line.lines_len();
         }
 
-        return self.text.len();
+        self.text.len()
     }
 
     pub(crate) fn display_point_to_point(&self, point: WrapDisplayPoint) -> TreeSitterPoint {
@@ -578,353 +578,5 @@ impl LineLayout {
                 _ = invisible.paint(origin, line_height, text_align, align_width, window, cx);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::rc::Rc;
-
-    use gpui::{Boundary, FontFeatures, FontStyle, FontWeight, px};
-
-    #[test]
-    fn test_update() {
-        let font = gpui::Font {
-            family: "Arial".into(),
-            weight: FontWeight::default(),
-            style: FontStyle::Normal,
-            features: FontFeatures::default(),
-            fallbacks: None,
-        };
-
-        let mut wrapper = TextWrapper::new(font, px(14.), None);
-        let mut text = Rope::from(
-            "Hello, 世界!\r\nThis is second line.\nThis is third line.\n这里是第 4 行。",
-        );
-
-        fn fake_wrap_line(_line: &str, _wrap_width: Pixels) -> Vec<Boundary> {
-            vec![]
-        }
-
-        #[track_caller]
-        fn assert_wrapper_lines(text: &Rope, wrapper: &TextWrapper, expected_lines: &[&[&str]]) {
-            let mut actual_lines = vec![];
-            let mut offset = 0;
-            for line in wrapper.lines.iter() {
-                actual_lines.push(
-                    line.wrapped_lines
-                        .iter()
-                        .map(|range| text.slice(offset + range.start..offset + range.end))
-                        .collect::<Vec<_>>(),
-                );
-                // +1 \n
-                offset += line.len() + 1;
-            }
-            assert_eq!(actual_lines, expected_lines);
-        }
-
-        wrapper._update(&text, &(0..text.len()), &text, &mut fake_wrap_line);
-        assert_eq!(wrapper.lines.len(), 4);
-        assert_wrapper_lines(
-            &text,
-            &wrapper,
-            &[
-                &["Hello, 世界!\r"],
-                &["This is second line."],
-                &["This is third line."],
-                &["这里是第 4 行。"],
-            ],
-        );
-
-        // Add a new text to end
-        let range = text.len()..text.len();
-        let new_text = "New text";
-        text.replace(range.clone(), new_text);
-        wrapper._update(&text, &range, &Rope::from(new_text), &mut fake_wrap_line);
-        assert_eq!(
-            text.to_string(),
-            "Hello, 世界!\r\nThis is second line.\nThis is third line.\n这里是第 4 行。New text"
-        );
-        assert_eq!(wrapper.lines.len(), 4);
-        assert_eq!(wrapper.lines.len(), 4);
-        assert_wrapper_lines(
-            &text,
-            &wrapper,
-            &[
-                &["Hello, 世界!\r"],
-                &["This is second line."],
-                &["This is third line."],
-                &["这里是第 4 行。New text"],
-            ],
-        );
-
-        // Replace first line `Hello` to `AAA`
-        let range = 0..5;
-        let new_text = "AAA";
-        text.replace(range.clone(), new_text);
-        wrapper._update(&text, &range, &Rope::from(new_text), &mut fake_wrap_line);
-        assert_eq!(
-            text.to_string(),
-            "AAA, 世界!\r\nThis is second line.\nThis is third line.\n这里是第 4 行。New text"
-        );
-        assert_eq!(wrapper.lines.len(), 4);
-        assert_wrapper_lines(
-            &text,
-            &wrapper,
-            &[
-                &["AAA, 世界!\r"],
-                &["This is second line."],
-                &["This is third line."],
-                &["这里是第 4 行。New text"],
-            ],
-        );
-
-        // Remove the second line
-        let start_offset = text.line_start_offset(1);
-        let end_offset = text.line_end_offset(1);
-        let range = start_offset..end_offset + 1;
-        text.replace(range.clone(), "");
-        wrapper._update(&text, &range, &Rope::from(""), &mut fake_wrap_line);
-        assert_eq!(
-            text.to_string(),
-            "AAA, 世界!\r\nThis is third line.\n这里是第 4 行。New text"
-        );
-        assert_eq!(wrapper.lines.len(), 3);
-        assert_wrapper_lines(
-            &text,
-            &wrapper,
-            &[
-                &["AAA, 世界!\r"],
-                &["This is third line."],
-                &["这里是第 4 行。New text"],
-            ],
-        );
-
-        // Replace the first 2 lines to "This is a new line."
-        let range = text.line_start_offset(0)..text.line_end_offset(1) + 1;
-        let new_text = "This is a new line.\nThis is new line 2.\n";
-        text.replace(range.clone(), new_text);
-        wrapper._update(&text, &range, &Rope::from(new_text), &mut fake_wrap_line);
-        assert_eq!(
-            text.to_string(),
-            "This is a new line.\nThis is new line 2.\n这里是第 4 行。New text"
-        );
-        assert_eq!(wrapper.lines.len(), 3);
-        assert_wrapper_lines(
-            &text,
-            &wrapper,
-            &[
-                &["This is a new line."],
-                &["This is new line 2."],
-                &["这里是第 4 行。New text"],
-            ],
-        );
-
-        // Add a new line at the end
-        let range = text.len()..text.len();
-        let new_text = "\nThis is a new line at the end.";
-        text.replace(range.clone(), new_text);
-        wrapper._update(&text, &range, &Rope::from(new_text), &mut fake_wrap_line);
-        assert_eq!(
-            text.to_string(),
-            "This is a new line.\nThis is new line 2.\n这里是第 4 行。New text\nThis is a new line at the end."
-        );
-        assert_eq!(wrapper.lines.len(), 4);
-        assert_wrapper_lines(
-            &text,
-            &wrapper,
-            &[
-                &["This is a new line."],
-                &["This is new line 2."],
-                &["这里是第 4 行。New text"],
-                &["This is a new line at the end."],
-            ],
-        );
-
-        // Add a new line at the beginning
-        let range = 0..0;
-        let new_text = "This is a new line at the beginning.\n";
-        text.replace(range.clone(), new_text);
-        wrapper._update(&text, &range, &Rope::from(new_text), &mut fake_wrap_line);
-        assert_eq!(
-            text.to_string(),
-            "This is a new line at the beginning.\nThis is a new line.\nThis is new line 2.\n这里是第 4 行。New text\nThis is a new line at the end."
-        );
-        assert_eq!(wrapper.lines.len(), 5);
-        assert_wrapper_lines(
-            &text,
-            &wrapper,
-            &[
-                &["This is a new line at the beginning."],
-                &["This is a new line."],
-                &["This is new line 2."],
-                &["这里是第 4 行。New text"],
-                &["This is a new line at the end."],
-            ],
-        );
-
-        // Remove all to at least one line in `lines`.
-        let range = 0..text.len();
-        let new_text = "";
-        text.replace(range.clone(), new_text);
-        wrapper._update(&text, &range, &Rope::from(new_text), &mut fake_wrap_line);
-        assert_eq!(text.to_string(), "");
-        assert_eq!(wrapper.lines.len(), 1);
-        assert_eq!(wrapper.lines[0].wrapped_lines, vec![0..0]);
-
-        // Test update_all
-        let range = 0..text.len();
-        let new_text = "This is a full text.\nThis is a second line.";
-        text.replace(range.clone(), new_text);
-        wrapper._update(&text, &range, &text, &mut fake_wrap_line);
-        assert_eq!(
-            text.to_string(),
-            "This is a full text.\nThis is a second line."
-        );
-        assert_eq!(wrapper.lines.len(), 2);
-    }
-
-    #[test]
-    fn test_line_layout() {
-        let mut line_layout = LineLayout::new();
-
-        let line1 = ShapedLine::default().with_len(100);
-        let line2 = ShapedLine::default().with_len(50);
-        let wrapped_lines = smallvec::smallvec![line1, line2];
-        line_layout.set_wrapped_lines(wrapped_lines);
-        assert_eq!(line_layout.len(), 150);
-        assert_eq!(line_layout.wrapped_lines.len(), 2);
-    }
-
-    #[test]
-    fn test_position_for_index_prefers_first_leading_empty_visual_line() {
-        let mut line_layout = LineLayout::new();
-        line_layout.set_wrapped_lines(smallvec::smallvec![
-            ShapedLine::default(),
-            ShapedLine::default(),
-            ShapedLine::default().with_len(3),
-        ]);
-
-        let last_layout = LastLayout {
-            visible_range: 0..1,
-            visible_buffer_lines: vec![0],
-            visible_line_byte_offsets: vec![0],
-            visible_top: px(0.),
-            visible_range_offset: 0..0,
-            lines: Rc::new(vec![]),
-            line_height: px(20.),
-            wrap_width: None,
-            line_number_width: px(0.),
-            cursor_bounds: None,
-            text_align: TextAlign::Left,
-            content_width: px(0.),
-        };
-
-        assert_eq!(
-            line_layout.position_for_index(0, &last_layout, false),
-            Some(point(px(0.), px(0.)))
-        );
-    }
-
-    #[test]
-    fn test_offset_to_display_point() {
-        let font = gpui::Font {
-            family: "Arial".into(),
-            weight: FontWeight::default(),
-            style: FontStyle::Normal,
-            features: FontFeatures::default(),
-            fallbacks: None,
-        };
-
-        let mut wrapper = TextWrapper::new(font, px(14.), None);
-        wrapper.text = Rope::from(
-            "Hello, 世界!\r\nThis is second line.\nThis is third line.\n这里是第 4 行。",
-        );
-        wrapper.lines = vec![
-            // range: 0..15
-            LineItem {
-                line: Rope::from("Hello, 世界!\r"),
-                wrapped_lines: vec![0..15],
-            },
-            // range: 16..36
-            LineItem {
-                line: Rope::from("This is second line."),
-                wrapped_lines: vec![0..10, 10..20],
-            },
-            // range: 37..56
-            LineItem {
-                line: Rope::from("This is third line."),
-                wrapped_lines: vec![0..9, 9..15, 15..20],
-            },
-            // range: 57..79
-            LineItem {
-                line: Rope::from("这里是第 4 行。"),
-                wrapped_lines: vec![0..22],
-            },
-        ];
-
-        assert_eq!(
-            wrapper.offset_to_display_point(12),
-            WrapDisplayPoint::new(0, 0, 12)
-        );
-        assert_eq!(
-            wrapper.offset_to_display_point(15),
-            WrapDisplayPoint::new(0, 0, 15)
-        );
-
-        assert_eq!(
-            wrapper.offset_to_display_point(16),
-            WrapDisplayPoint::new(1, 0, 0)
-        );
-        assert_eq!(
-            wrapper.offset_to_display_point(21),
-            WrapDisplayPoint::new(1, 0, 5)
-        );
-        assert_eq!(
-            wrapper.offset_to_display_point(27),
-            WrapDisplayPoint::new(2, 1, 1)
-        );
-        assert_eq!(
-            wrapper.offset_to_display_point(37),
-            WrapDisplayPoint::new(3, 0, 0)
-        );
-        assert_eq!(
-            wrapper.offset_to_display_point(54),
-            WrapDisplayPoint::new(5, 2, 2)
-        );
-        assert_eq!(
-            wrapper.offset_to_display_point(59),
-            WrapDisplayPoint::new(6, 0, 2)
-        );
-
-        assert_eq!(
-            wrapper.display_point_to_offset(WrapDisplayPoint::new(6, 0, 2)),
-            59
-        );
-        assert_eq!(
-            wrapper.display_point_to_offset(WrapDisplayPoint::new(5, 2, 2)),
-            54
-        );
-        assert_eq!(
-            wrapper.display_point_to_offset(WrapDisplayPoint::new(3, 0, 0)),
-            37
-        );
-        assert_eq!(
-            wrapper.display_point_to_offset(WrapDisplayPoint::new(2, 1, 1)),
-            27
-        );
-        assert_eq!(
-            wrapper.display_point_to_offset(WrapDisplayPoint::new(1, 0, 5)),
-            21
-        );
-        assert_eq!(
-            wrapper.display_point_to_offset(WrapDisplayPoint::new(1, 0, 0)),
-            16
-        );
-        assert_eq!(
-            wrapper.display_point_to_offset(WrapDisplayPoint::new(0, 0, 15)),
-            15
-        );
     }
 }

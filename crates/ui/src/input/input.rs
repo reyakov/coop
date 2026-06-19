@@ -18,7 +18,7 @@ pub(crate) fn input_style(disabled: bool, cx: &App) -> (Hsla, Hsla) {
     if disabled {
         (cx.theme().surface_background, cx.theme().text_muted)
     } else {
-        (cx.theme().surface_background, cx.theme().text)
+        (cx.theme().elevated_surface_background, cx.theme().text)
     }
 }
 

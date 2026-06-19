@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Error, anyhow};
 use common::EventExt;
-use device::{DeviceEvent, DeviceRegistry};
 use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::{
@@ -17,7 +16,7 @@ use gpui::{
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use smol::lock::RwLock;
-use state::{CoopSigner, DEVICE_GIFTWRAP, NostrRegistry, StateEvent, TIMEOUT, USER_GIFTWRAP};
+use state::{DEVICE_GIFTWRAP, NostrRegistry, USER_GIFTWRAP};
 
 mod message;
 mod room;
@@ -42,6 +41,8 @@ pub enum ChatEvent {
     CloseRoom(u64),
     /// An event to notify UI about a new chat request
     Ping,
+    /// No Inbox Relays found, the app is not ready to subscribe messages
+    InboxRelayNotFound,
     /// An error occurred
     Error(SharedString),
 }
@@ -49,6 +50,10 @@ pub enum ChatEvent {
 /// Channel signal.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum Signal {
+    /// Inbox Relays found, the app is ready to subscribe messages
+    InboxReady(Box<Event>),
+    /// No Inbox Relays found, the app is not ready to subscribe messages
+    InboxRelayNotFound,
     /// Message received from relay pool
     Message(NewMessage),
     /// Eose received from relay pool
@@ -60,6 +65,14 @@ enum Signal {
 impl Signal {
     pub fn message(gift_wrap: EventId, rumor: UnsignedEvent) -> Self {
         Self::Message(NewMessage::new(gift_wrap, rumor))
+    }
+
+    pub fn inbox_ready(event: &Event) -> Self {
+        Self::InboxReady(Box::new(event.to_owned()))
+    }
+
+    pub fn inbox_relay_not_found() -> Self {
+        Self::InboxRelayNotFound
     }
 
     pub fn eose() -> Self {
@@ -74,15 +87,9 @@ impl Signal {
     }
 }
 
-type Dekey = bool;
-type GiftWrapId = EventId;
-
 /// Chat Registry
 #[derive(Debug)]
 pub struct ChatRegistry {
-    /// Whether the chat registry is currently initializing.
-    pub initializing: bool,
-
     /// Chat rooms
     rooms: Vec<Entity<Room>>,
 
@@ -93,10 +100,13 @@ pub struct ChatRegistry {
     seens: Arc<RwLock<HashMap<EventId, HashSet<RelayUrl>>>>,
 
     /// Mapping of unwrapped event ids to their gift wrap event ids
-    event_map: Arc<RwLock<HashMap<EventId, (GiftWrapId, Dekey)>>>,
+    event_map: Arc<RwLock<HashMap<EventId, EventId>>>,
 
     /// Tracking the status of unwrapping gift wrap events.
-    tracking_flag: Arc<AtomicBool>,
+    tracking: Arc<AtomicBool>,
+
+    /// Whether the messaging relays have been found.
+    msg_relays_existed: Arc<AtomicBool>,
 
     /// Channel for sending signals to the UI.
     signal_tx: flume::Sender<Signal>,
@@ -127,66 +137,36 @@ impl ChatRegistry {
     /// Create a new chat registry instance
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let nostr = NostrRegistry::global(cx);
-        let device = DeviceRegistry::global(cx);
+        let user_signer = nostr.read(cx).signer.clone();
 
         let (tx, rx) = flume::unbounded::<Signal>();
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
             // Subscribe to the signer event
-            cx.subscribe_in(&nostr, window, |this, state, event, window, cx| {
-                if event == &StateEvent::SignerSet {
+            cx.observe(&user_signer, |this, signer, cx| {
+                if let Some(keys) = signer.read(cx).clone() {
                     this.reset(cx);
-                    this.get_contact_list(cx);
+                    this.handle_notifications(keys, cx);
+                    this.get_metadata(cx);
                     this.get_rooms(cx);
-
-                    let signer = state.read(cx).signer();
-                    cx.spawn_in(window, async move |this, cx| {
-                        let user_signer = signer.get().await;
-                        this.update(cx, |this, cx| {
-                            this.get_messages(user_signer, cx);
-                        })
-                        .ok();
-                    })
-                    .detach();
-                };
-            }),
-        );
-
-        subscriptions.push(
-            // Subscribe to the device event
-            cx.subscribe_in(&device, window, |_this, _s, event, window, cx| {
-                if event == &DeviceEvent::Set {
-                    let nostr = NostrRegistry::global(cx);
-                    let signer = nostr.read(cx).signer();
-
-                    cx.spawn_in(window, async move |this, cx| {
-                        if let Some(device_signer) = signer.get_encryption_signer().await {
-                            this.update(cx, |this, cx| {
-                                this.get_messages(device_signer, cx);
-                            })
-                            .ok();
-                        }
-                    })
-                    .detach();
                 };
             }),
         );
 
         // Run at the end of the current cycle
         cx.defer_in(window, |this, _window, cx| {
-            this.get_rooms(cx);
-            this.handle_notifications(cx);
             this.tracking(cx);
+            this.get_rooms(cx);
         });
 
         Self {
-            initializing: true,
             rooms: vec![],
             trashes: cx.new(|_| BTreeSet::default()),
             seens: Arc::new(RwLock::new(HashMap::default())),
             event_map: Arc::new(RwLock::new(HashMap::default())),
-            tracking_flag: Arc::new(AtomicBool::new(false)),
+            tracking: Arc::new(AtomicBool::new(false)),
+            msg_relays_existed: Arc::new(AtomicBool::new(false)),
             signal_rx: rx,
             signal_tx: tx,
             tasks: smallvec![],
@@ -195,11 +175,13 @@ impl ChatRegistry {
     }
 
     /// Handle nostr notifications
-    fn handle_notifications(&mut self, cx: &mut Context<Self>) {
+    fn handle_notifications(&mut self, signer: Keys, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
-        let status = self.tracking_flag.clone();
+
+        let tracking = self.tracking.clone();
+        let msg_relays_existed = self.msg_relays_existed.clone();
+
         let seens = self.seens.clone();
         let event_map = self.event_map.clone();
         let trashes = self.trashes.downgrade();
@@ -223,10 +205,7 @@ impl ChatRegistry {
                 };
 
                 match *message {
-                    RelayMessage::Event {
-                        event,
-                        subscription_id,
-                    } => {
+                    RelayMessage::Event { event, .. } => {
                         // Keep track of which relays have seen this event
                         {
                             let mut seens = seens.write().await;
@@ -236,6 +215,18 @@ impl ChatRegistry {
                         // De-duplicate events by their ID
                         if !processed_events.insert(event.id) {
                             continue;
+                        }
+
+                        // Handle msg relays event to determine when the app is ready to subscribe
+                        if event.kind == Kind::InboxRelays {
+                            let current_user = signer.get_public_key_async().await?;
+
+                            if event.pubkey == current_user {
+                                // Mark that the msg relays have been found
+                                msg_relays_existed.store(true, Ordering::Release);
+                                // Emit the inbox ready signal
+                                tx.send_async(Signal::inbox_ready(&event)).await?;
+                            }
                         }
 
                         // Skip non-gift wrap events
@@ -249,21 +240,12 @@ impl ChatRegistry {
                                 // Map the rumor id to the gift wrap event id for later lookup
                                 {
                                     let mut event_map = event_map.write().await;
-                                    let dekey = subscription_id.as_ref() == &sub_id1;
-                                    event_map.insert(rumor.id.unwrap(), (event.id, dekey));
-                                }
-
-                                if rumor.kind != Kind::PrivateDirectMessage
-                                    || rumor.kind != Kind::Custom(15)
-                                {
-                                    log::info!("Rumor is not releated to NIP17");
-                                    continue;
+                                    event_map.insert(rumor.id.unwrap(), event.id);
                                 }
 
                                 // Check if the rumor has a recipient
                                 if rumor.tags.is_empty() {
-                                    let signal =
-                                        Signal::error(event.as_ref(), "Recipient is missing");
+                                    let signal = Signal::error(&event, "Recipient is missing");
                                     tx.send_async(signal).await?;
                                 }
 
@@ -273,7 +255,7 @@ impl ChatRegistry {
                                     tx.send_async(signal).await?;
                                 } else {
                                     // Mark the chat still processing new messages
-                                    status.store(true, Ordering::Release);
+                                    tracking.store(true, Ordering::Release);
                                 }
                             }
                             Err(e) => {
@@ -283,10 +265,10 @@ impl ChatRegistry {
                             }
                         }
                     }
-                    RelayMessage::EndOfStoredEvents(id) => {
-                        if id.as_ref() == &sub_id1 || id.as_ref() == &sub_id2 {
-                            tx.send_async(Signal::eose()).await?;
-                        }
+                    RelayMessage::EndOfStoredEvents(id)
+                        if (id.as_ref() == &sub_id1 || id.as_ref() == &sub_id2) =>
+                    {
+                        tx.send_async(Signal::eose()).await?;
                     }
                     _ => {}
                 }
@@ -301,6 +283,16 @@ impl ChatRegistry {
                     Signal::Message(message) => {
                         this.update(cx, |this, cx| {
                             this.new_message(message, cx);
+                        })?;
+                    }
+                    Signal::InboxReady(event) => {
+                        this.update(cx, |this, cx| {
+                            this.get_messages(&event, cx);
+                        })?;
+                    }
+                    Signal::InboxRelayNotFound => {
+                        this.update(cx, |_this, cx| {
+                            cx.emit(ChatEvent::InboxRelayNotFound);
                         })?;
                     }
                     Signal::Eose => {
@@ -323,7 +315,7 @@ impl ChatRegistry {
 
     /// Tracking the status of unwrapping gift wrap events.
     fn tracking(&mut self, cx: &mut Context<Self>) {
-        let status = self.tracking_flag.clone();
+        let status = self.tracking.clone();
         let tx = self.signal_tx.clone();
 
         self.tasks.push(cx.background_spawn(async move {
@@ -341,107 +333,71 @@ impl ChatRegistry {
         }));
     }
 
-    /// Get contact list from relays
-    fn get_contact_list(&mut self, cx: &mut Context<Self>) {
+    /// Get all necessary metadata from relays for current user
+    pub fn get_metadata(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
 
-        let Some(public_key) = signer.public_key() else {
+        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
             return;
         };
 
-        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let id = SubscriptionId::new("contact-list");
-            let opts = SubscribeAutoCloseOptions::default()
-                .exit_policy(ReqExitPolicy::ExitOnEOSE)
-                .timeout(Some(Duration::from_secs(TIMEOUT)));
+        self.tasks.push(cx.background_spawn(async move {
+            let opts = SubscribeAutoCloseOptions::default().exit_policy(ReqExitPolicy::ExitOnEOSE);
 
-            // Construct filter for inbox relays
-            let filter = Filter::new()
+            // Construct filter for msg relays
+            let msg_relays = Filter::new()
+                .kind(Kind::InboxRelays)
+                .author(public_key)
+                .limit(1);
+
+            // Construct filter for contact list
+            let contact_list = Filter::new()
                 .kind(Kind::ContactList)
                 .author(public_key)
                 .limit(1);
 
             // Subscribe
-            client.subscribe(filter).close_on(opts).with_id(id).await?;
+            client
+                .subscribe(vec![msg_relays, contact_list])
+                .close_on(opts)
+                .await?;
 
             Ok(())
-        });
+        }));
 
-        self.tasks.push(task);
-    }
+        let tx = self.signal_tx.clone();
+        let msg_relays_existed = self.msg_relays_existed.clone();
 
-    /// Get all messages for the provided signer
-    fn get_messages<T>(&mut self, signer: T, cx: &mut Context<Self>)
-    where
-        T: NostrSigner + 'static,
-    {
-        let task = self.subscribe_gift_wrap_events(signer, cx);
+        // Reset the status flag
+        msg_relays_existed.store(false, Ordering::Release);
 
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            match task.await {
-                Ok(_) => {
-                    this.update(cx, |this, cx| {
-                        this.set_initializing(false, cx);
-                    })?;
-                }
-                Err(e) => {
-                    this.update(cx, |_this, cx| {
-                        cx.emit(ChatEvent::Error(SharedString::from(e.to_string())));
-                    })?;
-                }
+        // Wait for the msg relays to be found or timeout
+        self.tasks.push(cx.background_spawn(async move {
+            // Wait for 5 seconds
+            smol::Timer::after(Duration::from_secs(5)).await;
+
+            // Then check if the msg relays have been found
+            if !msg_relays_existed.load(Ordering::Acquire) {
+                tx.send_async(Signal::inbox_relay_not_found()).await?;
             }
+
             Ok(())
         }));
     }
 
-    // Get messaging relay list for current user
-    fn get_messaging_relays(&self, cx: &App) -> Task<Result<Vec<RelayUrl>, Error>> {
+    /// Get all messages for the provided signer
+    fn get_messages(&mut self, msg_relays: &Event, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
+        let urls: Vec<RelayUrl> = nip17::extract_relay_list(msg_relays).collect();
 
-        cx.background_spawn(async move {
-            let public_key = signer.get_public_key().await?;
-            let id = SubscriptionId::new("inbox-relay");
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return;
+        };
 
-            // Construct filter for inbox relays
-            let filter = Filter::new()
-                .kind(Kind::InboxRelays)
-                .author(public_key)
-                .limit(1);
-
-            // Stream events from user's write relays
-            let mut stream = client
-                .stream_events(filter)
-                .with_id(id)
-                .timeout(Duration::from_secs(TIMEOUT))
-                .await?;
-
-            while let Some((_url, res)) = stream.next().await {
-                if let Ok(event) = res {
-                    let urls: Vec<RelayUrl> = nip17::extract_owned_relay_list(event).collect();
-                    return Ok(urls);
-                }
-            }
-
-            Err(anyhow!("Messaging Relays not found"))
-        })
-    }
-
-    /// Continuously get gift wrap events for the signer
-    fn subscribe_gift_wrap_events<T>(&self, signer: T, cx: &App) -> Task<Result<(), Error>>
-    where
-        T: NostrSigner + 'static,
-    {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-        let urls = self.get_messaging_relays(cx);
-
-        cx.background_spawn(async move {
-            let urls = urls.await?;
-            let public_key = signer.get_public_key().await?;
+        let task: Task<Result<(), Error>> = cx.background_spawn(async move {
+            let public_key = signer.get_public_key_async().await?;
             let filter = Filter::new().kind(Kind::GiftWrap).pubkey(public_key);
             let id = SubscriptionId::new(format!("{}-msg", public_key.to_hex()));
 
@@ -464,43 +420,28 @@ impl ChatRegistry {
             );
 
             Ok(())
-        })
+        });
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            if let Err(e) = task.await {
+                this.update(cx, |_this, cx| {
+                    cx.emit(ChatEvent::Error(SharedString::from(e.to_string())));
+                })?;
+            }
+            Ok(())
+        }));
     }
 
     /// Refresh the chat registry, fetching messages and contact list from relays.
-    pub fn refresh(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
         self.reset(cx);
-        self.get_contact_list(cx);
+        self.get_metadata(cx);
         self.get_rooms(cx);
-
-        let nostr = NostrRegistry::global(cx);
-        let signer = nostr.read(cx).signer();
-
-        cx.spawn_in(window, async move |this, cx| {
-            let user_signer = signer.get().await;
-            let device_signer = signer.get_encryption_signer().await;
-
-            this.update(cx, |this, cx| {
-                this.get_messages(user_signer, cx);
-
-                if let Some(device_signer) = device_signer {
-                    this.get_messages(device_signer, cx);
-                }
-            })
-            .ok();
-        })
-        .detach();
-    }
-
-    /// Set the initializing status of the chat registry
-    fn set_initializing(&mut self, initializing: bool, cx: &mut Context<Self>) {
-        self.initializing = initializing;
-        cx.notify();
     }
 
     /// Get the loading status of the chat registry
     pub fn loading(&self) -> bool {
-        self.tracking_flag.load(Ordering::Acquire)
+        self.tracking.load(Ordering::Acquire)
     }
 
     /// Get a weak reference to a room by its ID.
@@ -552,7 +493,7 @@ impl ChatRegistry {
         self.event_map
             .read_blocking()
             .get(id)
-            .map(|(id, _dekey)| self.seen_on(id))
+            .map(|id| self.seen_on(id))
     }
 
     /// Get the relays that have seen a given gift wrap id.
@@ -564,26 +505,18 @@ impl ChatRegistry {
             .unwrap_or_default()
     }
 
-    /// Check if a given rumor was encrypted by the dekey.
-    pub fn encrypted_by_dekey(&self, id: &EventId) -> bool {
-        self.event_map
-            .read_blocking()
-            .get(id)
-            .map(|(_, dekey)| *dekey)
-            .unwrap_or(false)
-    }
-
     /// Add a new room to the start of list.
     pub fn add_room<I>(&mut self, room: I, cx: &mut Context<Self>)
     where
         I: Into<Room> + 'static,
     {
         let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
+
+        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
+            return;
+        };
 
         cx.spawn(async move |this, cx| {
-            let signer = client.signer()?;
-            let public_key = signer.get_public_key().await.ok()?;
             let room: Room = room.into().organize(&public_key);
 
             this.update(cx, |this, cx| {
@@ -650,7 +583,6 @@ impl ChatRegistry {
 
     /// Reset the registry.
     pub fn reset(&mut self, cx: &mut Context<Self>) {
-        self.initializing = true;
         self.rooms.clear();
         self.trashes.update(cx, |this, cx| {
             this.clear();
@@ -689,7 +621,13 @@ impl ChatRegistry {
 
     /// Load all rooms from the database.
     pub fn get_rooms(&mut self, cx: &mut Context<Self>) {
-        let task = self.get_rooms_from_database(cx);
+        let nostr = NostrRegistry::global(cx);
+
+        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
+            return;
+        };
+
+        let task = self.get_rooms_from_database(public_key, cx);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
@@ -709,14 +647,15 @@ impl ChatRegistry {
     }
 
     /// Create a task to load rooms from the database
-    fn get_rooms_from_database(&self, cx: &App) -> Task<Result<HashSet<Room>, Error>> {
+    fn get_rooms_from_database(
+        &self,
+        public_key: PublicKey,
+        cx: &App,
+    ) -> Task<Result<HashSet<Room>, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
         cx.background_spawn(async move {
-            let signer = client.signer().context("Signer not found")?;
-            let public_key = signer.get_public_key().await?;
-
             // Get contacts
             let contacts = client
                 .database()
@@ -793,15 +732,15 @@ impl ChatRegistry {
     /// Updates room ordering based on the most recent messages.
     pub fn new_message(&mut self, message: NewMessage, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
-        let signer = nostr.read(cx).signer();
+
+        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
+            return;
+        };
 
         match self.rooms.iter().find(|e| e.read(cx).id == message.room) {
             Some(room) => {
                 room.update(cx, |this, cx| {
-                    if this.kind == RoomKind::Request
-                        && let Some(public_key) = signer.public_key()
-                        && message.rumor.pubkey == public_key
-                    {
+                    if this.kind == RoomKind::Request && message.rumor.pubkey == public_key {
                         this.set_ongoing(cx);
                     }
                     this.push_message(message, cx);
@@ -830,7 +769,7 @@ impl ChatRegistry {
 /// Unwraps a gift-wrapped event and processes its contents.
 async fn extract_rumor(
     client: &Client,
-    signer: &Arc<CoopSigner>,
+    signer: &Keys,
     gift_wrap: &Event,
 ) -> Result<UnsignedEvent, Error> {
     // Try to get cached rumor first
@@ -854,8 +793,9 @@ async fn extract_rumor(
 }
 
 /// Helper method to try unwrapping with different signers
-async fn try_unwrap(signer: &Arc<CoopSigner>, gift_wrap: &Event) -> Result<UnwrappedGift, Error> {
-    // Try with the device signer first
+async fn try_unwrap(signer: &Keys, gift_wrap: &Event) -> Result<UnwrappedGift, Error> {
+    /*
+    *  // Try with the device signer first
     if let Some(signer) = signer.get_encryption_signer().await {
         log::info!("trying with encryption key");
         if let Ok(unwrapped) = try_unwrap_with(gift_wrap, &signer).await {
@@ -865,19 +805,17 @@ async fn try_unwrap(signer: &Arc<CoopSigner>, gift_wrap: &Event) -> Result<Unwra
 
     // Fallback to the user's signer
     let user_signer = signer.get().await;
-    let unwrapped = try_unwrap_with(gift_wrap, &user_signer).await?;
+    */
+    let unwrapped = try_unwrap_with(gift_wrap, signer).await?;
 
     Ok(unwrapped)
 }
 
 /// Attempts to unwrap a gift wrap event with a given signer.
-async fn try_unwrap_with<T>(gift_wrap: &Event, signer: &T) -> Result<UnwrappedGift, Error>
-where
-    T: NostrSigner + 'static,
-{
+async fn try_unwrap_with(gift_wrap: &Event, signer: &Keys) -> Result<UnwrappedGift, Error> {
     // Get the sealed event
     let seal = signer
-        .nip44_decrypt(&gift_wrap.pubkey, &gift_wrap.content)
+        .nip44_decrypt_async(&gift_wrap.pubkey, &gift_wrap.content)
         .await?;
 
     // Verify the sealed event
@@ -885,7 +823,10 @@ where
     seal.verify_with_ctx(&SECP256K1)?;
 
     // Get the rumor event
-    let rumor = signer.nip44_decrypt(&seal.pubkey, &seal.content).await?;
+    let rumor = signer
+        .nip44_decrypt_async(&seal.pubkey, &seal.content)
+        .await?;
+
     let rumor = UnsignedEvent::from_json(rumor)?;
 
     Ok(UnwrappedGift {
@@ -906,26 +847,17 @@ async fn set_rumor(client: &Client, id: EventId, rumor: &UnsignedEvent) -> Resul
     tags.push(Tag::identifier(id));
 
     // Add a reference to the rumor's author
-    tags.push(Tag::custom(
-        TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::A)),
-        [author],
-    ));
+    tags.push(Tag::custom("a", [author]));
 
     // Add a conversation id
-    tags.push(Tag::custom(
-        TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::C)),
-        [conversation.to_string()],
-    ));
+    tags.push(Tag::custom("c", [conversation.to_string()]));
 
     // Add a reference to the rumor's id
     tags.push(Tag::event(rumor_id));
 
     // Add references to the rumor's participants
-    for receiver in rumor.tags.public_keys().copied() {
-        tags.push(Tag::custom(
-            TagKind::SingleLetter(SingleLetterTag::lowercase(Alphabet::P)),
-            [receiver],
-        ));
+    for receiver in rumor.tags.public_keys() {
+        tags.push(Tag::custom("P", [receiver]));
     }
 
     // Convert rumor to json
@@ -934,7 +866,7 @@ async fn set_rumor(client: &Client, id: EventId, rumor: &UnsignedEvent) -> Resul
     // Construct the event
     let event = EventBuilder::new(Kind::ApplicationSpecificData, content)
         .tags(tags)
-        .sign(&Keys::generate())
+        .finalize_async(&Keys::generate())
         .await?;
 
     // Save the event to the database
@@ -960,7 +892,7 @@ async fn get_rumor(client: &Client, gift_wrap: EventId) -> Result<UnsignedEvent,
 /// Get the conversation ID for a given rumor (message).
 fn conversation_id(rumor: &UnsignedEvent) -> u64 {
     let mut hasher = DefaultHasher::new();
-    let mut pubkeys: Vec<PublicKey> = rumor.tags.public_keys().copied().collect();
+    let mut pubkeys: Vec<PublicKey> = rumor.tags.public_keys().collect();
     pubkeys.push(rumor.pubkey);
     pubkeys.sort();
     pubkeys.dedup();

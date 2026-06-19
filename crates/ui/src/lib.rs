@@ -6,6 +6,7 @@ pub use index_path::IndexPath;
 pub use kbd::*;
 pub use root::{Root, window_paddings};
 pub use styled::*;
+pub use title_bar::*;
 pub use window_ext::*;
 
 pub use crate::Disableable;
@@ -41,6 +42,7 @@ mod index_path;
 mod kbd;
 mod root;
 mod styled;
+mod title_bar;
 mod window_ext;
 
 /// Initialize the UI module.

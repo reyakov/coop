@@ -298,10 +298,10 @@ impl Render for Notification {
 
         let action = self.action_builder.clone().map(|builder| {
             builder(self, window, cx)
-                .xsmall()
+                .small()
                 .primary()
-                .px_3()
-                .font_semibold()
+                .px_4()
+                .font_medium()
         });
 
         let icon = match self.kind {
@@ -364,8 +364,14 @@ impl Render for Notification {
                     })
                     .when_some(content, |this, content| this.child(content))
                     .when_some(action, |this, action| {
-                        this.gap_2()
-                            .child(h_flex().w_full().flex_1().justify_end().child(action))
+                        this.gap_2().child(
+                            h_flex()
+                                .mt_2()
+                                .w_full()
+                                .flex_1()
+                                .justify_end()
+                                .child(action),
+                        )
                     }),
             )
             .child(

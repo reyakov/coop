@@ -2,6 +2,8 @@ use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Error, anyhow};
@@ -11,7 +13,9 @@ use gpui::{
 };
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
-use state::{Announcement, CLIENT_NAME, NostrRegistry, StateEvent, TIMEOUT};
+use settings::AppSettings;
+use smallvec::{SmallVec, smallvec};
+use state::{Announcement, CLIENT_NAME, NostrRegistry};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::Button;
@@ -19,8 +23,6 @@ use ui::notification::{Notification, NotificationKind};
 use ui::{Disableable, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 const IDENTIFIER: &str = "coop:device";
-const MSG: &str = "You've requested an encryption key from another device. \
-                   Approve to allow Coop to share with it.";
 
 pub fn init(window: &mut Window, cx: &mut App) {
     DeviceRegistry::set_global(cx.new(|cx| DeviceRegistry::new(window, cx)), cx);
@@ -35,10 +37,10 @@ impl Global for GlobalDeviceRegistry {}
 pub enum DeviceEvent {
     /// A new encryption signer has been set
     Set,
+    /// User have not setup encryption key
+    NotSet,
     /// The device is requesting an encryption key
     Requesting,
-    /// The device is creating a new encryption key
-    Creating,
     /// An error occurred
     Error(SharedString),
 }
@@ -57,17 +59,20 @@ impl DeviceEvent {
 /// NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
 #[derive(Debug)]
 pub struct DeviceRegistry {
-    /// Whether the registry is currently initializing
-    pub initializing: bool,
-
     /// Whether there is a pending request for encryption key approval
     pub pending_request: bool,
+
+    /// Whether an announcement has been made for this device
+    pub announcement_existed: Arc<AtomicBool>,
+
+    /// Signer
+    signer: Entity<Option<Keys>>,
 
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
 
     /// Event subscription
-    _subscription: Option<Subscription>,
+    _subscriptions: SmallVec<[Subscription; 2]>,
 }
 
 impl EventEmitter<DeviceEvent> for DeviceRegistry {}
@@ -85,31 +90,53 @@ impl DeviceRegistry {
 
     /// Create a new device registry instance
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let nostr = NostrRegistry::global(cx);
+        let signer = cx.new(|_| None);
 
-        // Subscribe to nostr state events
-        let subscription = cx.subscribe_in(&nostr, window, |this, _e, event, _window, cx| {
-            if event == &StateEvent::SignerSet {
-                this.set_initializing(true, cx);
-                this.get_announcement(cx);
-            };
-        });
+        let nostr = NostrRegistry::global(cx);
+        let user_signer = nostr.read(cx).signer.clone();
+
+        let settings = AppSettings::global(cx);
+        let is_nip4e_enabled = settings.read(cx).is_nip4e_enabled(cx);
+
+        let mut subscriptions = smallvec![];
+
+        subscriptions.push(
+            // Subscribe to nostr state events
+            cx.observe(&settings, move |this, settings, cx| {
+                if settings.read(cx).is_nip4e_enabled(cx) {
+                    this.get_announcement(cx);
+                };
+            }),
+        );
+
+        subscriptions.push(
+            // Observe the user signer
+            cx.observe(&user_signer, move |this, signer, cx| {
+                if signer.read(cx).is_some() && is_nip4e_enabled {
+                    this.get_announcement(cx);
+                };
+            }),
+        );
 
         cx.defer_in(window, |this, window, cx| {
             this.handle_notifications(window, cx);
         });
 
         Self {
-            initializing: true,
+            signer,
             pending_request: false,
+            announcement_existed: Arc::new(AtomicBool::new(false)),
             tasks: vec![],
-            _subscription: Some(subscription),
+            _subscriptions: subscriptions,
         }
     }
 
     fn handle_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
+        let current_user = nostr.read(cx).signer_pubkey(cx);
+
+        let announcement_existed = self.announcement_existed.clone();
         let (tx, rx) = flume::bounded::<Event>(100);
 
         self.tasks.push(cx.background_spawn(async move {
@@ -126,15 +153,15 @@ impl DeviceRegistry {
                     }
 
                     match event.kind {
-                        Kind::Custom(4454) => {
-                            if verify_author(&client, event.as_ref()).await {
-                                tx.send_async(event.into_owned()).await?;
-                            }
+                        Kind::Custom(10044) if current_user == Some(event.pubkey) => {
+                            announcement_existed.store(true, Ordering::Relaxed);
+                            tx.send_async(event.into_owned()).await?;
                         }
-                        Kind::Custom(4455) => {
-                            if verify_author(&client, event.as_ref()).await {
-                                tx.send_async(event.into_owned()).await?;
-                            }
+                        Kind::Custom(4454) if current_user == Some(event.pubkey) => {
+                            tx.send_async(event.into_owned()).await?;
+                        }
+                        Kind::Custom(4455) if current_user == Some(event.pubkey) => {
+                            tx.send_async(event.into_owned()).await?;
                         }
                         _ => {}
                     }
@@ -147,6 +174,11 @@ impl DeviceRegistry {
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             while let Ok(event) = rx.recv_async().await {
                 match event.kind {
+                    Kind::Custom(10044) => {
+                        this.update_in(cx, |this, _window, cx| {
+                            this.set_encryption(&event, cx);
+                        })?;
+                    }
                     // New request event from other device
                     Kind::Custom(4454) => {
                         this.update_in(cx, |this, window, cx| {
@@ -166,37 +198,24 @@ impl DeviceRegistry {
         }));
     }
 
-    /// Set whether the registry is currently initializing
-    fn set_initializing(&mut self, initializing: bool, cx: &mut Context<Self>) {
-        self.initializing = initializing;
-        cx.notify();
-    }
-
     /// Set whether there is a pending request for encryption key approval
     fn set_pending_request(&mut self, pending: bool, cx: &mut Context<Self>) {
         self.pending_request = pending;
         cx.notify();
     }
 
+    /// Get the signer
+    pub fn signer(&self, cx: &App) -> Option<Keys> {
+        self.signer.read(cx).clone()
+    }
+
     /// Set the decoupled encryption key for the current user
-    fn set_signer<S>(&mut self, new: S, cx: &mut Context<Self>)
-    where
-        S: NostrSigner + 'static,
-    {
-        let nostr = NostrRegistry::global(cx);
-        let signer = nostr.read(cx).signer();
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            signer.set_encryption_signer(new).await;
-
-            // Update state
-            this.update(cx, |this, cx| {
-                this.set_initializing(false, cx);
-                cx.emit(DeviceEvent::Set);
-            })?;
-
-            Ok(())
-        }));
+    fn set_signer(&mut self, new: Keys, cx: &mut Context<Self>) {
+        self.signer.update(cx, |this, cx| {
+            *this = Some(new);
+            cx.notify();
+        });
+        cx.emit(DeviceEvent::Set);
     }
 
     /// Backup the encryption's secret key to a file
@@ -204,8 +223,12 @@ impl DeviceRegistry {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return Task::ready(Err(anyhow!("Signer is required")));
+        };
+
         cx.background_spawn(async move {
-            let keys = get_keys(&client).await?;
+            let keys = get_keys(&client, &signer).await?;
             let content = keys.secret_key().to_bech32()?;
 
             smol::fs::write(path, &content).await?;
@@ -219,45 +242,48 @@ impl DeviceRegistry {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
-        let task: Task<Result<Event, Error>> = cx.background_spawn(async move {
-            let signer = client.signer().context("Signer not found")?;
-            let public_key = signer.get_public_key().await?;
+        let Some(current_user) = nostr.read(cx).signer_pubkey(cx) else {
+            return;
+        };
+
+        self.tasks.push(cx.background_spawn(async move {
+            let opts = SubscribeAutoCloseOptions::default().exit_policy(ReqExitPolicy::ExitOnEOSE);
 
             // Construct the filter for the device announcement event
             let filter = Filter::new()
                 .kind(Kind::Custom(10044))
-                .author(public_key)
+                .author(current_user)
                 .limit(1);
 
-            // Stream events from user's write relays
-            let mut stream = client
-                .stream_events(filter)
-                .timeout(Duration::from_secs(TIMEOUT))
+            client
+                .subscribe(filter)
+                .close_on(opts)
+                .with_id(SubscriptionId::new("nip4e"))
                 .await?;
 
-            while let Some((_url, res)) = stream.next().await {
-                if let Ok(event) = res {
-                    return Ok(event);
-                }
-            }
+            Ok(())
+        }));
 
-            Err(anyhow!("Announcement not found"))
-        });
+        let announcement_existed = self.announcement_existed.clone();
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            match task.await {
-                Ok(event) => {
-                    // Set encryption key from the announcement event
-                    this.update(cx, |this, cx| {
-                        this.set_encryption(&event, cx);
-                    })?;
-                }
-                Err(_) => {
-                    // User has no announcement, create a new one
-                    this.update(cx, |this, cx| {
-                        this.set_announcement(Keys::generate(), cx);
-                    })?;
-                }
+            if !cx
+                .background_spawn(async move {
+                    // Wait for 5 seconds
+                    smol::Timer::after(Duration::from_secs(5)).await;
+
+                    // Then check if the msg relays have been found
+                    if !announcement_existed.load(Ordering::Acquire) {
+                        return true;
+                    }
+
+                    false
+                })
+                .await
+            {
+                this.update(cx, |_this, cx| {
+                    cx.emit(DeviceEvent::NotSet);
+                })?;
             }
 
             Ok(())
@@ -267,9 +293,6 @@ impl DeviceRegistry {
     /// Create a new device signer and announce it to user's relay list
     pub fn set_announcement(&mut self, keys: Keys, cx: &mut Context<Self>) {
         let task = self.create_encryption(keys, cx);
-
-        // Notify that we're creating a new encryption key
-        cx.emit(DeviceEvent::Creating);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
@@ -297,15 +320,19 @@ impl DeviceRegistry {
         let secret = keys.secret_key().to_secret_hex();
         let n = keys.public_key();
 
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return Task::ready(Err(anyhow!("Signer is required")));
+        };
+
         cx.background_spawn(async move {
             // Construct an announcement event
-            let builder = EventBuilder::new(Kind::Custom(10044), "").tags(vec![
-                Tag::custom(TagKind::custom("n"), vec![n]),
-                Tag::client(CLIENT_NAME),
-            ]);
-
-            // Sign the event with user's signer
-            let event = client.sign_event_builder(builder).await?;
+            let event = EventBuilder::new(Kind::Custom(10044), "")
+                .tags(vec![
+                    Tag::custom("n", vec![n]),
+                    Tag::custom("client", vec![CLIENT_NAME]),
+                ])
+                .finalize_async(&signer)
+                .await?;
 
             // Publish announcement
             client
@@ -315,7 +342,7 @@ impl DeviceRegistry {
                 .await?;
 
             // Save device keys to the database
-            set_keys(&client, &secret).await?;
+            set_keys(&client, &signer, &secret).await?;
 
             Ok(keys)
         })
@@ -326,12 +353,16 @@ impl DeviceRegistry {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return;
+        };
+
         let announcement = Announcement::from(event);
         let device_pubkey = announcement.public_key();
 
         // Get encryption key from the database and compare with the announcement
         let task: Task<Result<Keys, Error>> = cx.background_spawn(async move {
-            let keys = get_keys(&client).await?;
+            let keys = get_keys(&client, &signer).await?;
 
             // Compare the public key from the announcement with the one from the database
             if keys.public_key() != device_pubkey {
@@ -360,10 +391,13 @@ impl DeviceRegistry {
     fn wait_for_request(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
+
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return;
+        };
 
         self.tasks.push(cx.background_spawn(async move {
-            let public_key = signer.get_public_key().await?;
+            let public_key = signer.get_public_key_async().await?;
             let id = SubscriptionId::new("dekey-requests");
 
             // Construct a filter for encryption key requests
@@ -383,13 +417,18 @@ impl DeviceRegistry {
     pub fn request(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
 
-        let app_keys = nostr.read(cx).keys();
-        let app_pubkey = app_keys.public_key();
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return;
+        };
+
+        let Ok(app_keys) = get_or_init_app_keys(cx) else {
+            return;
+        };
 
         let task: Task<Result<Option<Event>, Error>> = cx.background_spawn(async move {
-            let public_key = signer.get_public_key().await?;
+            let app_pubkey = app_keys.public_key();
+            let public_key = signer.get_public_key_async().await?;
 
             // Construct a filter to get the latest approval event
             let filter = Filter::new()
@@ -404,13 +443,13 @@ impl DeviceRegistry {
                 // No approval event found, construct a request event
                 None => {
                     // Construct an event for device key request
-                    let builder = EventBuilder::new(Kind::Custom(4454), "").tags(vec![
-                        Tag::custom(TagKind::custom("P"), vec![app_pubkey]),
-                        Tag::client(CLIENT_NAME),
-                    ]);
-
-                    // Sign the event with user's signer
-                    let event = client.sign_event_builder(builder).await?;
+                    let event = EventBuilder::new(Kind::Custom(4454), "")
+                        .tags(vec![
+                            Tag::custom("P", vec![app_pubkey]),
+                            Tag::custom("client", vec![CLIENT_NAME]),
+                        ])
+                        .finalize_async(&signer)
+                        .await?;
 
                     // Send the event to write relays
                     client.send_event(&event).to_nip65().await?;
@@ -429,10 +468,7 @@ impl DeviceRegistry {
                 }
                 Ok(None) => {
                     this.update(cx, |this, cx| {
-                        this.set_initializing(false, cx);
                         this.wait_for_approval(cx);
-
-                        cx.emit(DeviceEvent::Requesting);
                     })?;
                 }
                 Err(e) => {
@@ -449,10 +485,15 @@ impl DeviceRegistry {
     fn wait_for_approval(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
+
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return;
+        };
+
+        cx.emit(DeviceEvent::Requesting);
 
         self.tasks.push(cx.background_spawn(async move {
-            let public_key = signer.get_public_key().await?;
+            let public_key = signer.get_public_key_async().await?;
 
             // Construct a filter for device key requests
             let filter = Filter::new()
@@ -469,19 +510,21 @@ impl DeviceRegistry {
 
     /// Parse the approval event to get encryption key then set it
     fn extract_encryption(&mut self, event: Event, cx: &mut Context<Self>) {
-        let nostr = NostrRegistry::global(cx);
-        let app_keys = nostr.read(cx).keys();
+        let Ok(app_keys) = get_or_init_app_keys(cx) else {
+            return;
+        };
 
         let task: Task<Result<Keys, Error>> = cx.background_spawn(async move {
             let master = event
                 .tags
-                .find(TagKind::custom("P"))
+                .iter()
+                .find(|tag| tag.kind() == "P")
                 .and_then(|tag| tag.content())
                 .and_then(|content| PublicKey::parse(content).ok())
                 .context("Invalid event's tags")?;
 
             let payload = event.content.as_str();
-            let decrypted = app_keys.nip44_decrypt(&master, payload).await?;
+            let decrypted = app_keys.nip44_decrypt_async(&master, payload).await?;
 
             let secret = SecretKey::from_hex(&decrypted)?;
             let keys = Keys::new(secret);
@@ -511,37 +554,42 @@ impl DeviceRegistry {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return;
+        };
+
         // Get user's write relays
         let event = event.clone();
         let id: SharedString = event.id.to_hex().into();
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             // Get device keys
-            let keys = get_keys(&client).await?;
+            let keys = get_keys(&client, &signer).await?;
             let secret = keys.secret_key().to_secret_hex();
 
             // Extract the target public key from the event tags
             let target = event
                 .tags
-                .find(TagKind::custom("P"))
+                .iter()
+                .find(|tag| tag.kind() == "P")
                 .and_then(|tag| tag.content())
                 .and_then(|content| PublicKey::parse(content).ok())
                 .context("Target is not a valid public key")?;
 
             // Encrypt the device keys with the user's signer
-            let payload = keys.nip44_encrypt(&target, &secret).await?;
+            let payload = keys.nip44_encrypt_async(&target, &secret).await?;
 
             // Construct the response event
             //
             // P tag: the current device's public key
             // p tag: the requester's public key
-            let builder = EventBuilder::new(Kind::Custom(4455), payload).tags(vec![
-                Tag::custom(TagKind::custom("P"), vec![keys.public_key().to_hex()]),
-                Tag::public_key(target),
-            ]);
-
-            // Sign the builder
-            let event = client.sign_event_builder(builder).await?;
+            let event = EventBuilder::new(Kind::Custom(4455), payload)
+                .tags(vec![
+                    Tag::custom("P", vec![keys.public_key().to_hex()]),
+                    Tag::public_key(target),
+                ])
+                .finalize_async(&signer)
+                .await?;
 
             // Send the response event to the user's relay list
             client.send_event(&event).to_nip65().await?;
@@ -586,6 +634,9 @@ impl DeviceRegistry {
 
     /// Build a notification for the encryption request.
     fn notification(&self, event: Event, cx: &Context<Self>) -> Notification {
+        const MSG: &str = "You've requested an encryption key from another device. \
+                           Approve to allow Coop to share with it.";
+
         let request = Announcement::from(&event);
         let persons = PersonRegistry::global(cx);
         let profile = persons.read(cx).get(&request.public_key(), cx);
@@ -688,29 +739,44 @@ impl DeviceRegistry {
 
 struct DeviceNotification;
 
-/// Verify the author of an event
-async fn verify_author(client: &Client, event: &Event) -> bool {
-    if let Some(signer) = client.signer()
-        && let Ok(public_key) = signer.get_public_key().await
-    {
-        return public_key == event.pubkey;
+/// Get or create new app keys
+fn get_or_init_app_keys(cx: &App) -> Result<Keys, Error> {
+    let read = cx.read_credentials(CLIENT_NAME);
+    let stored_keys: Option<Keys> = cx.foreground_executor().block_on(async move {
+        if let Ok(Some((_, secret))) = read.await {
+            SecretKey::from_slice(&secret).map(Keys::new).ok()
+        } else {
+            None
+        }
+    });
+
+    if let Some(keys) = stored_keys {
+        Ok(keys)
+    } else {
+        let keys = Keys::generate();
+        let user = keys.public_key().to_hex();
+        let secret = keys.secret_key().to_secret_bytes();
+        let write = cx.write_credentials(CLIENT_NAME, &user, &secret);
+
+        cx.foreground_executor().block_on(async move {
+            if let Err(e) = write.await {
+                log::error!("Keyring not available or panic: {e}")
+            }
+        });
+
+        Ok(keys)
     }
-    false
 }
 
 /// Encrypt and store device keys in the local database.
-async fn set_keys(client: &Client, secret: &str) -> Result<(), Error> {
-    let signer = client.signer().context("Signer not found")?;
-    let public_key = signer.get_public_key().await?;
-
-    // Encrypt the value
-    let content = signer.nip44_encrypt(&public_key, secret).await?;
+async fn set_keys(client: &Client, signer: &Keys, secret: &str) -> Result<(), Error> {
+    let public_key = signer.get_public_key_async().await?;
+    let content = signer.nip44_encrypt_async(&public_key, secret).await?;
 
     // Construct the application data event
     let event = EventBuilder::new(Kind::ApplicationSpecificData, content)
         .tag(Tag::identifier(IDENTIFIER))
-        .build(public_key)
-        .sign(&Keys::generate())
+        .finalize_async(signer)
         .await?;
 
     // Save the event to the database
@@ -720,9 +786,8 @@ async fn set_keys(client: &Client, secret: &str) -> Result<(), Error> {
 }
 
 /// Get device keys from the local database.
-async fn get_keys(client: &Client) -> Result<Keys, Error> {
-    let signer = client.signer().context("Signer not found")?;
-    let public_key = signer.get_public_key().await?;
+async fn get_keys(client: &Client, signer: &Keys) -> Result<Keys, Error> {
+    let public_key = signer.get_public_key_async().await?;
 
     let filter = Filter::new()
         .kind(Kind::ApplicationSpecificData)
@@ -730,7 +795,10 @@ async fn get_keys(client: &Client) -> Result<Keys, Error> {
         .author(public_key);
 
     if let Some(event) = client.database().query(filter).await?.first() {
-        let content = signer.nip44_decrypt(&public_key, &event.content).await?;
+        let content = signer
+            .nip44_decrypt_async(&public_key, &event.content)
+            .await?;
+
         let secret = SecretKey::parse(&content)?;
         let keys = Keys::new(secret);
 

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 use std::time::Duration;
 
-use anyhow::{Context as AnyhowContext, Error};
+use anyhow::Error;
 use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
 use common::{DebouncedDelay, TimestampExt, coop_cache};
 use entry::RoomEntry;
@@ -159,11 +159,12 @@ impl Sidebar {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
-        let task: Task<Result<HashSet<PublicKey>, Error>> = cx.background_spawn(async move {
-            let signer = client.signer().context("Signer not found")?;
-            let public_key = signer.get_public_key().await?;
-            let contacts = client.database().contacts_public_keys(public_key).await?;
+        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
+            return;
+        };
 
+        let task: Task<Result<HashSet<PublicKey>, Error>> = cx.background_spawn(async move {
+            let contacts = client.database().contacts_public_keys(public_key).await?;
             Ok(contacts)
         });
 
@@ -319,14 +320,14 @@ impl Sidebar {
         let async_chat = chat.downgrade();
 
         let nostr = NostrRegistry::global(cx);
-        let signer = nostr.read(cx).signer();
+        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
+            return;
+        };
 
         // Get all selected public keys
         let receivers = self.get_selected(cx);
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            let public_key = signer.get_public_key().await?;
-
             // Create a new room and emit it
             async_chat.update_in(cx, |this, _window, cx| {
                 let room = cx.new(|_| {

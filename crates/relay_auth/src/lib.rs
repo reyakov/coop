@@ -193,15 +193,20 @@ impl RelayAuth {
     fn auth(&self, req: &Arc<AuthRequest>, cx: &App) -> Task<Result<(), Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let req = req.clone();
+
+        let Some(signer) = nostr.read(cx).signer(cx) else {
+            return Task::ready(Err(anyhow!("Signer is required")));
+        };
 
         // Get all pending events for the relay
+        let req = req.clone();
         let pending_events = self.get_pending_events(req.url(), cx);
 
         cx.background_spawn(async move {
             // Construct event
-            let builder = EventBuilder::auth(req.challenge(), req.url().clone());
-            let event = client.sign_event_builder(builder).await?;
+            let event = EventBuilder::auth(req.challenge(), req.url().clone())
+                .finalize_async(&signer)
+                .await?;
 
             // Get the event ID
             let id = event.id;
@@ -216,8 +221,6 @@ impl RelayAuth {
             relay
                 .send_msg(ClientMessage::Auth(Cow::Borrowed(&event)))
                 .await?;
-
-            log::info!("Sending AUTH event");
 
             while let Some(notification) = notifications.next().await {
                 match notification {
@@ -272,30 +275,22 @@ impl RelayAuth {
             this.update_in(cx, |this, window, cx| {
                 window.clear_notification_by_id::<AuthNotification>(challenge, cx);
 
-                match result {
-                    Ok(_) => {
-                        // Clear pending events for the authenticated relay
-                        this.clear_pending_events(url, cx);
+                if let Err(e) = result {
+                    window
+                        .push_notification(Notification::error(e.to_string()).autohide(false), cx);
+                } else {
+                    // Clear pending events for the authenticated relay
+                    this.clear_pending_events(url, cx);
 
-                        // Save the authenticated relay to automatically authenticate future requests
-                        settings.update(cx, |this, cx| {
-                            this.add_trusted_relay(url, cx);
-                        });
+                    let domain = url.domain().unwrap_or_default();
+                    let msg = format!("Relay {} has been authenticated", domain);
 
-                        window.push_notification(
-                            Notification::success(format!(
-                                "Relay {} has been authenticated",
-                                url.domain().unwrap_or_default()
-                            )),
-                            cx,
-                        );
-                    }
-                    Err(e) => {
-                        window.push_notification(
-                            Notification::error(e.to_string()).autohide(false),
-                            cx,
-                        );
-                    }
+                    window.push_notification(Notification::success(msg), cx);
+
+                    // Save the authenticated relay to automatically authenticate future requests
+                    settings.update(cx, |this, cx| {
+                        this.add_trusted_relay(url, cx);
+                    });
                 }
             })
             .ok();

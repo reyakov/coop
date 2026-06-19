@@ -1,12 +1,4 @@
-/// Display mapping system for Editor/Input.
-///
-/// This module implements a layered display mapping architecture:
-/// - **WrapMap**: Handles soft-wrapping (buffer → wrap rows)
-/// - **FoldMap**: Handles folding (wrap rows → display rows)
-/// - **DisplayMap**: Public facade for Editor/Input
-///
-/// The goal is to provide a clean, unified API where Editor only needs to know
-/// about `BufferPoint ↔ DisplayPoint` mapping, without worrying about internal wrap/fold complexity.
+#[allow(clippy::module_inception)]
 mod display_map;
 mod fold_map;
 #[cfg(not(target_family = "wasm"))]

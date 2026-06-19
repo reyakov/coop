@@ -3,15 +3,15 @@ use std::sync::Arc;
 
 pub use actions::*;
 use anyhow::{Context as AnyhowContext, Error};
-use chat::{ChatRegistry, Message, RenderedMessage, Room, RoomEvent, SendReport, SendStatus};
+use chat::{ChatRegistry, Message, Room, RoomEvent, SendReport, SendStatus};
 use common::{TimestampExt, coop_cache};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, MouseButton,
     ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, SharedUri,
-    StatefulInteractiveElement, Styled, StyledImage, Subscription, Task, WeakEntity, Window,
-    deferred, div, img, list, px, red, relative, svg, white,
+    StatefulInteractiveElement, Styled, StyledImage, Subscription, Task, WeakEntity, Window, div,
+    img, list, px, red, relative, svg, white,
 };
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
@@ -37,9 +37,6 @@ use crate::text::RenderedText;
 
 mod actions;
 mod text;
-
-const ANNOUNCEMENT: &str =
-    "This conversation is private. Only members can see each other's messages.";
 
 pub fn init(room: WeakEntity<Room>, window: &mut Window, cx: &mut App) -> Entity<ChatPanel> {
     cx.new(|cx| ChatPanel::new(room, window, cx))
@@ -101,7 +98,7 @@ impl ChatPanel {
         let reports_by_id = cx.new(|_| BTreeMap::new());
 
         // Define list of messages
-        let messages = BTreeSet::from([Message::system()]);
+        let messages = BTreeSet::default();
         let list_state = ListState::new(messages.len(), ListAlignment::Bottom, px(1024.));
 
         // Get room id and name
@@ -234,7 +231,7 @@ impl ChatPanel {
                             match &*status {
                                 SendStatus::Ok { id, relay } => {
                                     if output.id() == id {
-                                        output.success.insert(relay.clone());
+                                        output.success.insert(relay.clone(), EventSendStatus::Sent);
                                     }
                                 }
                                 SendStatus::Failed { id, relay, message } => {
@@ -470,37 +467,19 @@ impl ChatPanel {
         self.reports_by_id.read(cx).get(id).is_some()
     }
 
-    /// Check if a message was encrypted by the dekey
-    fn encrypted_by_dekey(&self, id: &EventId, cx: &App) -> bool {
-        let chat = ChatRegistry::global(cx);
-        chat.read(cx).encrypted_by_dekey(id)
-    }
-
     /// Get all sent reports for a message by its ID
     fn sent_reports(&self, id: &EventId, cx: &App) -> Option<Vec<SendReport>> {
         self.reports_by_id.read(cx).get(id).cloned()
     }
 
     /// Get a message by its ID
-    fn message(&self, id: &EventId) -> Option<&RenderedMessage> {
-        self.messages.iter().find_map(|msg| {
-            if let Message::User(rendered) = msg
-                && &rendered.id == id
-            {
-                return Some(rendered);
-            }
-            None
-        })
+    fn message(&self, id: &EventId) -> Option<&Message> {
+        self.messages.iter().find(|msg| &msg.id == id)
     }
 
-    fn scroll_to(&self, id: EventId) {
-        if let Some(ix) = self.messages.iter().position(|m| {
-            if let Message::User(msg) = m {
-                msg.id == id
-            } else {
-                false
-            }
-        }) {
+    /// Scroll to a message by its ID
+    fn scroll_to(&self, id: &EventId) {
+        if let Some(ix) = self.messages.iter().position(|msg| &msg.id == id) {
             self.list_state.scroll_to_reveal_item(ix);
         }
     }
@@ -620,13 +599,19 @@ impl ChatPanel {
                     })
                     .is_err()
                 {
-                    window.push_notification(
-                        Notification::error("Failed to change subject").autohide(false),
-                        cx,
-                    );
+                    window.push_notification(Notification::error("Failed to change subject"), cx);
                 }
             }
             Command::ChangeSigner(kind) => {
+                let settings = AppSettings::global(cx);
+                let is_nip4e_enabled = settings.read(cx).is_nip4e_enabled(cx);
+                let is_force_nip4e = *kind == SignerKind::Encryption || *kind == SignerKind::Auto;
+
+                if !is_nip4e_enabled && is_force_nip4e {
+                    window.push_notification("Decoupling Encryption Key is not enabled", cx);
+                    return;
+                }
+
                 if self
                     .room
                     .update(cx, |this, cx| {
@@ -634,10 +619,7 @@ impl ChatPanel {
                     })
                     .is_err()
                 {
-                    window.push_notification(
-                        Notification::error("Failed to change signer").autohide(false),
-                        cx,
-                    );
+                    window.push_notification(Notification::error("Failed to change signer"), cx);
                 }
             }
             Command::ToggleBackup => {
@@ -648,10 +630,7 @@ impl ChatPanel {
                     })
                     .is_err()
                 {
-                    window.push_notification(
-                        Notification::error("Failed to toggle backup").autohide(false),
-                        cx,
-                    );
+                    window.push_notification(Notification::error("Failed to toggle backup"), cx);
                 }
             }
             Command::Copy(public_key) => {
@@ -748,9 +727,11 @@ impl ChatPanel {
         cx.open_url(&content);
     }
 
-    fn render_announcement(&self, ix: usize, cx: &Context<Self>) -> AnyElement {
+    fn render_announcement(&self, cx: &Context<Self>) -> AnyElement {
+        const MSG: &str =
+            "This conversation is private. Only members can see each other's messages.";
+
         v_flex()
-            .id(ix)
             .h_40()
             .w_full()
             .gap_3()
@@ -767,7 +748,7 @@ impl ChatPanel {
                     .size_12()
                     .text_color(cx.theme().ghost_element_active),
             )
-            .child(SharedString::from(ANNOUNCEMENT))
+            .child(MSG)
             .into_any_element()
     }
 
@@ -804,6 +785,34 @@ impl ChatPanel {
             .into_any_element()
     }
 
+    fn is_group_start(&self, ix: usize) -> bool {
+        // 5 minutes
+        const GROUP_WINDOW: u64 = 300;
+
+        if ix == 0 {
+            return true;
+        }
+
+        let mut iter = self.messages.iter();
+
+        if let Some(previous) = iter.nth(ix - 1)
+            && let Some(current) = iter.next()
+        {
+            if current.author != previous.author {
+                return true;
+            }
+
+            let gap = current
+                .created_at
+                .as_secs()
+                .saturating_sub(previous.created_at.as_secs());
+
+            return gap > GROUP_WINDOW;
+        }
+
+        false
+    }
+
     fn render_message(
         &mut self,
         ix: usize,
@@ -811,24 +820,17 @@ impl ChatPanel {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if let Some(message) = self.messages.iter().nth(ix) {
-            match message {
-                Message::User(rendered) => {
-                    let persons = PersonRegistry::global(cx);
-                    let text = self
-                        .rendered_texts_by_id
-                        .entry(rendered.id)
-                        .or_insert_with(|| {
-                            RenderedText::new(&rendered.content, &rendered.mentions, &persons, cx)
-                        })
-                        .element(ix.into(), window, cx);
+            let persons = PersonRegistry::global(cx);
+            let show_author = self.is_group_start(ix);
+            let text = self
+                .rendered_texts_by_id
+                .entry(message.id)
+                .or_insert_with(|| {
+                    RenderedText::new(&message.content, &message.mentions, &persons, cx)
+                })
+                .element(ix.into(), window, cx);
 
-                    self.render_text_message(ix, rendered, text, cx)
-                }
-                Message::Warning(content, _timestamp) => {
-                    self.render_warning(ix, SharedString::from(content), cx)
-                }
-                Message::System(_timestamp) => self.render_announcement(ix, cx),
-            }
+            self.render_text_message(ix, message, text, show_author, cx)
         } else {
             self.render_warning(ix, SharedString::from("Message not found"), cx)
         }
@@ -837,8 +839,9 @@ impl ChatPanel {
     fn render_text_message(
         &self,
         ix: usize,
-        message: &RenderedMessage,
+        message: &Message,
         rendered_text: AnyElement,
+        show_author: bool,
         cx: &Context<Self>,
     ) -> AnyElement {
         let id = message.id;
@@ -848,7 +851,6 @@ impl ChatPanel {
         let replies = message.replies_to.as_slice();
         let has_replies = !replies.is_empty();
         let has_reports = self.has_reports(&id, cx);
-        let encrypted_by_dekey = self.encrypted_by_dekey(&id, cx);
 
         // Hide avatar setting
         let hide_avatar = AppSettings::get_hide_avatar(cx);
@@ -865,17 +867,21 @@ impl ChatPanel {
                     .flex()
                     .gap_3()
                     .when(!hide_avatar, |this| {
-                        this.child(
-                            Avatar::new(author.avatar())
-                                .flex_shrink_0()
-                                .relative()
-                                .dropdown_menu(move |this, _window, _cx| {
-                                    this.menu("Public Key", Box::new(Command::Copy(pk)))
-                                        .menu("View Relays", Box::new(Command::Relays(pk)))
-                                        .separator()
-                                        .menu("View on njump.me", Box::new(Command::Njump(pk)))
-                                }),
-                        )
+                        if show_author {
+                            this.child(
+                                Avatar::new(author.avatar())
+                                    .flex_shrink_0()
+                                    .relative()
+                                    .dropdown_menu(move |this, _window, _cx| {
+                                        this.menu("Public Key", Box::new(Command::Copy(pk)))
+                                            .menu("View Relays", Box::new(Command::Relays(pk)))
+                                            .separator()
+                                            .menu("View on njump.me", Box::new(Command::Njump(pk)))
+                                    }),
+                            )
+                        } else {
+                            this.child(div().flex_shrink_0().w(px(32.)))
+                        }
                     })
                     .child(
                         v_flex()
@@ -883,33 +889,24 @@ impl ChatPanel {
                             .w_full()
                             .flex_initial()
                             .overflow_hidden()
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .text_sm()
-                                    .text_color(cx.theme().text_placeholder)
-                                    .child(
-                                        div()
-                                            .font_semibold()
-                                            .text_color(cx.theme().text)
-                                            .child(author.name()),
-                                    )
-                                    .when(encrypted_by_dekey, |this| {
-                                        this.child(
-                                            Button::new(format!("dekey-{ix}"))
-                                                .icon(IconName::Shield)
-                                                .ghost()
-                                                .xsmall()
-                                                .px_4()
-                                                .tooltip("Encrypted by Dekey")
-                                                .disabled(true),
+                            .when(show_author, |this| {
+                                this.child(
+                                    h_flex()
+                                        .gap_2()
+                                        .text_sm()
+                                        .text_color(cx.theme().text_placeholder)
+                                        .child(
+                                            div()
+                                                .font_semibold()
+                                                .text_color(cx.theme().text)
+                                                .child(author.name()),
                                         )
-                                    })
-                                    .child(message.created_at.to_human_time())
-                                    .when(has_reports, |this| {
-                                        this.child(deferred(self.render_sent_reports(&id, cx)))
-                                    }),
-                            )
+                                        .child(message.created_at.to_human_time())
+                                        .when(has_reports, |this| {
+                                            this.child(self.render_sent_reports(&id, cx))
+                                        }),
+                                )
+                            })
                             .when(has_replies, |this| {
                                 this.children(self.render_message_replies(replies, cx))
                             })
@@ -1027,7 +1024,7 @@ impl ChatPanel {
                     .on_click({
                         let id = *id;
                         cx.listener(move |this, _event, _window, _cx| {
-                            this.scroll_to(id);
+                            this.scroll_to(&id);
                         })
                     }),
             );
@@ -1176,7 +1173,7 @@ impl ChatPanel {
                                                 .text_xs()
                                                 .font_semibold()
                                                 .line_height(relative(1.25))
-                                                .child(SharedString::from(url.to_string())),
+                                                .child(SharedString::from(url.0.to_string())),
                                         )
                                         .child(
                                             div()
@@ -1518,15 +1515,28 @@ impl Render for ChatPanel {
                 v_flex()
                     .flex_1()
                     .relative()
-                    .child(
-                        list(
-                            self.list_state.clone(),
-                            cx.processor(move |this, ix, window, cx| {
-                                this.render_message(ix, window, cx)
-                            }),
-                        )
-                        .size_full(),
-                    )
+                    .map(|this| {
+                        if self.messages.is_empty() {
+                            this.child(
+                                div()
+                                    .size_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_end()
+                                    .child(self.render_announcement(cx)),
+                            )
+                        } else {
+                            this.child(
+                                list(
+                                    self.list_state.clone(),
+                                    cx.processor(move |this, ix, window, cx| {
+                                        this.render_message(ix, window, cx)
+                                    }),
+                                )
+                                .size_full(),
+                            )
+                        }
+                    })
                     .child(Scrollbar::vertical(&self.list_state)),
             )
             .child(
@@ -1552,7 +1562,7 @@ impl Render for ChatPanel {
                                         this.upload(window, cx);
                                     })),
                             )
-                            .child(Input::new(&self.input).appearance(false).text_sm().flex_1())
+                            .child(Input::new(&self.input).appearance(false).flex_1())
                             .child(
                                 h_flex()
                                     .pl_1()

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Error, anyhow};
 use common::EventExt;
+use device::DeviceRegistry;
 use gpui::{App, AppContext, Context, EventEmitter, SharedString, Task};
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
@@ -21,7 +22,7 @@ pub struct SendReport {
     pub receiver: PublicKey,
     pub gift_wrap_id: Option<EventId>,
     pub error: Option<SharedString>,
-    pub output: Option<Output<EventId>>,
+    pub output: Option<Output<EventId, EventSendStatus>>,
 }
 
 impl SendReport {
@@ -41,7 +42,7 @@ impl SendReport {
     }
 
     /// Set the output.
-    pub fn output(mut self, output: Output<EventId>) -> Self {
+    pub fn output(mut self, output: Output<EventId, EventSendStatus>) -> Self {
         self.output = Some(output);
         self
     }
@@ -171,7 +172,8 @@ impl From<&UnsignedEvent> for Room {
         let members = val.extract_public_keys();
         let subject = val
             .tags
-            .find(TagKind::Subject)
+            .iter()
+            .find(|tag| tag.kind() == "subject")
             .and_then(|tag| tag.content().map(|s| s.to_owned().into()));
 
         Room {
@@ -205,7 +207,7 @@ impl Room {
         // WARNING: never sign this event
         let mut event = EventBuilder::new(Kind::PrivateDirectMessage, "")
             .tags(tags)
-            .build(author);
+            .finalize_unsigned(author);
 
         // Ensure that the ID is set
         event.ensure_id();
@@ -425,7 +427,7 @@ impl Room {
         let nostr = NostrRegistry::global(cx);
 
         // Get current user's public key
-        let sender = nostr.read(cx).signer().public_key()?;
+        let sender = nostr.read(cx).signer_pubkey(cx)?;
 
         // Get all members, excluding the sender
         let members: Vec<Person> = self
@@ -440,9 +442,7 @@ impl Room {
 
         // Add subject tag if present
         if let Some(value) = self.subject.as_ref() {
-            tags.push(Tag::from_standardized_without_cell(TagStandard::Subject(
-                value.to_string(),
-            )));
+            tags.push(Tag::custom("subject", vec![value.to_string()]));
         }
 
         // Add all reply tags
@@ -452,19 +452,20 @@ impl Room {
 
         // Add all receiver tags
         for member in members.into_iter() {
-            tags.push(Tag::from_standardized_without_cell(
-                TagStandard::PublicKey {
+            tags.push(
+                Nip01Tag::PublicKey {
                     public_key: member.public_key(),
-                    relay_url: member.messaging_relay_hint(),
-                    alias: None,
-                    uppercase: false,
-                },
-            ));
+                    relay_hint: member.messaging_relay_hint(),
+                }
+                .to_tag(),
+            );
         }
 
         // Construct a direct message rumor event
         // WARNING: never sign and send this event to relays
-        let mut event = EventBuilder::new(kind, content).tags(tags).build(sender);
+        let mut event = EventBuilder::new(kind, content)
+            .tags(tags)
+            .finalize_unsigned(sender);
 
         // Ensure that the ID is set
         event.ensure_id();
@@ -475,13 +476,18 @@ impl Room {
     /// Send rumor event to all members's messaging relays
     pub fn send(&self, rumor: UnsignedEvent, cx: &App) -> Option<Task<Vec<SendReport>>> {
         let config = self.config.clone();
-        let persons = PersonRegistry::global(cx);
+
+        let device = DeviceRegistry::global(cx);
+        let encryption_signer = device.read(cx).signer(cx);
+
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let signer = nostr.read(cx).signer();
 
         // Get current user's public key
-        let public_key = nostr.read(cx).signer().public_key()?;
+        let user_signer = nostr.read(cx).signer(cx)?;
+        let public_key = nostr.read(cx).signer_pubkey(cx)?;
+
+        let persons = PersonRegistry::global(cx);
         let sender = persons.read(cx).get(&public_key, cx);
 
         // Get all members (excluding sender)
@@ -495,9 +501,6 @@ impl Room {
         Some(cx.background_spawn(async move {
             let signer_kind = config.signer_kind();
             let backup = config.backup();
-
-            let user_signer = signer.get().await;
-            let encryption_signer = signer.get_encryption_signer().await;
 
             let mut sents = 0;
             let mut reports = Vec::new();
@@ -592,17 +595,14 @@ impl Room {
 }
 
 // Helper function to send a gift-wrapped event
-async fn send_gift_wrap<T>(
+async fn send_gift_wrap(
     client: &Client,
-    signer: &T,
+    signer: &Keys,
     receiver: &Person,
     rumor: &UnsignedEvent,
     config: &SignerKind,
-) -> Result<SendReport, Error>
-where
-    T: NostrSigner + 'static,
-{
-    let k_tag = Tag::custom(TagKind::k(), vec!["14"]);
+) -> Result<SendReport, Error> {
+    let k_tag = Tag::custom("k", vec!["14"]);
     let mut extra_tags = vec![k_tag];
 
     // Determine the receiver public key based on the config
@@ -627,7 +627,10 @@ where
     };
 
     // Construct the gift wrap event
-    let event = EventBuilder::gift_wrap(signer, &receiver, rumor.clone(), extra_tags).await?;
+    let event = nip59::GiftWrapBuilder::new(receiver, rumor.clone())
+        .extra_tags(extra_tags)
+        .finalize_async(signer)
+        .await?;
 
     // Send the gift wrap event and collect the report
     let report = client
