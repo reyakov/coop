@@ -215,9 +215,7 @@ impl ProfilePanel {
 
         cx.background_spawn(async move {
             // Build and sign the metadata event
-            let event = EventBuilder::metadata(&metadata)
-                .finalize_async(&signer)
-                .await?;
+            let event = metadata.finalize_async(&signer).await?;
 
             // Send event to user's relays
             client.send_event(&event).await?;
