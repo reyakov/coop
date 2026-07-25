@@ -10,7 +10,7 @@ use itertools::Itertools;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
 use settings::{RoomConfig, SignerKind};
-use state::{NostrRegistry, TIMEOUT};
+use state::{NostrRegistry, TIMEOUT, UniversalSigner};
 
 use crate::NewMessage;
 
@@ -427,7 +427,7 @@ impl Room {
         let nostr = NostrRegistry::global(cx);
 
         // Get current user's public key
-        let sender = nostr.read(cx).signer_pubkey(cx)?;
+        let sender = nostr.read(cx).current_user()?;
 
         // Get all members, excluding the sender
         let members: Vec<Person> = self
@@ -482,13 +482,12 @@ impl Room {
 
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
+        let user_signer = nostr.read(cx).signer();
+        let current_user = nostr.read(cx).current_user()?;
 
-        // Get current user's public key
-        let user_signer = nostr.read(cx).signer(cx)?;
-        let public_key = nostr.read(cx).signer_pubkey(cx)?;
-
+        // Get sender's profile
         let persons = PersonRegistry::global(cx);
-        let sender = persons.read(cx).get(&public_key, cx);
+        let sender = persons.read(cx).get(&current_user, cx);
 
         // Get all members (excluding sender)
         let members: Vec<Person> = self
@@ -597,7 +596,7 @@ impl Room {
 // Helper function to send a gift-wrapped event
 async fn send_gift_wrap(
     client: &Client,
-    signer: &Keys,
+    signer: &UniversalSigner,
     receiver: &Person,
     rumor: &UnsignedEvent,
     config: &SignerKind,

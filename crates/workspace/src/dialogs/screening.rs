@@ -78,7 +78,7 @@ impl Screening {
         let client = nostr.read(cx).client();
         let public_key = self.public_key;
 
-        let Some(current_user) = nostr.read(cx).signer_pubkey(cx) else {
+        let Some(current_user) = nostr.read(cx).current_user() else {
             return;
         };
 
@@ -106,7 +106,7 @@ impl Screening {
         let client = nostr.read(cx).client();
         let public_key = self.public_key;
 
-        let Some(current_user) = nostr.read(cx).signer_pubkey(cx) else {
+        let Some(current_user) = nostr.read(cx).current_user() else {
             return;
         };
 
@@ -224,11 +224,8 @@ impl Screening {
     fn report(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
         let public_key = self.public_key;
-
-        let Some(signer) = nostr.read(cx).signer(cx) else {
-            return;
-        };
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             let tag = Nip56Tag::PublicKey {

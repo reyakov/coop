@@ -1,0 +1,196 @@
+use std::error::Error;
+use std::fmt;
+use std::sync::{Arc, RwLock};
+
+use nostr_connect::client::AuthUrlHandler;
+use nostr_sdk::prelude::*;
+
+#[derive(Debug)]
+pub struct UniversalSignerError(Box<dyn Error + Send + Sync + 'static>);
+
+impl fmt::Display for UniversalSignerError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Error for UniversalSignerError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        Some(&*self.0)
+    }
+}
+
+impl UniversalSignerError {
+    pub fn new<E>(err: E) -> Self
+    where
+        E: Error + Send + Sync + 'static,
+    {
+        UniversalSignerError(Box::new(err))
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct UniversalSigner {
+    inner: Arc<RwLock<Arc<dyn InnerSigner>>>,
+}
+
+impl UniversalSigner {
+    pub fn new<T>(signer: T) -> Self
+    where
+        T: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + 'static,
+        <T as AsyncGetPublicKey>::Error: Error + Send + Sync + 'static,
+        <T as AsyncSignEvent>::Error: Error + Send + Sync + 'static,
+        <T as AsyncNip44>::Error: Error + Send + Sync + 'static,
+    {
+        Self {
+            inner: Arc::new(RwLock::new(Arc::new(InnerSignerImpl(signer)))),
+        }
+    }
+
+    /// Swap the inner signer in-place. All clones see the new signer.
+    pub fn swap_inner<T>(&self, new_signer: T)
+    where
+        T: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + 'static,
+        <T as AsyncGetPublicKey>::Error: Error + Send + Sync + 'static,
+        <T as AsyncSignEvent>::Error: Error + Send + Sync + 'static,
+        <T as AsyncNip44>::Error: Error + Send + Sync + 'static,
+    {
+        *self.inner.write().expect("RwLock poisoned") = Arc::new(InnerSignerImpl(new_signer));
+    }
+}
+
+trait InnerSigner: fmt::Debug + Send + Sync + 'static {
+    fn get_public_key_async(&self) -> BoxedFuture<'_, Result<PublicKey, UniversalSignerError>>;
+    fn sign_event_async(
+        &self,
+        unsigned: UnsignedEvent,
+    ) -> BoxedFuture<'_, Result<Event, UniversalSignerError>>;
+    fn nip44_encrypt_async<'a>(
+        &'a self,
+        public_key: &'a PublicKey,
+        content: &'a str,
+    ) -> BoxedFuture<'a, Result<String, UniversalSignerError>>;
+    fn nip44_decrypt_async<'a>(
+        &'a self,
+        public_key: &'a PublicKey,
+        payload: &'a str,
+    ) -> BoxedFuture<'a, Result<String, UniversalSignerError>>;
+}
+
+#[derive(Debug)]
+struct InnerSignerImpl<T>(T);
+
+impl<T> InnerSigner for InnerSignerImpl<T>
+where
+    T: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + Send + Sync + 'static,
+    <T as AsyncGetPublicKey>::Error: Error + Send + Sync + 'static,
+    <T as AsyncSignEvent>::Error: Error + Send + Sync + 'static,
+    <T as AsyncNip44>::Error: Error + Send + Sync + 'static,
+{
+    fn get_public_key_async(&self) -> BoxedFuture<'_, Result<PublicKey, UniversalSignerError>> {
+        Box::pin(async move {
+            AsyncGetPublicKey::get_public_key_async(&self.0)
+                .await
+                .map_err(UniversalSignerError::new)
+        })
+    }
+
+    fn sign_event_async(
+        &self,
+        unsigned: UnsignedEvent,
+    ) -> BoxedFuture<'_, Result<Event, UniversalSignerError>> {
+        Box::pin(async move {
+            AsyncSignEvent::sign_event_async(&self.0, unsigned)
+                .await
+                .map_err(UniversalSignerError::new)
+        })
+    }
+
+    fn nip44_encrypt_async<'a>(
+        &'a self,
+        public_key: &'a PublicKey,
+        content: &'a str,
+    ) -> BoxedFuture<'a, Result<String, UniversalSignerError>> {
+        Box::pin(async move {
+            AsyncNip44::nip44_encrypt_async(&self.0, public_key, content)
+                .await
+                .map_err(UniversalSignerError::new)
+        })
+    }
+
+    fn nip44_decrypt_async<'a>(
+        &'a self,
+        public_key: &'a PublicKey,
+        payload: &'a str,
+    ) -> BoxedFuture<'a, Result<String, UniversalSignerError>> {
+        Box::pin(async move {
+            AsyncNip44::nip44_decrypt_async(&self.0, public_key, payload)
+                .await
+                .map_err(UniversalSignerError::new)
+        })
+    }
+}
+
+impl UniversalSigner {
+    #[allow(dead_code)]
+    fn with_inner<R>(&self, f: impl FnOnce(&dyn InnerSigner) -> R) -> R {
+        let guard = self.inner.read().expect("RwLock poisoned");
+        f(&**guard)
+    }
+}
+
+impl AsyncGetPublicKey for UniversalSigner {
+    type Error = UniversalSignerError;
+
+    fn get_public_key_async(&self) -> BoxedFuture<'_, Result<PublicKey, Self::Error>> {
+        let inner = self.inner.read().expect("RwLock poisoned").clone();
+        Box::pin(async move { inner.get_public_key_async().await })
+    }
+}
+
+impl AsyncSignEvent for UniversalSigner {
+    type Error = UniversalSignerError;
+
+    fn sign_event_async(
+        &self,
+        unsigned: UnsignedEvent,
+    ) -> BoxedFuture<'_, Result<Event, Self::Error>> {
+        let inner = self.inner.read().expect("RwLock poisoned").clone();
+        Box::pin(async move { inner.sign_event_async(unsigned).await })
+    }
+}
+
+impl AsyncNip44 for UniversalSigner {
+    type Error = UniversalSignerError;
+
+    fn nip44_encrypt_async<'a>(
+        &'a self,
+        public_key: &'a PublicKey,
+        content: &'a str,
+    ) -> BoxedFuture<'a, Result<String, Self::Error>> {
+        let inner = self.inner.read().expect("RwLock poisoned").clone();
+        Box::pin(async move { inner.nip44_encrypt_async(public_key, content).await })
+    }
+
+    fn nip44_decrypt_async<'a>(
+        &'a self,
+        public_key: &'a PublicKey,
+        payload: &'a str,
+    ) -> BoxedFuture<'a, Result<String, Self::Error>> {
+        let inner = self.inner.read().expect("RwLock poisoned").clone();
+        Box::pin(async move { inner.nip44_decrypt_async(public_key, payload).await })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CoopAuthUrlHandler;
+
+impl AuthUrlHandler for CoopAuthUrlHandler {
+    #[allow(mismatched_lifetime_syntaxes)]
+    fn on_auth_url(&self, auth_url: Url) -> BoxedFuture<Result<(), nostr_connect::error::Error>> {
+        Box::pin(async move {
+            webbrowser::open(auth_url.as_str()).unwrap();
+            Ok(())
+        })
+    }
+}

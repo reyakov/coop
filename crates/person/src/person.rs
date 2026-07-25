@@ -126,13 +126,13 @@ impl Person {
         if let Some(display_name) = self.metadata().display_name.as_ref()
             && !display_name.is_empty()
         {
-            return SharedString::from(display_name);
+            return SharedString::from(display_name.trim());
         }
 
         if let Some(name) = self.metadata().name.as_ref()
             && !name.is_empty()
         {
-            return SharedString::from(name);
+            return SharedString::from(name.trim());
         }
 
         SharedString::from(shorten_pubkey(self.public_key(), 4))

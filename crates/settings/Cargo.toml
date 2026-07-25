@@ -10,7 +10,6 @@ common = { path = "../common" }
 
 nostr-sdk.workspace = true
 gpui.workspace = true
-smol.workspace = true
 anyhow.workspace = true
 log.workspace = true
 smallvec.workspace = true
@@ -18,3 +17,6 @@ serde.workspace = true
 serde_json.workspace = true
 
 paste = "1.0.15"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+smol.workspace = true

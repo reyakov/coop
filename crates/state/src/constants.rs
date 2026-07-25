@@ -8,7 +8,8 @@ pub const COOP_PUBKEY: &str = "npub1j3rz3ndl902lya6ywxvy5c983lxs8mpukqnx4pa4lt5w
 pub const APP_ID: &str = "su.reya.coop";
 
 /// Keyring name
-pub const KEYRING: &str = "Coop Safe Storage";
+pub const MASTER_KEYRING: &str = "Coop Master Key";
+pub const USER_KEYRING: &str = "Coop User Credential";
 
 /// Default timeout for subscription
 pub const TIMEOUT: u64 = 2;
@@ -45,7 +46,7 @@ pub const SEARCH_RELAYS: [&str; 2] = ["wss://antiprimal.net", "wss://search.nos.
 
 /// Default bootstrap relays
 pub const BOOTSTRAP_RELAYS: [&str; 3] = [
-    "wss://relay.damus.io",
+    "wss://relay.ditto.pub",
     "wss://relay.primal.net",
     "wss://user.kindpag.es",
 ];

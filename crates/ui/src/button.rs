@@ -2,15 +2,15 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, relative, AnyElement, App, ClickEvent, Div, ElementId, Hsla, InteractiveElement,
-    IntoElement, ParentElement, RenderOnce, SharedString, Stateful,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, Window,
+    AnyElement, App, ClickEvent, Div, ElementId, Hsla, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, SharedString, Stateful, StatefulInteractiveElement as _,
+    StyleRefinement, Styled, Window, div, relative,
 };
 use theme::ActiveTheme;
 
 use crate::indicator::Indicator;
 use crate::tooltip::Tooltip;
-use crate::{h_flex, Disableable, Icon, IconName, Selectable, Sizable, Size, StyledExt};
+use crate::{Disableable, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ButtonCustomVariant {
@@ -617,7 +617,7 @@ impl ButtonVariant {
         };
 
         let fg = match self {
-            ButtonVariant::Primary => cx.theme().text_muted, // TODO: use a different color?
+            ButtonVariant::Primary => cx.theme().text_muted,
             _ => cx.theme().text_muted,
         };
 

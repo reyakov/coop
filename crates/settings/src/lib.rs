@@ -229,13 +229,14 @@ impl AppSettings {
     /// Load settings
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let task: Task<Result<Settings, Error>> = cx.background_spawn(async move {
-            let path = config_dir().join(".settings");
-
-            if let Ok(content) = smol::fs::read_to_string(&path).await {
-                Ok(serde_json::from_str(&content)?)
-            } else {
-                Err(anyhow!("Not found"))
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let path = config_dir().join(".settings");
+                if let Ok(content) = smol::fs::read_to_string(&path).await {
+                    return Ok(serde_json::from_str(&content)?);
+                }
             }
+            Err(anyhow!("Not found"))
         });
 
         cx.spawn_in(window, async move |this, cx| {
@@ -254,11 +255,10 @@ impl AppSettings {
     /// Save settings
     pub fn save(&mut self, cx: &mut Context<Self>) {
         let settings = self.inner.read(cx);
-
         if let Ok(content) = serde_json::to_string(&settings) {
+            #[cfg(not(target_arch = "wasm32"))]
             cx.background_spawn(async move {
                 let path = config_dir().join(".settings");
-                // Write settings to file
                 smol::fs::write(&path, content).await.ok();
             })
             .detach();

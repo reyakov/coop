@@ -8,8 +8,8 @@ use ui::button::{Button, ButtonVariants};
 use ui::dock::{DockPlacement, Panel, PanelEvent};
 use ui::{Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
 
+use crate::Workspace;
 use crate::panels::profile;
-use crate::workspace::Workspace;
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<GreeterPanel> {
     cx.new(|cx| GreeterPanel::new(window, cx))
@@ -31,7 +31,7 @@ impl GreeterPanel {
     fn add_profile_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
 
-        if let Some(public_key) = nostr.read(cx).signer_pubkey(cx) {
+        if let Some(public_key) = nostr.read(cx).current_user() {
             cx.spawn_in(window, async move |_this, cx| {
                 cx.update(|window, cx| {
                     Workspace::add_panel(

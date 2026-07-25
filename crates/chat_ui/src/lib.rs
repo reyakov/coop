@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
+#[cfg(target_arch = "wasm32")]
+use std::sync::RwLock;
 
 pub use actions::*;
 use anyhow::{Context as AnyhowContext, Error};
@@ -18,6 +20,7 @@ use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
 use settings::{AppSettings, SignerKind};
 use smallvec::{SmallVec, smallvec};
+#[cfg(not(target_arch = "wasm32"))]
 use smol::lock::RwLock;
 use state::{NostrRegistry, upload};
 use theme::ActiveTheme;

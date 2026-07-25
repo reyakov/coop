@@ -28,43 +28,23 @@ icons = [
 
 [dependencies]
 assets = { path = "../crates/assets" }
+workspace = { path = "../crates/workspace" }
 ui = { path = "../crates/ui" }
 theme = { path = "../crates/theme" }
 common = { path = "../crates/common" }
 state = { path = "../crates/state" }
 device = { path = "../crates/device" }
 chat = { path = "../crates/chat" }
-chat_ui = { path = "../crates/chat_ui" }
 settings = { path = "../crates/settings" }
 auto_update = { path = "../crates/auto_update" }
 person = { path = "../crates/person" }
-relay_auth = { path = "../crates/relay_auth" }
 
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui_linux.workspace = true
 gpui_windows.workspace = true
 gpui_macos.workspace = true
-gpui_tokio.workspace = true
 reqwest_client.workspace = true
 
-nostr-connect.workspace = true
-nostr-sdk.workspace = true
-
-anyhow.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-itertools.workspace = true
 log.workspace = true
-smallvec.workspace = true
-smol.workspace = true
-futures.workspace = true
-oneshot.workspace = true
-webbrowser.workspace = true
 tracing-subscriber.workspace = true
-
-indexset = "0.12.3"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-# Temporary workaround https://github.com/zed-industries/zed/issues/47168
-core-text = "=21.0.0"

@@ -27,14 +27,16 @@ use crate::dialogs::import::ImportIdentity;
 use crate::dialogs::restore::RestoreEncryption;
 use crate::dialogs::settings;
 use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list, trash};
-use crate::sidebar;
+
+mod dialogs;
+mod panels;
+mod sidebar;
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Workspace> {
     cx.new(|cx| Workspace::new(window, cx))
 }
 
 struct DeviceNotifcation;
-struct RelayNotifcation;
 struct MsgRelayNotification;
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
@@ -72,12 +74,20 @@ impl Workspace {
         let chat = ChatRegistry::global(cx);
         let device = DeviceRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
-        let signer = nostr.read(cx).signer.clone();
 
         let dock = cx.new(|cx| DockArea::new(window, cx));
         let image_cache = CoopImageCache::new(IMAGE_CACHE_SIZE, cx);
 
         let mut subscriptions = smallvec![];
+
+        subscriptions.push(
+            // Observe sign in state changes
+            cx.observe_in(&nostr, window, move |this, nostr, window, cx| {
+                if nostr.read(cx).current_user().is_some() {
+                    this.set_center_layout(window, cx);
+                }
+            }),
+        );
 
         subscriptions.push(
             // Observe system appearance and update theme
@@ -87,39 +97,18 @@ impl Workspace {
         );
 
         subscriptions.push(
-            // Observe the signer
-            cx.observe_in(&signer, window, |this, signer, window, cx| {
-                if signer.read(cx).is_some() {
-                    this.set_center_layout(window, cx);
-                } else {
-                    this.import_identity(window, cx);
-                }
-            }),
-        );
-
-        subscriptions.push(
             // Subscribe to the nostr events
-            cx.subscribe_in(&nostr, window, move |this, state, event, window, cx| {
+            cx.subscribe_in(&nostr, window, move |this, _state, event, window, cx| {
                 match event {
-                    StateEvent::Connecting => {
-                        let note = Notification::new()
-                            .id::<RelayNotifcation>()
-                            .message("Connecting to the bootstrap relays...")
-                            .with_kind(NotificationKind::Info);
+                    StateEvent::SignerChanged => {
+                        this.set_center_layout(window, cx);
 
-                        window.push_notification(note, cx);
+                        cx.defer_in(window, |_this, window, cx| {
+                            window.close_all_modals(cx);
+                        });
                     }
-                    StateEvent::Connected => {
-                        let note = Notification::new()
-                            .id::<RelayNotifcation>()
-                            .message("Connected to the bootstrap relays")
-                            .with_kind(NotificationKind::Success);
-
-                        window.push_notification(note, cx);
-
-                        if state.read(cx).signer.read(cx).is_none() {
-                            this.import_identity(window, cx);
-                        }
+                    StateEvent::NoSigner => {
+                        this.import_identity(window, cx);
                     }
                     _ => {}
                 };
@@ -327,7 +316,7 @@ impl Workspace {
             Command::ShowProfile => {
                 let nostr = NostrRegistry::global(cx);
 
-                if let Some(public_key) = nostr.read(cx).signer_pubkey(cx) {
+                if let Some(public_key) = nostr.read(cx).current_user() {
                     self.dock.update(cx, |this, cx| {
                         this.add_panel(
                             Arc::new(profile::init(public_key, window, cx)),
@@ -580,7 +569,7 @@ impl Workspace {
 
     fn titlebar_left(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let nostr = NostrRegistry::global(cx);
-        let current_user = nostr.read(cx).signer_pubkey(cx);
+        let current_user = nostr.read(cx).current_user();
 
         h_flex()
             .flex_shrink_0()
@@ -658,7 +647,7 @@ impl Workspace {
         let is_nip4e_enabled = AppSettings::get_nip4e(cx);
         let nostr = NostrRegistry::global(cx);
 
-        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
+        let Some(public_key) = nostr.read(cx).current_user() else {
             return div();
         };
 

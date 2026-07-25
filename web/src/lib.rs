@@ -1,4 +1,5 @@
 use gpui::*;
+use ui::Root;
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
@@ -14,13 +15,39 @@ pub fn run() -> Result<(), JsValue> {
     #[cfg(target_family = "wasm")]
     gpui_platform::web_init();
 
-    #[cfg(not(target_family = "wasm"))]
-    let app = gpui_platform::application();
+    gpui_platform::application().run(|cx| {
+        cx.open_window(WindowOptions::default(), |window, cx| {
+            cx.new(|cx| {
+                // Initialize components
+                ui::init(cx);
 
-    #[cfg(target_family = "wasm")]
-    let app = gpui_platform::single_threaded_web();
+                // Initialize theme registry
+                theme::init(cx);
 
-    app.run(|_cx| {});
+                // Initialize settings
+                settings::init(window, cx);
+
+                // Initialize the nostr client
+                state::init(window, cx);
+
+                // Initialize person registry
+                person::init(window, cx);
+
+                // Initialize device signer
+                //
+                // NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
+                device::init(window, cx);
+
+                // Initialize app registry
+                chat::init(window, cx);
+
+                // Root Entity
+                Root::new(workspace::init(window, cx).into(), window, cx)
+            })
+        })
+        .expect("Failed to open window. Please restart the application.");
+        cx.activate(true);
+    });
 
     Ok(())
 }

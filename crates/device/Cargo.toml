@@ -14,12 +14,10 @@ settings = { path = "../settings" }
 
 gpui.workspace = true
 nostr-sdk.workspace = true
-
 anyhow.workspace = true
-itertools.workspace = true
 smallvec.workspace = true
-smol.workspace = true
 log.workspace = true
 flume.workspace = true
-serde.workspace = true
-serde_json.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+smol.workspace = true

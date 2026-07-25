@@ -1,3 +1,5 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

@@ -9,22 +9,25 @@ common = { path = "../common" }
 
 nostr.workspace = true
 nostr-sdk.workspace = true
-nostr-lmdb.workspace = true
 nostr-gossip-memory.workspace = true
-nostr-connect.workspace = true
 nostr-blossom.workspace = true
+nostr-connect.workspace = true
 
 gpui.workspace = true
-gpui_tokio.workspace = true
-smol.workspace = true
 flume.workspace = true
+futures.workspace = true
 log.workspace = true
 anyhow.workspace = true
 webbrowser.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 
-rustls = "0.23"
-petname = "2.0.2"
-whoami = "1.6.1"
 mime_guess = "2.0.4"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+nostr-memory.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nostr-lmdb.workspace = true
+smol.workspace = true
+gpui_tokio.workspace = true
+rustls = "0.23"

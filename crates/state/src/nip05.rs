@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use anyhow::Error;
+use futures::io::AsyncReadExt;
 use gpui::http_client::{AsyncBody, HttpClient};
 use nostr_sdk::prelude::*;
-use smol::io::AsyncReadExt;
 
 #[allow(async_fn_in_trait)]
 pub trait NostrAddress {

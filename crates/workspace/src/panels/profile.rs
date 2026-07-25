@@ -1,7 +1,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use anyhow::{Context as AnyhowContext, Error, anyhow};
+use anyhow::{Context as AnyhowContext, Error};
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task,
@@ -207,11 +207,8 @@ impl ProfilePanel {
     fn publish(&self, metadata: &Metadata, cx: &App) -> Task<Result<(), Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
         let metadata = metadata.clone();
-
-        let Some(signer) = nostr.read(cx).signer(cx) else {
-            return Task::ready(Err(anyhow!("Signer is required")));
-        };
 
         cx.background_spawn(async move {
             // Build and sign the metadata event

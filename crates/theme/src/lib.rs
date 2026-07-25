@@ -192,7 +192,6 @@ impl From<ThemeFamily> for Theme {
         let mode = ThemeMode::default();
 
         // Define the font family based on the platform.
-        // TODO: Use native fonts on Linux too.
         let font_family = match platform {
             PlatformKind::Linux => "Inter",
             _ => ".SystemUIFont",

@@ -7,11 +7,11 @@ use gpui::{
     Subscription, Task, Window, div,
 };
 use nostr_connect::prelude::*;
-use state::NostrRegistry;
+use state::{CoopAuthUrlHandler, NostrRegistry, USER_KEYRING};
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::input::{Input, InputEvent, InputState};
-use ui::{Disableable, WindowExtension, v_flex};
+use ui::{Disableable, StyledExt, WindowExtension, v_flex};
 
 #[derive(Debug)]
 pub struct ImportIdentity {
@@ -36,7 +36,7 @@ pub struct ImportIdentity {
 
 impl ImportIdentity {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let key_input = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let key_input = cx.new(|cx| InputState::new(window, cx));
         let pass_input = cx.new(|cx| InputState::new(window, cx).masked(true));
         let error = cx.new(|_| None);
 
@@ -61,8 +61,23 @@ impl ImportIdentity {
         let value = self.key_input.read(cx).value();
         let password = self.pass_input.read(cx).value();
 
+        // Set loading state
+        self.set_loading(true, cx);
+
         if value.starts_with("ncryptsec1") {
             self.ncryptsec(value, password, window, cx);
+            return;
+        }
+
+        if value.starts_with("bunker://") {
+            match NostrConnectUri::parse(value) {
+                Ok(uri) => {
+                    self.bunker(uri, window, cx);
+                }
+                Err(e) => {
+                    self.set_error(e.to_string(), cx);
+                }
+            }
             return;
         }
 
@@ -74,7 +89,6 @@ impl ImportIdentity {
             nostr.update(cx, |this, cx| {
                 this.set_signer(keys, cx);
             });
-            window.close_modal(cx);
         } else {
             self.set_error("Invalid key", cx);
         }
@@ -126,10 +140,44 @@ impl ImportIdentity {
         }));
     }
 
+    fn bunker(&mut self, uri: NostrConnectUri, window: &mut Window, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let master_keys = nostr.read(cx).get_master_key(cx);
+        let password = uri.to_string();
+        let save = cx.write_credentials(USER_KEYRING, "bunker", password.as_bytes());
+
+        cx.spawn_in(window, async move |_this, cx| {
+            let keys = master_keys.await;
+            let timeout = Duration::from_secs(30);
+
+            // Construct the nostr connect signer
+            let mut signer = NostrConnect::new(uri, keys, timeout, None)?;
+
+            // Handle auth url with the default browser
+            signer.auth_url_handler(CoopAuthUrlHandler);
+
+            nostr.update(cx, |this, cx| {
+                this.set_signer(signer, cx);
+                cx.background_spawn(async move { save.await.ok() }).detach();
+                cx.notify();
+            });
+
+            Ok::<(), anyhow::Error>(())
+        })
+        .detach();
+    }
+
+    fn set_loading(&mut self, status: bool, cx: &mut Context<Self>) {
+        self.loading = status;
+        cx.notify();
+    }
+
     fn set_error<S>(&mut self, message: S, cx: &mut Context<Self>)
     where
         S: Into<SharedString>,
     {
+        self.set_loading(false, cx);
+
         // Update error message
         self.error.update(cx, |this, cx| {
             *this = Some(message.into());
@@ -154,34 +202,40 @@ impl ImportIdentity {
 
 impl Render for ImportIdentity {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
-        const MSG: &str = "Coop isn't stored your identity secret in local device. Everything will be reset on the next login.";
+        const MSG: &str = "Coop won't store your identity key on the local device. You need to re-login again in the next session. You can use Nostr Connect for persistent login.";
+
+        let require_password = self.key_input.read(cx).value().starts_with("ncryptsec1");
+        let key_warning = self.key_input.read(cx).value().starts_with("nsec1") || require_password;
 
         v_flex()
             .size_full()
             .gap_2()
-            .text_sm()
             .child(
                 v_flex()
                     .gap_1()
-                    .text_sm()
                     .text_color(cx.theme().text_muted)
-                    .child("nsec or ncryptsec://")
+                    .child("Continue with existing key or bunker connection")
                     .child(Input::new(&self.key_input)),
             )
-            .when(
-                self.key_input.read(cx).value().starts_with("ncryptsec1"),
-                |this| {
-                    this.child(
-                        v_flex()
-                            .gap_1()
-                            .text_sm()
-                            .text_color(cx.theme().text_muted)
-                            .child("Password:")
-                            .child(Input::new(&self.pass_input)),
-                    )
-                },
-            )
-            .child(div().text_xs().text_color(cx.theme().text_muted).child(MSG))
+            .when(require_password, |this| {
+                this.child(
+                    v_flex()
+                        .gap_1()
+                        .text_color(cx.theme().text_muted)
+                        .child("Decrypt Password:")
+                        .child(Input::new(&self.pass_input)),
+                )
+            })
+            .when(key_warning, |this| {
+                this.child(
+                    div()
+                        .v_flex()
+                        .text_xs()
+                        .text_color(cx.theme().text_warning)
+                        .child(div().font_semibold().child("Warning"))
+                        .child(div().child(MSG)),
+                )
+            })
             .child(
                 Button::new("login")
                     .label("Continue")

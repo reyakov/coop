@@ -10,11 +10,6 @@ use gpui_platform::application;
 use state::{APP_ID, CLIENT_NAME};
 use ui::Root;
 
-mod dialogs;
-mod panels;
-mod sidebar;
-mod workspace;
-
 actions!(coop, [Quit]);
 
 fn main() {
@@ -71,9 +66,6 @@ fn main() {
                 cx.activate(true);
 
                 cx.new(|cx| {
-                    // Initialize the tokio runtime
-                    gpui_tokio::init(cx);
-
                     // Initialize components
                     ui::init(cx);
 
@@ -88,9 +80,6 @@ fn main() {
 
                     // Initialize person registry
                     person::init(window, cx);
-
-                    // Initialize relay auth registry
-                    relay_auth::init(window, cx);
 
                     // Initialize device signer
                     //

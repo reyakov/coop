@@ -9,7 +9,6 @@ use gpui::{
     SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Task,
     UniformListScrollHandle, Window, div, px, size, uniform_list,
 };
-use smol::Timer;
 use theme::ActiveTheme;
 
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};
@@ -265,6 +264,7 @@ where
                 }
 
                 self.set_searching(true, window, cx);
+
                 let search = self.delegate.perform_search(&text, window, cx);
 
                 if self.rows_cache.len() > 0 {
@@ -273,6 +273,7 @@ where
                     self._set_selected_index(None, window, cx);
                 }
 
+                let executor = cx.background_executor().clone();
                 self._search_task = cx.spawn_in(window, async move |this, window| {
                     search.await;
 
@@ -282,7 +283,8 @@ where
                     });
 
                     // Always wait 100ms to avoid flicker
-                    Timer::after(Duration::from_millis(100)).await;
+                    executor.timer(Duration::from_millis(100)).await;
+
                     _ = this.update_in(window, |this, window, cx| {
                         this.set_searching(false, window, cx);
                     });

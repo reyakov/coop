@@ -4,38 +4,28 @@ use std::time::Duration;
 use anyhow::{Error, anyhow};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    Task, TextAlign, Window, div, px, rems,
+    Task, TextAlign, Window, div, rems,
 };
 use nostr_sdk::prelude::*;
-use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
 use ui::input::{Input, InputEvent, InputState};
-use ui::menu::DropdownMenu;
 use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, divider, h_flex, v_flex};
 
-const MSG: &str = "Relay List (or Gossip Relays) are a set of relays \
-                   where you will publish all your events. Others also publish events \
-                   related to you here.";
+const MSG: &str = "Messaging Relays are relays that hosted all your messages. \
+                   Other users will find your relays and send messages to it.";
 
-pub fn init(window: &mut Window, cx: &mut App) -> Entity<RelayListPanel> {
-    cx.new(|cx| RelayListPanel::new(window, cx))
-}
-
-#[derive(Action, Clone, PartialEq, Eq, Deserialize)]
-#[action(namespace = relay, no_json)]
-enum SetMetadata {
-    Read,
-    Write,
+pub fn init(window: &mut Window, cx: &mut App) -> Entity<MessagingRelayPanel> {
+    cx.new(|cx| MessagingRelayPanel::new(window, cx))
 }
 
 #[derive(Debug)]
-pub struct RelayListPanel {
+pub struct MessagingRelayPanel {
     name: SharedString,
     focus_handle: FocusHandle,
 
@@ -45,27 +35,22 @@ pub struct RelayListPanel {
     /// Whether the panel is updating
     updating: bool,
 
-    /// Relay metadata input
-    metadata: Entity<Option<RelayMetadata>>,
-
     /// Error message
     error: Option<SharedString>,
 
-    // All relays
-    relays: HashSet<(RelayUrl, Option<RelayMetadata>)>,
+    /// All relays
+    relays: HashSet<RelayUrl>,
 
-    // Event subscriptions
+    /// Event subscriptions
     _subscriptions: SmallVec<[Subscription; 1]>,
 
-    // Background tasks
+    /// Background tasks
     tasks: Vec<Task<Result<(), Error>>>,
 }
 
-impl RelayListPanel {
+impl MessagingRelayPanel {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("wss://example.com"));
-        let metadata = cx.new(|_| None);
-
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
@@ -83,11 +68,10 @@ impl RelayListPanel {
         });
 
         Self {
-            name: "Update Relay List".into(),
+            name: "Update Messaging Relays".into(),
             focus_handle: cx.focus_handle(),
             input,
             updating: false,
-            metadata,
             relays: HashSet::new(),
             error: None,
             _subscriptions: subscriptions,
@@ -95,28 +79,26 @@ impl RelayListPanel {
         }
     }
 
-    #[allow(clippy::type_complexity)]
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
-        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
+        let Some(public_key) = nostr.read(cx).current_user() else {
             return;
         };
 
-        let task: Task<Result<Vec<(RelayUrl, Option<RelayMetadata>)>, Error>> = cx
-            .background_spawn(async move {
-                let filter = Filter::new()
-                    .kind(Kind::RelayList)
-                    .author(public_key)
-                    .limit(1);
+        let task: Task<Result<Vec<RelayUrl>, Error>> = cx.background_spawn(async move {
+            let filter = Filter::new()
+                .kind(Kind::InboxRelays)
+                .author(public_key)
+                .limit(1);
 
-                if let Some(event) = client.database().query(filter).await?.first_owned() {
-                    Ok(nip65::extract_relay_list(&event).collect())
-                } else {
-                    Err(anyhow!("Not found."))
-                }
-            });
+            if let Some(event) = client.database().query(filter).await?.first_owned() {
+                Ok(nip17::extract_relay_list(&event).collect())
+            } else {
+                Err(anyhow!("Not found."))
+            }
+        });
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             let relays = task.await?;
@@ -133,7 +115,6 @@ impl RelayListPanel {
 
     fn add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let value = self.input.read(cx).value().to_string();
-        let metadata = self.metadata.read(cx);
 
         if !value.starts_with("ws") {
             self.set_error("Relay URl is invalid", window, cx);
@@ -141,7 +122,7 @@ impl RelayListPanel {
         }
 
         if let Ok(url) = RelayUrl::parse(&value) {
-            if self.relays.insert((url, metadata.to_owned())) {
+            if self.relays.insert(url) {
                 self.input.update(cx, |this, cx| {
                     this.set_value("", window, cx);
                 });
@@ -153,7 +134,7 @@ impl RelayListPanel {
     }
 
     fn remove(&mut self, url: &RelayUrl, cx: &mut Context<Self>) {
-        self.relays.retain(|(relay, _)| relay != url);
+        self.relays.remove(url);
         cx.notify();
     }
 
@@ -182,24 +163,7 @@ impl RelayListPanel {
         cx.notify();
     }
 
-    fn set_metadata(&mut self, ev: &SetMetadata, _window: &mut Window, cx: &mut Context<Self>) {
-        match ev {
-            SetMetadata::Read => {
-                self.metadata.update(cx, |this, cx| {
-                    *this = Some(RelayMetadata::Read);
-                    cx.notify();
-                });
-            }
-            SetMetadata::Write => {
-                self.metadata.update(cx, |this, cx| {
-                    *this = Some(RelayMetadata::Write);
-                    cx.notify();
-                });
-            }
-        }
-    }
-
-    fn set_relays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn set_relays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.relays.is_empty() {
             self.set_error("You need to add at least 1 relay", window, cx);
             return;
@@ -207,24 +171,27 @@ impl RelayListPanel {
 
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
 
-        let Some(signer) = nostr.read(cx).signer(cx) else {
-            return;
-        };
-
-        // Get all relays
-        let relays = self.relays.clone();
+        // Construct event tags
+        let tags: Vec<Tag> = self
+            .relays
+            .iter()
+            .map(|relay| Nip17Tag::Relay(relay.to_owned()).to_tag())
+            .collect();
 
         // Set updating state
         self.set_updating(true, cx);
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let event = EventBuilder::relay_list(relays)
+            // Construct nip17 event builder
+            let event = EventBuilder::new(Kind::InboxRelays, "")
+                .tags(tags)
                 .finalize_async(&signer)
                 .await?;
 
-            // Set relay list for current user
-            client.send_event(&event).await?;
+            // Set messaging relays
+            client.send_event(&event).to_nip65().await?;
 
             Ok(())
         });
@@ -254,7 +221,7 @@ impl RelayListPanel {
     fn render_list_items(&mut self, cx: &mut Context<Self>) -> Vec<impl IntoElement> {
         let mut items = Vec::new();
 
-        for (url, metadata) in self.relays.iter() {
+        for url in self.relays.iter() {
             items.push(
                 h_flex()
                     .id(SharedString::from(url.to_string()))
@@ -267,27 +234,7 @@ impl RelayListPanel {
                     .rounded(cx.theme().radius)
                     .bg(cx.theme().secondary_background)
                     .text_color(cx.theme().secondary_foreground)
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .text_sm()
-                            .child(SharedString::from(url.to_string()))
-                            .child(
-                                div()
-                                    .p_0p5()
-                                    .rounded_xs()
-                                    .font_semibold()
-                                    .text_size(px(8.))
-                                    .text_color(cx.theme().secondary_foreground)
-                                    .map(|this| {
-                                        if let Some(metadata) = metadata {
-                                            this.child(SharedString::from(metadata.to_string()))
-                                        } else {
-                                            this.child("Read and Write")
-                                        }
-                                    }),
-                            ),
-                    )
+                    .child(div().text_sm().child(SharedString::from(url.to_string())))
                     .child(
                         Button::new("remove_{ix}")
                             .icon(IconName::Close)
@@ -322,7 +269,7 @@ impl RelayListPanel {
     }
 }
 
-impl Panel for RelayListPanel {
+impl Panel for MessagingRelayPanel {
     fn panel_id(&self) -> SharedString {
         self.name.clone()
     }
@@ -332,18 +279,17 @@ impl Panel for RelayListPanel {
     }
 }
 
-impl EventEmitter<PanelEvent> for RelayListPanel {}
+impl EventEmitter<PanelEvent> for MessagingRelayPanel {}
 
-impl Focusable for RelayListPanel {
+impl Focusable for MessagingRelayPanel {
     fn focus_handle(&self, _: &App) -> gpui::FocusHandle {
         self.focus_handle.clone()
     }
 }
 
-impl Render for RelayListPanel {
+impl Render for MessagingRelayPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
-            .on_action(cx.listener(Self::set_metadata))
             .p_3()
             .gap_3()
             .w_full()
@@ -379,24 +325,6 @@ impl Render for RelayListPanel {
                                             .small()
                                             .bordered(false)
                                             .cleanable(true),
-                                    )
-                                    .child(
-                                        Button::new("metadata")
-                                            .map(|this| {
-                                                if let Some(metadata) = self.metadata.read(cx) {
-                                                    this.label(metadata.to_string())
-                                                } else {
-                                                    this.label("R & W")
-                                                }
-                                            })
-                                            .tooltip("Relay metadata")
-                                            .ghost()
-                                            .h(rems(2.))
-                                            .text_xs()
-                                            .dropdown_menu(|this, _window, _cx| {
-                                                this.menu("Read", Box::new(SetMetadata::Read))
-                                                    .menu("Write", Box::new(SetMetadata::Write))
-                                            }),
                                     )
                                     .child(
                                         Button::new("add")

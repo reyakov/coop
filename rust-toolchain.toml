@@ -10,5 +10,6 @@ targets = [
     "aarch64-pc-windows-msvc",
     "aarch64-apple-ios",
     "aarch64-linux-android",
-    "wasm32-unknown-unknown"
+    "wasm32-unknown-unknown",
+    "wasm32-wasip2"
 ]

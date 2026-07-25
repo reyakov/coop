@@ -7,7 +7,7 @@ use gpui::{
     AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
     Subscription, Task, Window, div,
 };
-use nostr_connect::prelude::*;
+use nostr_sdk::prelude::*;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::input::{Input, InputEvent, InputState};

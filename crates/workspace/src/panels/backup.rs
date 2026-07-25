@@ -6,7 +6,7 @@ use gpui::{
     Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window, div,
 };
 use nostr_sdk::prelude::*;
-use state::KEYRING;
+use state::USER_KEYRING;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
@@ -59,7 +59,7 @@ impl BackupPanel {
     }
 
     fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let keyring = cx.read_credentials(KEYRING);
+        let keyring = cx.read_credentials(USER_KEYRING);
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             if let Some((_, secret)) = keyring.await? {

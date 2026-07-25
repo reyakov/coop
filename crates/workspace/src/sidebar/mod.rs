@@ -159,7 +159,7 @@ impl Sidebar {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
-        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
+        let Some(public_key) = nostr.read(cx).current_user() else {
             return;
         };
 
@@ -320,7 +320,7 @@ impl Sidebar {
         let async_chat = chat.downgrade();
 
         let nostr = NostrRegistry::global(cx);
-        let Some(public_key) = nostr.read(cx).signer_pubkey(cx) else {
+        let Some(public_key) = nostr.read(cx).current_user() else {
             return;
         };
 
@@ -462,7 +462,7 @@ impl Sidebar {
                 });
 
                 RoomEntry::new(range.start + ix)
-                    .name(profile.name())
+                    .name(profile.name().trim())
                     .avatar(profile.avatar())
                     .on_click(handler)
                     .selected(selected)

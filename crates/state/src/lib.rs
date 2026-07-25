@@ -3,31 +3,38 @@ use std::time::Duration;
 
 use anyhow::{Error, anyhow};
 use common::config_dir;
-use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, SharedString, Task, Window};
+use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Task, Window};
 use nostr_connect::prelude::*;
 use nostr_gossip_memory::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
 use nostr_lmdb::prelude::*;
+#[cfg(target_arch = "wasm32")]
+use nostr_memory::prelude::*;
 use nostr_sdk::prelude::*;
 
 mod blossom;
 mod constants;
 mod nip05;
 mod nip4e;
+mod signer;
 
 pub use blossom::*;
 pub use constants::*;
 pub use nip4e::*;
 pub use nip05::*;
+pub use signer::{CoopAuthUrlHandler, UniversalSigner};
 
 pub fn init(window: &mut Window, cx: &mut App) {
     // rustls uses the `aws_lc_rs` provider by default
     // This only errors if the default provider has already
     // been installed. We can ignore this `Result`.
+    #[cfg(not(target_arch = "wasm32"))]
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .ok();
 
     // Initialize the tokio runtime
+    #[cfg(not(target_arch = "wasm32"))]
     gpui_tokio::init(cx);
 
     NostrRegistry::set_global(cx.new(|cx| NostrRegistry::new(window, cx)), cx);
@@ -40,20 +47,26 @@ impl Global for GlobalNostrRegistry {}
 /// Signer event.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateEvent {
-    /// Connecting to the bootstrapping relay
-    Connecting,
-    /// Connected to the bootstrapping relay
-    Connected,
+    /// The state is busy
+    Busy,
+    /// User has no signer
+    NoSigner,
+    /// The signer has changed
+    SignerChanged,
     /// An error occurred
-    Error(SharedString),
+    Error(String),
 }
 
 impl StateEvent {
     pub fn error<T>(error: T) -> Self
     where
-        T: Into<SharedString>,
+        T: Into<String>,
     {
         Self::Error(error.into())
+    }
+
+    pub fn signer_changed(&self) -> bool {
+        matches!(self, StateEvent::SignerChanged)
     }
 }
 
@@ -63,8 +76,11 @@ pub struct NostrRegistry {
     /// Nostr client
     client: Client,
 
-    /// Currently active signer
-    pub signer: Entity<Option<Keys>>,
+    /// Universal signer
+    signer: UniversalSigner,
+
+    /// Current user's public key
+    current_user: Option<PublicKey>,
 
     /// Tasks for asynchronous operations
     tasks: Vec<Task<Result<(), Error>>>,
@@ -85,18 +101,24 @@ impl NostrRegistry {
 
     /// Create a new nostr instance
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let signer = cx.new(|_| None);
+        let signer = UniversalSigner::new(Keys::generate());
+        let authenticator = SignerAuthenticator::new(signer.clone());
 
         // Construct the nostr lmdb instance
-        let lmdb = cx.foreground_executor().block_on(async move {
+        #[cfg(not(target_arch = "wasm32"))]
+        let database = cx.foreground_executor().block_on(async move {
             NostrLmdb::open(config_dir().join("nostr"))
                 .await
                 .expect("Failed to initialize database")
         });
 
+        #[cfg(target_arch = "wasm32")]
+        let database = MemoryDatabase::unbounded();
+
         // Construct the nostr client
         let client = ClientBuilder::default()
-            .database(lmdb)
+            .database(database)
+            .authenticator(authenticator)
             .gossip(NostrGossipMemory::unbounded())
             .gossip_config(GossipConfig::default().no_background_refresh())
             .connect_timeout(Duration::from_secs(10))
@@ -105,14 +127,16 @@ impl NostrRegistry {
             })
             .build();
 
-        // Run at the end of current cycle
+        // Connect to bootstrap relays after the window is ready
         cx.defer_in(window, |this, _window, cx| {
-            this.connect(cx);
+            this.connect_bootstrap_relays(cx);
+            this.get_user_credential(cx);
         });
 
         Self {
             client,
             signer,
+            current_user: None,
             tasks: vec![],
         }
     }
@@ -122,26 +146,48 @@ impl NostrRegistry {
         self.client.clone()
     }
 
-    /// Get the signer
-    pub fn signer(&self, cx: &App) -> Option<Keys> {
-        self.signer.read(cx).clone()
+    /// Get the current signer
+    pub fn signer(&self) -> UniversalSigner {
+        self.signer.clone()
     }
 
-    /// Get the public key of the signer
-    pub fn signer_pubkey(&self, cx: &App) -> Option<PublicKey> {
-        self.signer.read(cx).as_ref().map(|s| s.public_key())
+    /// Get the current user's public key
+    pub fn current_user(&self) -> Option<PublicKey> {
+        self.current_user
     }
 
-    /// Set the signer to the given keys
-    pub fn set_signer(&mut self, new_keys: Keys, cx: &mut Context<Self>) {
-        self.signer.update(cx, |this, cx| {
-            *this = Some(new_keys);
-            cx.notify();
-        });
+    /// Update the signer
+    pub fn set_signer<T>(&mut self, new_signer: T, cx: &mut Context<Self>)
+    where
+        T: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + 'static,
+        <T as AsyncGetPublicKey>::Error: std::error::Error + Send + Sync + 'static,
+        <T as AsyncSignEvent>::Error: std::error::Error + Send + Sync + 'static,
+        <T as AsyncNip44>::Error: std::error::Error + Send + Sync + 'static,
+    {
+        cx.spawn(async move |this, cx| {
+            match new_signer.get_public_key_async().await {
+                Ok(public_key) => {
+                    this.update(cx, |this, cx| {
+                        this.signer.swap_inner(new_signer);
+                        this.current_user = Some(public_key);
+                        cx.emit(StateEvent::SignerChanged);
+                        cx.notify();
+                    })?;
+                }
+                Err(e) => {
+                    this.update(cx, |_this, cx| {
+                        cx.emit(StateEvent::error(e.to_string()));
+                    })?;
+                }
+            };
+
+            Ok::<(), anyhow::Error>(())
+        })
+        .detach();
     }
 
     /// Connect to the bootstrapping relays
-    fn connect(&mut self, cx: &mut Context<Self>) {
+    fn connect_bootstrap_relays(&mut self, cx: &mut Context<Self>) {
         let client = self.client();
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
@@ -164,22 +210,88 @@ impl NostrRegistry {
             Ok(())
         });
 
-        // Emit connecting event
-        cx.emit(StateEvent::Connecting);
-
         self.tasks.push(cx.spawn(async move |this, cx| {
             if let Err(e) = task.await {
                 this.update(cx, |_this, cx| {
                     cx.emit(StateEvent::error(e.to_string()));
                 })?;
-            } else {
-                this.update(cx, |_this, cx| {
-                    cx.emit(StateEvent::Connected);
-                })?;
+            }
+            Ok(())
+        }));
+    }
+
+    /// Check the user's credential and set the signer if valid
+    fn get_user_credential(&mut self, cx: &mut Context<Self>) {
+        let user_keyring = cx.read_credentials(USER_KEYRING);
+        let master_keyring = self.get_master_key(cx);
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            match user_keyring.await {
+                Ok(Some((_username, secret))) => {
+                    let content = String::from_utf8(secret)?;
+
+                    if content.starts_with("nsec1") {
+                        let secret_key = SecretKey::parse(&content)?;
+                        let keys = Keys::new(secret_key);
+
+                        this.update(cx, |this, cx| {
+                            this.set_signer(keys, cx);
+                            cx.notify();
+                        })?;
+                    } else if content.starts_with("bunker://") {
+                        let keys = master_keyring.await;
+                        let timeout = Duration::from_secs(30);
+                        let uri = NostrConnectUri::parse(content)?;
+
+                        // Construct the nostr connect signer
+                        let mut signer = NostrConnect::new(uri, keys, timeout, None)?;
+
+                        // Handle auth url with the default browser
+                        signer.auth_url_handler(CoopAuthUrlHandler);
+
+                        this.update(cx, |this, cx| {
+                            this.set_signer(signer, cx);
+                            cx.notify();
+                        })?;
+                    }
+                }
+                _ => {
+                    this.update(cx, |_, cx| {
+                        cx.emit(StateEvent::NoSigner);
+                    })?;
+                }
             }
 
             Ok(())
         }));
+    }
+
+    /// Get the master key that used for Nostr Connect
+    pub fn get_master_key(&self, cx: &App) -> Task<Keys> {
+        let task = cx.read_credentials(MASTER_KEYRING);
+
+        cx.spawn(async move |cx| {
+            let (keys, new_key) = match task.await {
+                Ok(Some((_user, secret))) => match SecretKey::from_slice(&secret) {
+                    Ok(secret_key) => (Keys::new(secret_key), false),
+                    _ => (Keys::generate(), true),
+                },
+                _ => (Keys::generate(), true),
+            };
+
+            if new_key {
+                let keys_clone = keys.clone();
+                let username = keys_clone.public_key().to_hex();
+                let password = keys_clone.secret_key().to_secret_bytes();
+
+                cx.update(|cx| {
+                    let task = cx.write_credentials(MASTER_KEYRING, &username, &password);
+                    cx.background_spawn(async move { task.await.ok() }).detach();
+                });
+            }
+
+            keys
+        })
     }
 
     /// Get the public key of a NIP-05 address
@@ -291,10 +403,7 @@ impl NostrRegistry {
     pub fn wot_search(&self, query: &str, cx: &App) -> Task<Result<Vec<PublicKey>, Error>> {
         let client = self.client();
         let query = query.to_string();
-
-        let Some(signer) = self.signer.read(cx).clone() else {
-            return Task::ready(Err(anyhow!("Signer is required")));
-        };
+        let signer = self.signer.clone();
 
         cx.background_spawn(async move {
             // Construct a vertex request event

@@ -8,9 +8,7 @@ publish.workspace = true
 common = { path = "../common" }
 
 gpui.workspace = true
-gpui_tokio.workspace = true
 anyhow.workspace = true
-smol.workspace = true
 log.workspace = true
 smallvec.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -18,4 +16,6 @@ serde_json.workspace = true
 
 semver = "1.0.27"
 tempfile = "3.23.0"
-futures.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+smol.workspace = true
