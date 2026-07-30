@@ -1,7 +1,7 @@
 use std::any::TypeId;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
-use std::time::Duration;
+use instant::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{

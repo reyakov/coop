@@ -1,4 +1,4 @@
-use std::time::Duration;
+use instant::Duration;
 
 use gpui::{
     bounce, div, ease_in_out, Animation, AnimationExt, IntoElement, RenderOnce, StyleRefinement,

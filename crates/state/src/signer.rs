@@ -1,5 +1,7 @@
 use std::error::Error;
 use std::fmt;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Arc, RwLock};
 
 use nostr_connect::client::AuthUrlHandler;
@@ -60,21 +62,23 @@ impl UniversalSigner {
 }
 
 trait InnerSigner: fmt::Debug + Send + Sync + 'static {
-    fn get_public_key_async(&self) -> BoxedFuture<'_, Result<PublicKey, UniversalSignerError>>;
+    fn get_public_key_async(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<PublicKey, UniversalSignerError>> + Send + '_>>;
     fn sign_event_async(
         &self,
         unsigned: UnsignedEvent,
-    ) -> BoxedFuture<'_, Result<Event, UniversalSignerError>>;
+    ) -> Pin<Box<dyn Future<Output = Result<Event, UniversalSignerError>> + Send + '_>>;
     fn nip44_encrypt_async<'a>(
         &'a self,
         public_key: &'a PublicKey,
         content: &'a str,
-    ) -> BoxedFuture<'a, Result<String, UniversalSignerError>>;
+    ) -> Pin<Box<dyn Future<Output = Result<String, UniversalSignerError>> + Send + 'a>>;
     fn nip44_decrypt_async<'a>(
         &'a self,
         public_key: &'a PublicKey,
         payload: &'a str,
-    ) -> BoxedFuture<'a, Result<String, UniversalSignerError>>;
+    ) -> Pin<Box<dyn Future<Output = Result<String, UniversalSignerError>> + Send + 'a>>;
 }
 
 #[derive(Debug)]
@@ -87,7 +91,9 @@ where
     <T as AsyncSignEvent>::Error: Error + Send + Sync + 'static,
     <T as AsyncNip44>::Error: Error + Send + Sync + 'static,
 {
-    fn get_public_key_async(&self) -> BoxedFuture<'_, Result<PublicKey, UniversalSignerError>> {
+    fn get_public_key_async(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<PublicKey, UniversalSignerError>> + Send + '_>> {
         Box::pin(async move {
             AsyncGetPublicKey::get_public_key_async(&self.0)
                 .await
@@ -98,7 +104,7 @@ where
     fn sign_event_async(
         &self,
         unsigned: UnsignedEvent,
-    ) -> BoxedFuture<'_, Result<Event, UniversalSignerError>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Event, UniversalSignerError>> + Send + '_>> {
         Box::pin(async move {
             AsyncSignEvent::sign_event_async(&self.0, unsigned)
                 .await
@@ -110,7 +116,7 @@ where
         &'a self,
         public_key: &'a PublicKey,
         content: &'a str,
-    ) -> BoxedFuture<'a, Result<String, UniversalSignerError>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, UniversalSignerError>> + Send + 'a>> {
         Box::pin(async move {
             AsyncNip44::nip44_encrypt_async(&self.0, public_key, content)
                 .await
@@ -122,7 +128,7 @@ where
         &'a self,
         public_key: &'a PublicKey,
         payload: &'a str,
-    ) -> BoxedFuture<'a, Result<String, UniversalSignerError>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, UniversalSignerError>> + Send + 'a>> {
         Box::pin(async move {
             AsyncNip44::nip44_decrypt_async(&self.0, public_key, payload)
                 .await
@@ -142,7 +148,9 @@ impl UniversalSigner {
 impl AsyncGetPublicKey for UniversalSigner {
     type Error = UniversalSignerError;
 
-    fn get_public_key_async(&self) -> BoxedFuture<'_, Result<PublicKey, Self::Error>> {
+    fn get_public_key_async(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<PublicKey, Self::Error>> + Send + '_>> {
         let inner = self.inner.read().expect("RwLock poisoned").clone();
         Box::pin(async move { inner.get_public_key_async().await })
     }
@@ -154,7 +162,7 @@ impl AsyncSignEvent for UniversalSigner {
     fn sign_event_async(
         &self,
         unsigned: UnsignedEvent,
-    ) -> BoxedFuture<'_, Result<Event, Self::Error>> {
+    ) -> Pin<Box<dyn Future<Output = Result<Event, Self::Error>> + Send + '_>> {
         let inner = self.inner.read().expect("RwLock poisoned").clone();
         Box::pin(async move { inner.sign_event_async(unsigned).await })
     }
@@ -167,7 +175,7 @@ impl AsyncNip44 for UniversalSigner {
         &'a self,
         public_key: &'a PublicKey,
         content: &'a str,
-    ) -> BoxedFuture<'a, Result<String, Self::Error>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, Self::Error>> + Send + 'a>> {
         let inner = self.inner.read().expect("RwLock poisoned").clone();
         Box::pin(async move { inner.nip44_encrypt_async(public_key, content).await })
     }
@@ -176,7 +184,7 @@ impl AsyncNip44 for UniversalSigner {
         &'a self,
         public_key: &'a PublicKey,
         payload: &'a str,
-    ) -> BoxedFuture<'a, Result<String, Self::Error>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, Self::Error>> + Send + 'a>> {
         let inner = self.inner.read().expect("RwLock poisoned").clone();
         Box::pin(async move { inner.nip44_decrypt_async(public_key, payload).await })
     }
@@ -186,8 +194,10 @@ impl AsyncNip44 for UniversalSigner {
 pub struct CoopAuthUrlHandler;
 
 impl AuthUrlHandler for CoopAuthUrlHandler {
-    #[allow(mismatched_lifetime_syntaxes)]
-    fn on_auth_url(&self, auth_url: Url) -> BoxedFuture<Result<(), nostr_connect::error::Error>> {
+    fn on_auth_url(
+        &self,
+        auth_url: Url,
+    ) -> Pin<Box<dyn Future<Output = Result<(), nostr_connect::error::Error>> + Send + '_>> {
         Box::pin(async move {
             webbrowser::open(auth_url.as_str()).unwrap();
             Ok(())

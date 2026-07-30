@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::time::Duration;
 
 use anyhow::{Error, anyhow};
 use common::config_dir;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Task, Window};
+use instant::Duration;
 use nostr_connect::prelude::*;
 use nostr_gossip_memory::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
@@ -130,7 +130,12 @@ impl NostrRegistry {
         // Connect to bootstrap relays after the window is ready
         cx.defer_in(window, |this, _window, cx| {
             this.connect_bootstrap_relays(cx);
-            this.get_user_credential(cx);
+
+            if cfg!(target_arch = "wasm32") {
+                cx.emit(StateEvent::NoSigner);
+            } else {
+                this.get_user_credential(cx);
+            }
         });
 
         Self {
@@ -164,7 +169,7 @@ impl NostrRegistry {
         <T as AsyncSignEvent>::Error: std::error::Error + Send + Sync + 'static,
         <T as AsyncNip44>::Error: std::error::Error + Send + Sync + 'static,
     {
-        cx.spawn(async move |this, cx| {
+        let task = cx.spawn(async move |this, cx| {
             match new_signer.get_public_key_async().await {
                 Ok(public_key) => {
                     this.update(cx, |this, cx| {
@@ -181,9 +186,9 @@ impl NostrRegistry {
                 }
             };
 
-            Ok::<(), anyhow::Error>(())
-        })
-        .detach();
+            Ok(())
+        });
+        self.tasks.push(task);
     }
 
     /// Connect to the bootstrapping relays
@@ -268,6 +273,10 @@ impl NostrRegistry {
 
     /// Get the master key that used for Nostr Connect
     pub fn get_master_key(&self, cx: &App) -> Task<Keys> {
+        if cfg!(target_arch = "wasm32") {
+            return cx.background_spawn(async move { Keys::generate() });
+        }
+
         let task = cx.read_credentials(MASTER_KEYRING);
 
         cx.spawn(async move |cx| {

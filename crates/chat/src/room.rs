@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
-use std::time::Duration;
+use instant::Duration;
 
 use anyhow::{Error, anyhow};
 use common::EventExt;
@@ -363,22 +363,31 @@ impl Room {
                 .exit_policy(ReqExitPolicy::ExitOnEOSE)
                 .timeout(Some(Duration::from_secs(TIMEOUT)));
 
-            for public_key in members.into_iter() {
-                let inbox = Filter::new()
-                    .author(public_key)
-                    .kind(Kind::InboxRelays)
-                    .limit(1);
+            let tasks: Vec<_> = members
+                .into_iter()
+                .map(|public_key| {
+                    let client = client.clone();
+                    async move {
+                        let inbox = Filter::new()
+                            .author(public_key)
+                            .kind(Kind::InboxRelays)
+                            .limit(1);
 
-                let announcement = Filter::new()
-                    .author(public_key)
-                    .kind(Kind::Custom(10044))
-                    .limit(1);
+                        let announcement = Filter::new()
+                            .author(public_key)
+                            .kind(Kind::Custom(10044))
+                            .limit(1);
 
-                // Subscribe to the target
-                client
-                    .subscribe(vec![inbox, announcement])
-                    .close_on(opts)
-                    .await?;
+                        client
+                            .subscribe(vec![inbox, announcement])
+                            .close_on(opts)
+                            .await
+                    }
+                })
+                .collect();
+
+            for result in futures::future::join_all(tasks).await {
+                result?;
             }
 
             Ok(())
@@ -389,12 +398,12 @@ impl Room {
     pub fn get_messages(&self, cx: &App) -> Task<Result<Vec<UnsignedEvent>, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let conversation_id = self.id.to_string();
+        let room_id = self.id.to_string();
 
         cx.background_spawn(async move {
             let filter = Filter::new()
                 .kind(Kind::ApplicationSpecificData)
-                .custom_tag(SingleLetterTag::lowercase(Alphabet::C), conversation_id);
+                .custom_tag(SingleLetterTag::lowercase(Alphabet::R), room_id);
 
             let messages = client
                 .database()
@@ -402,10 +411,6 @@ impl Room {
                 .await?
                 .into_iter()
                 .filter_map(|event| UnsignedEvent::from_json(&event.content).ok())
-                .filter(|event| {
-                    // Only process private direct messages and file messages
-                    event.kind == Kind::PrivateDirectMessage || event.kind == Kind::Custom(15)
-                })
                 .sorted_by_key(|message| message.created_at)
                 .collect();
 
@@ -429,14 +434,6 @@ impl Room {
         // Get current user's public key
         let sender = nostr.read(cx).current_user()?;
 
-        // Get all members, excluding the sender
-        let members: Vec<Person> = self
-            .members
-            .iter()
-            .filter(|public_key| public_key != &&sender)
-            .map(|member| persons.read(cx).get(member, cx))
-            .collect();
-
         // Construct event's tags
         let mut tags = vec![];
 
@@ -450,8 +447,9 @@ impl Room {
             tags.push(Tag::event(id))
         }
 
-        // Add all receiver tags
-        for member in members.into_iter() {
+        // Add all receiver tags (no intermediate allocation)
+        for public_key in self.members.iter().filter(|pk| *pk != &sender) {
+            let member = persons.read(cx).get(public_key, cx);
             tags.push(
                 Nip01Tag::PublicKey {
                     public_key: member.public_key(),
@@ -471,6 +469,30 @@ impl Room {
         event.ensure_id();
 
         Some(event)
+    }
+
+    /// Select the appropriate signer based on signer kind and available keys.
+    fn select_signer(
+        signer_kind: &SignerKind,
+        has_announcement: bool,
+        encryption_signer: &Option<UniversalSigner>,
+        user_signer: &UniversalSigner,
+    ) -> UniversalSigner {
+        match signer_kind {
+            SignerKind::Auto => {
+                if has_announcement {
+                    encryption_signer
+                        .clone()
+                        .unwrap_or_else(|| user_signer.clone())
+                } else {
+                    user_signer.clone()
+                }
+            }
+            SignerKind::Encryption => encryption_signer
+                .clone()
+                .expect("encryption signer must be set"),
+            SignerKind::User => user_signer.clone(),
+        }
     }
 
     /// Send rumor event to all members's messaging relays
@@ -525,23 +547,12 @@ impl Room {
                 }
 
                 // Determine the signer to use
-                let signer = match signer_kind {
-                    SignerKind::Auto => {
-                        if announcement.is_some()
-                            && let Some(encryption_signer) = encryption_signer.clone()
-                        {
-                            // Safe to unwrap due to earlier checks
-                            encryption_signer
-                        } else {
-                            user_signer.clone()
-                        }
-                    }
-                    SignerKind::Encryption => {
-                        // Safe to unwrap due to earlier checks
-                        encryption_signer.as_ref().unwrap().clone()
-                    }
-                    SignerKind::User => user_signer.clone(),
-                };
+                let signer = Self::select_signer(
+                    signer_kind,
+                    announcement.is_some(),
+                    &encryption_signer,
+                    &user_signer,
+                );
 
                 // Send the gift wrap event and collect the report
                 match send_gift_wrap(&client, &signer, &member, &rumor, signer_kind).await {
@@ -561,23 +572,12 @@ impl Room {
                 let public_key = sender.public_key();
 
                 // Determine the signer to use
-                let signer = match signer_kind {
-                    SignerKind::Auto => {
-                        if sender.announcement().is_some()
-                            && let Some(encryption_signer) = encryption_signer.clone()
-                        {
-                            // Safe to unwrap due to earlier checks
-                            encryption_signer
-                        } else {
-                            user_signer.clone()
-                        }
-                    }
-                    SignerKind::Encryption => {
-                        // Safe to unwrap due to earlier checks
-                        encryption_signer.as_ref().unwrap().clone()
-                    }
-                    SignerKind::User => user_signer.clone(),
-                };
+                let signer = Self::select_signer(
+                    signer_kind,
+                    sender.announcement().is_some(),
+                    &encryption_signer,
+                    &user_signer,
+                );
 
                 match send_gift_wrap(&client, &signer, &sender, &rumor, signer_kind).await {
                     Ok(report) => reports.push(report),

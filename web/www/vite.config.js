@@ -1,5 +1,4 @@
 import { defineConfig } from "vite";
-import wasm from "vite-plugin-wasm";
 import { viteStaticCopy } from "vite-plugin-static-copy";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -8,7 +7,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   plugins: [
-    wasm(),
     viteStaticCopy({
       targets: [
         {

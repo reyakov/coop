@@ -43,7 +43,7 @@ fn main() {
             }]);
 
             // Set up the window bounds
-            let bounds = Bounds::centered(None, size(px(920.0), px(700.0)), cx);
+            let bounds = Bounds::centered(None, size(px(960.0), px(720.0)), cx);
 
             // Set up the window options
             let opts = WindowOptions {
@@ -62,41 +62,39 @@ fn main() {
 
             // Open a window with default options
             cx.open_window(opts, |window, cx| {
-                // Bring the app to the foreground
-                cx.activate(true);
+                // Initialize components
+                ui::init(cx);
 
-                cx.new(|cx| {
-                    // Initialize components
-                    ui::init(cx);
+                // Initialize theme registry
+                theme::init(cx);
 
-                    // Initialize theme registry
-                    theme::init(cx);
+                // Initialize settings
+                settings::init(window, cx);
 
-                    // Initialize settings
-                    settings::init(window, cx);
+                // Initialize the nostr client
+                state::init(window, cx);
 
-                    // Initialize the nostr client
-                    state::init(window, cx);
+                // Initialize person registry
+                person::init(window, cx);
 
-                    // Initialize person registry
-                    person::init(window, cx);
+                // Initialize device signer
+                //
+                // NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
+                device::init(window, cx);
 
-                    // Initialize device signer
-                    //
-                    // NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
-                    device::init(window, cx);
+                // Initialize app registry
+                chat::init(window, cx);
 
-                    // Initialize app registry
-                    chat::init(window, cx);
+                // Initialize auto update
+                auto_update::init(window, cx);
 
-                    // Initialize auto update
-                    auto_update::init(window, cx);
-
-                    // Root Entity
-                    Root::new(workspace::init(window, cx).into(), window, cx)
-                })
+                // Root view
+                cx.new(|cx| Root::new(workspace::init(window, cx).into(), window, cx))
             })
             .expect("Failed to open window. Please restart the application.");
+
+            // Bring the app to the foreground
+            cx.activate(true);
         });
 }
 

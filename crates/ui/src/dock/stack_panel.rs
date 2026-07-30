@@ -1,13 +1,12 @@
 use std::sync::Arc;
 
-use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Axis, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Pixels, Render, SharedString, Styled, Subscription, WeakEntity,
     Window,
 };
 use smallvec::SmallVec;
-use theme::{ActiveTheme, AxisExt as _, CLIENT_SIDE_DECORATION_ROUNDING, Placement};
+use theme::{AxisExt as _, Placement};
 
 use super::{DockArea, PanelEvent};
 use crate::dock::panel::{Panel, PanelView};
@@ -369,26 +368,20 @@ impl Focusable for StackPanel {
 }
 
 impl EventEmitter<PanelEvent> for StackPanel {}
+
 impl EventEmitter<DismissEvent> for StackPanel {}
 
 impl Render for StackPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        h_flex()
-            .size_full()
-            .overflow_hidden()
-            .bg(cx.theme().panel_background)
-            .when(cx.theme().platform.is_linux(), |this| {
-                this.rounded_br(CLIENT_SIDE_DECORATION_ROUNDING)
-            })
-            .child(
-                ResizablePanelGroup::new("stack-panel-group")
-                    .with_state(&self.state)
-                    .axis(self.axis)
-                    .children(self.panels.clone().into_iter().map(|panel| {
-                        resizable_panel()
-                            .child(panel.view())
-                            .visible(panel.visible(cx))
-                    })),
-            )
+        h_flex().size_full().overflow_hidden().child(
+            ResizablePanelGroup::new("stack-panel-group")
+                .with_state(&self.state)
+                .axis(self.axis)
+                .children(self.panels.clone().into_iter().map(|panel| {
+                    resizable_panel()
+                        .child(panel.view())
+                        .visible(panel.visible(cx))
+                })),
+        )
     }
 }

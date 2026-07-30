@@ -35,8 +35,6 @@ pub struct Input {
     cleanable: bool,
     mask_toggle: bool,
     disabled: bool,
-    bordered: bool,
-    focus_bordered: bool,
     tab_index: isize,
     selected: bool,
 }
@@ -73,8 +71,6 @@ impl Input {
             cleanable: false,
             mask_toggle: false,
             disabled: false,
-            bordered: true,
-            focus_bordered: true,
             tab_index: 0,
             selected: false,
         }
@@ -105,18 +101,6 @@ impl Input {
     /// Set the appearance of the input field, if false the input field will no border, background.
     pub fn appearance(mut self, appearance: bool) -> Self {
         self.appearance = appearance;
-        self
-    }
-
-    /// Set the bordered for the input, default: true
-    pub fn bordered(mut self, bordered: bool) -> Self {
-        self.bordered = bordered;
-        self
-    }
-
-    /// Set focus border for the input, default is true.
-    pub fn focus_bordered(mut self, bordered: bool) -> Self {
-        self.focus_bordered = bordered;
         self
     }
 
@@ -234,12 +218,6 @@ impl RenderOnce for Input {
 
         let (bg, _) = input_style(state.disabled, cx);
 
-        let bg = if state.mode.is_code_editor() {
-            cx.theme().surface_background
-        } else {
-            bg
-        };
-
         let prefix = self.prefix;
         let suffix = self.suffix;
         let show_clear_button = self.cleanable
@@ -338,11 +316,6 @@ impl RenderOnce for Input {
                 this.bg(bg)
                     .when(self.disabled, |this| this.opacity(0.5))
                     .rounded(cx.theme().radius)
-                    .when(self.bordered, |this| {
-                        this.border_color(cx.theme().border)
-                            .border_1()
-                            .when(cx.theme().shadow, |this| this.shadow_xs())
-                    })
             })
             .items_center()
             .gap(gap_x)

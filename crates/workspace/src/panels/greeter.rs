@@ -1,6 +1,7 @@
+use anyhow::Error;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, SharedString, Styled, Window, div, svg,
+    IntoElement, ParentElement, Render, SharedString, Styled, Task, Window, div, svg,
 };
 use state::NostrRegistry;
 use theme::ActiveTheme;
@@ -8,8 +9,8 @@ use ui::button::{Button, ButtonVariants};
 use ui::dock::{DockPlacement, Panel, PanelEvent};
 use ui::{Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
 
-use crate::Workspace;
 use crate::panels::profile;
+use crate::{Command, Workspace};
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<GreeterPanel> {
     cx.new(|cx| GreeterPanel::new(window, cx))
@@ -18,6 +19,7 @@ pub fn init(window: &mut Window, cx: &mut App) -> Entity<GreeterPanel> {
 pub struct GreeterPanel {
     name: SharedString,
     focus_handle: FocusHandle,
+    tasks: Vec<Task<Result<(), Error>>>,
 }
 
 impl GreeterPanel {
@@ -25,6 +27,7 @@ impl GreeterPanel {
         Self {
             name: "Onboarding".into(),
             focus_handle: cx.focus_handle(),
+            tasks: vec![],
         }
     }
 
@@ -32,7 +35,7 @@ impl GreeterPanel {
         let nostr = NostrRegistry::global(cx);
 
         if let Some(public_key) = nostr.read(cx).current_user() {
-            cx.spawn_in(window, async move |_this, cx| {
+            self.tasks.push(cx.spawn_in(window, async move |_this, cx| {
                 cx.update(|window, cx| {
                     Workspace::add_panel(
                         profile::init(public_key, window, cx),
@@ -42,8 +45,9 @@ impl GreeterPanel {
                     );
                 })
                 .ok();
-            })
-            .detach();
+
+                Ok(())
+            }));
         }
     }
 }
@@ -142,17 +146,20 @@ impl Render for GreeterPanel {
                                             .ghost()
                                             .small()
                                             .justify_start()
-                                            .on_click(cx.listener(move |this, _ev, window, cx| {
+                                            .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.add_profile_panel(window, cx)
                                             })),
                                     )
                                     .child(
-                                        Button::new("invite")
-                                            .icon(Icon::new(IconName::Invite))
-                                            .label("Invite friends")
+                                        Button::new("theme")
+                                            .icon(Icon::new(IconName::Moon))
+                                            .label("Change theme")
                                             .ghost()
                                             .small()
-                                            .justify_start(),
+                                            .justify_start()
+                                            .on_click(cx.listener(move |_, _, _, cx| {
+                                                cx.dispatch_action(&Command::ToggleTheme);
+                                            })),
                                     ),
                             ),
                     ),

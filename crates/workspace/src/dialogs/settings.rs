@@ -3,7 +3,7 @@ use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
     Window, div, px,
 };
-use settings::{AppSettings, AuthMode};
+use settings::AppSettings;
 use theme::{ActiveTheme, Theme, ThemeMode};
 use ui::button::{Button, ButtonVariants};
 use ui::group_box::{GroupBox, GroupBoxVariants};
@@ -60,13 +60,11 @@ impl Render for Preferences {
         const AVATAR: &str = "Hide all avatar pictures to improve performance.";
         const MODE: &str = "Use the selected light or dark theme, or to follow the OS.";
         const NIP4E: &str = "Use a dedicated key to encrypt and decrypt messages.";
-        const AUTH: &str = "Choose the authentication behavior for relays.";
         const RESET: &str = "Reset the theme to the default one.";
 
         let screening = AppSettings::get_screening(cx);
         let hide_avatar = AppSettings::get_hide_avatar(cx);
         let nip4e = AppSettings::get_nip4e(cx);
-        let auth_mode = AppSettings::get_auth_mode(cx);
         let theme_mode = AppSettings::get_theme_mode(cx);
 
         v_flex()
@@ -93,52 +91,6 @@ impl Render for Preferences {
                             .on_click(move |_, _window, cx| {
                                 AppSettings::update_hide_avatar(!hide_avatar, cx);
                             }),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_3()
-                            .justify_between()
-                            .child(
-                                v_flex()
-                                    .child(
-                                        div()
-                                            .text_sm()
-                                            .child(SharedString::from("Relay authentication")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().text_muted)
-                                            .child(SharedString::from(AUTH)),
-                                    ),
-                            )
-                            .child(
-                                Button::new("auth")
-                                    .label(auth_mode.to_string())
-                                    .ghost_alt()
-                                    .small()
-                                    .dropdown_menu(|this, _window, _cx| {
-                                        this.min_w(px(256.))
-                                            .item(
-                                                PopupMenuItem::new("Auto authentication").on_click(
-                                                    |_ev, _window, cx| {
-                                                        AppSettings::update_auth_mode(
-                                                            AuthMode::Auto,
-                                                            cx,
-                                                        );
-                                                    },
-                                                ),
-                                            )
-                                            .item(PopupMenuItem::new("Ask every time").on_click(
-                                                |_ev, _window, cx| {
-                                                    AppSettings::update_auth_mode(
-                                                        AuthMode::Manual,
-                                                        cx,
-                                                    );
-                                                },
-                                            ))
-                                    }),
-                            ),
                     ),
             )
             .child(

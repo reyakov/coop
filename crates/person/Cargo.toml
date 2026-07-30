@@ -10,6 +10,7 @@ state = { path = "../state" }
 
 gpui.workspace = true
 nostr-sdk.workspace = true
+instant.workspace = true
 anyhow.workspace = true
 smallvec.workspace = true
 flume.workspace = true

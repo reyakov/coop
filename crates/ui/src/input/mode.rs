@@ -1,26 +1,11 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-
-use gpui::{SharedString, Task};
-use ropey::Rope;
-
 use super::display_map::DisplayMap;
-use crate::input::TabSize;
-
-#[allow(dead_code)]
-pub(super) struct PendingBackgroundParse {
-    pub parse_task: Rc<RefCell<Option<Task<()>>>>,
-    pub language: SharedString,
-    pub text: Rope,
-    pub is_folding: bool,
-}
 
 #[derive(Clone)]
 pub(crate) enum InputMode {
     /// A plain text input mode.
     PlainText {
         multi_line: bool,
-        tab: TabSize,
+        tab: crate::input::indent::TabSize,
         rows: usize,
     },
     /// An auto grow input mode.
@@ -28,18 +13,6 @@ pub(crate) enum InputMode {
         rows: usize,
         min_rows: usize,
         max_rows: usize,
-    },
-    /// A code editor input mode.
-    CodeEditor {
-        multi_line: bool,
-        tab: TabSize,
-        rows: usize,
-        /// Show line number
-        line_number: bool,
-        language: SharedString,
-        indent_guides: bool,
-        folding: bool,
-        parse_task: Rc<RefCell<Option<Task<()>>>>,
     },
 }
 
@@ -55,22 +28,8 @@ impl InputMode {
     pub(super) fn plain_text() -> Self {
         InputMode::PlainText {
             multi_line: false,
-            tab: TabSize::default(),
+            tab: crate::input::indent::TabSize::default(),
             rows: 1,
-        }
-    }
-
-    /// Create a code editor input mode with default settings.
-    pub(super) fn code_editor(language: impl Into<SharedString>) -> Self {
-        InputMode::CodeEditor {
-            rows: 2,
-            multi_line: true,
-            tab: TabSize::default(),
-            language: language.into(),
-            line_number: true,
-            indent_guides: true,
-            folding: true,
-            parse_task: Rc::new(RefCell::new(None)),
         }
     }
 
@@ -86,7 +45,6 @@ impl InputMode {
     pub(super) fn multi_line(mut self, multi_line: bool) -> Self {
         match &mut self {
             InputMode::PlainText { multi_line: ml, .. } => *ml = multi_line,
-            InputMode::CodeEditor { multi_line: ml, .. } => *ml = multi_line,
             InputMode::AutoGrow { .. } => {}
         }
         self
@@ -98,28 +56,6 @@ impl InputMode {
     }
 
     #[inline]
-    pub(super) fn is_code_editor(&self) -> bool {
-        matches!(self, InputMode::CodeEditor { .. })
-    }
-
-    /// Return true if the mode is code editor and `folding: true`, `multi_line: true`.
-    #[inline]
-    pub(crate) fn is_folding(&self) -> bool {
-        if cfg!(target_family = "wasm") {
-            return false;
-        }
-
-        matches!(
-            self,
-            InputMode::CodeEditor {
-                folding: true,
-                multi_line: true,
-                ..
-            }
-        )
-    }
-
-    #[inline]
     pub(super) fn is_auto_grow(&self) -> bool {
         matches!(self, InputMode::AutoGrow { .. })
     }
@@ -128,7 +64,6 @@ impl InputMode {
     pub(super) fn is_multi_line(&self) -> bool {
         match self {
             InputMode::PlainText { multi_line, .. } => *multi_line,
-            InputMode::CodeEditor { multi_line, .. } => *multi_line,
             InputMode::AutoGrow { max_rows, .. } => *max_rows > 1,
         }
     }
@@ -136,9 +71,6 @@ impl InputMode {
     pub(super) fn set_rows(&mut self, new_rows: usize) {
         match self {
             InputMode::PlainText { rows, .. } => {
-                *rows = new_rows;
-            }
-            InputMode::CodeEditor { rows, .. } => {
                 *rows = new_rows;
             }
             InputMode::AutoGrow {
@@ -168,7 +100,6 @@ impl InputMode {
 
         match self {
             InputMode::PlainText { rows, .. } => *rows,
-            InputMode::CodeEditor { rows, .. } => *rows,
             InputMode::AutoGrow { rows, .. } => *rows,
         }
         .max(1)
@@ -196,16 +127,19 @@ impl InputMode {
         }
     }
 
-    /// Return false if the mode is not [`InputMode::CodeEditor`].
     #[inline]
-    pub(super) fn line_number(&self) -> bool {
+    pub(super) fn is_indentable(&self) -> bool {
         match self {
-            InputMode::CodeEditor {
-                line_number,
-                multi_line,
-                ..
-            } => *line_number && *multi_line,
+            InputMode::PlainText { multi_line, .. } => *multi_line,
             _ => false,
+        }
+    }
+
+    #[inline]
+    pub(super) fn tab_size(&self) -> crate::input::indent::TabSize {
+        match self {
+            InputMode::PlainText { tab, .. } => *tab,
+            _ => crate::input::indent::TabSize::default(),
         }
     }
 }

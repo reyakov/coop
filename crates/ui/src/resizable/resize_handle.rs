@@ -117,7 +117,7 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
                 cx.theme().border
             };
 
-            let mut el = div()
+            let mut ele = div()
                 .id(self.id.clone())
                 .occlude()
                 .absolute()
@@ -160,16 +160,15 @@ impl<T: 'static, E: 'static + Render> Element for ResizeHandle<T, E> {
                 })
                 .child(
                     div()
-                        .bg(bg_color)
                         .group_hover("handle", |this| this.bg(bg_color))
                         .when(axis.is_horizontal(), |this| this.h_full().w(HANDLE_SIZE))
                         .when(axis.is_vertical(), |this| this.w_full().h(HANDLE_SIZE)),
                 )
                 .into_any_element();
 
-            let layout_id = el.request_layout(window, cx);
+            let layout_id = ele.request_layout(window, cx);
 
-            ((layout_id, el), state)
+            ((layout_id, ele), state)
         })
     }
 

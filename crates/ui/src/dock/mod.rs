@@ -2,11 +2,10 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, AnyView, App, AppContext, Axis, Bounds, Context, Decorations, Edges, Entity,
-    EntityId, EventEmitter, Focusable, InteractiveElement as _, IntoElement, ParentElement as _,
-    Pixels, Render, SharedString, Styled, Subscription, WeakEntity, Window, actions, div, px,
+    AnyElement, AnyView, App, AppContext, Axis, Bounds, Context, Edges, Entity, EntityId,
+    EventEmitter, Focusable, InteractiveElement as _, IntoElement, ParentElement as _, Pixels,
+    Render, SharedString, Styled, Subscription, WeakEntity, Window, actions, div, px,
 };
-use theme::CLIENT_SIDE_DECORATION_ROUNDING;
 
 use crate::ElementExt;
 
@@ -110,15 +109,8 @@ impl DockItem {
         window: &mut Window,
         cx: &mut App,
     ) -> Self {
-        let mut items = items;
-
         let stack_panel = cx.new(|cx| {
             let mut stack_panel = StackPanel::new(axis, window, cx);
-            for (i, item) in items.iter_mut().enumerate() {
-                let view = item.view();
-                let size = sizes.get(i).copied().flatten();
-                stack_panel.add_panel(view.clone(), size, dock_area.clone(), window, cx)
-            }
 
             for (i, item) in items.iter().enumerate() {
                 let view = item.view();
@@ -745,34 +737,22 @@ impl EventEmitter<DockEvent> for DockArea {}
 impl Render for DockArea {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = cx.entity().clone();
-        let decorations = window.window_decorations();
 
         div()
             .id("dock-area")
             .relative()
             .size_full()
-            .overflow_hidden()
             .on_prepaint(move |bounds, _, cx| view.update(cx, |r, _| r.bounds = bounds))
             .map(|this| {
                 if let Some(zoom_view) = self.zoom_view.clone() {
-                    this.map(|this| match decorations {
-                        Decorations::Server => this,
-                        Decorations::Client { tiling } => this
-                            .when(!(tiling.top || tiling.right), |div| {
-                                div.rounded_br(CLIENT_SIDE_DECORATION_ROUNDING)
-                            })
-                            .when(!(tiling.top || tiling.left), |div| {
-                                div.rounded_bl(CLIENT_SIDE_DECORATION_ROUNDING)
-                            }),
-                    })
-                    .child(zoom_view)
+                    this.child(zoom_view)
                 } else {
                     // render dock
                     this.child(
                         div()
                             .flex()
                             .flex_row()
-                            .h_full()
+                            .size_full()
                             // Left dock
                             .when_some(self.left_dock.clone(), |this, dock| {
                                 this.child(div().flex().flex_none().child(dock))
@@ -783,14 +763,8 @@ impl Render for DockArea {
                                     .flex()
                                     .flex_1()
                                     .flex_col()
-                                    .overflow_hidden()
                                     // Top center
-                                    .child(
-                                        div()
-                                            .flex_1()
-                                            .overflow_hidden()
-                                            .child(self.render_items(window, cx)),
-                                    )
+                                    .child(div().flex_1().child(self.render_items(window, cx)))
                                     // Bottom Dock
                                     .when_some(self.bottom_dock.clone(), |this, dock| {
                                         this.child(dock)

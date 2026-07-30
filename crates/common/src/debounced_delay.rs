@@ -1,5 +1,5 @@
 use std::marker::PhantomData;
-use std::time::Duration;
+use instant::Duration;
 
 use futures::channel::oneshot;
 use futures::FutureExt;

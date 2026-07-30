@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use instant::Duration;
 
 use anyhow::{Context as AnyhowContext, Error, anyhow};
 use gpui::{
@@ -92,7 +92,6 @@ impl DeviceRegistry {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let nostr = NostrRegistry::global(cx);
         let settings = AppSettings::global(cx);
-        let nip4e_enabled = settings.read(cx).is_nip4e_enabled(cx);
 
         let signer = cx.new(|_| None);
         let mut subscriptions = smallvec![];
@@ -109,7 +108,7 @@ impl DeviceRegistry {
         subscriptions.push(
             // Observe the user signer
             cx.subscribe(&nostr, move |this, _nostr, event, cx| {
-                if event.signer_changed() && nip4e_enabled {
+                if event.signer_changed() && settings.read(cx).is_nip4e_enabled(cx) {
                     this.get_announcement(cx);
                 }
             }),
@@ -226,6 +225,11 @@ impl DeviceRegistry {
             let keys = get_keys(&client, &signer).await?;
             let content = keys.secret_key().to_bech32()?;
 
+            if cfg!(target_arch = "wasm32") {
+                return Err(anyhow!("Not supported"));
+            }
+
+            #[cfg(not(target_arch = "wasm32"))]
             smol::fs::write(path, &content).await?;
 
             Ok(())
@@ -258,27 +262,19 @@ impl DeviceRegistry {
         }));
 
         let announcement_existed = self.announcement_existed.clone();
-        let executor = cx.background_executor().clone();
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            if !cx
-                .background_spawn(async move {
-                    // Wait for 5 seconds
-                    executor.timer(Duration::from_secs(5)).await;
+            // Wait for 5 seconds
+            cx.background_executor().timer(Duration::from_secs(5)).await;
 
-                    // Then check if the msg relays have been found
-                    if !announcement_existed.load(Ordering::Acquire) {
-                        return true;
-                    }
-
-                    false
-                })
-                .await
-            {
-                this.update(cx, |_this, cx| {
-                    cx.emit(DeviceEvent::NotSet);
-                })?;
+            // Then check if the msg relays have been found
+            if announcement_existed.load(Ordering::Acquire) {
+                return Ok(());
             }
+
+            this.update(cx, |_this, cx| {
+                cx.emit(DeviceEvent::NotSet);
+            })?;
 
             Ok(())
         }));
@@ -404,11 +400,10 @@ impl DeviceRegistry {
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
 
-        let Ok(app_keys) = get_or_init_app_keys(cx) else {
-            return;
-        };
+        let app_keys_task = get_or_init_app_keys(cx);
 
         let task: Task<Result<Option<Event>, Error>> = cx.background_spawn(async move {
+            let app_keys = app_keys_task.await?;
             let app_pubkey = app_keys.public_key();
             let public_key = signer.get_public_key_async().await?;
 
@@ -489,11 +484,10 @@ impl DeviceRegistry {
 
     /// Parse the approval event to get encryption key then set it
     fn extract_encryption(&mut self, event: Event, cx: &mut Context<Self>) {
-        let Ok(app_keys) = get_or_init_app_keys(cx) else {
-            return;
-        };
+        let app_keys_task = get_or_init_app_keys(cx);
 
         let task: Task<Result<Keys, Error>> = cx.background_spawn(async move {
+            let app_keys = app_keys_task.await?;
             let master = event
                 .tags
                 .iter()
@@ -573,7 +567,7 @@ impl DeviceRegistry {
             Ok(())
         });
 
-        cx.spawn_in(window, async move |_this, cx| {
+        self.tasks.push(cx.spawn_in(window, async move |_this, cx| {
             match task.await {
                 Ok(_) => {
                     cx.update(|window, cx| {
@@ -591,8 +585,9 @@ impl DeviceRegistry {
                     .ok();
                 }
             };
-        })
-        .detach();
+
+            Ok(())
+        }));
     }
 
     /// Handle encryption request
@@ -715,33 +710,34 @@ impl DeviceRegistry {
 
 struct DeviceNotification;
 
-/// Get or create new app keys
-fn get_or_init_app_keys(cx: &App) -> Result<Keys, Error> {
+/// Get or create new app keys (async, returns a task)
+fn get_or_init_app_keys(cx: &App) -> Task<Result<Keys, Error>> {
     let read = cx.read_credentials(CLIENT_NAME);
-    let stored_keys: Option<Keys> = cx.foreground_executor().block_on(async move {
-        if let Ok(Some((_, secret))) = read.await {
-            SecretKey::from_slice(&secret).map(Keys::new).ok()
-        } else {
-            None
-        }
-    });
 
-    if let Some(keys) = stored_keys {
-        Ok(keys)
-    } else {
+    cx.spawn(async move |cx| {
+        if let Ok(Some((_, secret))) = read.await
+            && let Ok(keys) = SecretKey::from_slice(&secret).map(Keys::new)
+        {
+            return Ok(keys);
+        }
+
+        // No stored keys found or invalid — generate new ones
         let keys = Keys::generate();
         let user = keys.public_key().to_hex();
         let secret = keys.secret_key().to_secret_bytes();
-        let write = cx.write_credentials(CLIENT_NAME, &user, &secret);
 
-        cx.foreground_executor().block_on(async move {
-            if let Err(e) = write.await {
-                log::error!("Keyring not available or panic: {e}")
-            }
+        cx.update(|cx| {
+            let write = cx.write_credentials(CLIENT_NAME, &user, &secret);
+            cx.background_spawn(async move {
+                if let Err(e) = write.await {
+                    log::error!("Keyring not available or panic: {e}")
+                }
+            })
+            .detach();
         });
 
         Ok(keys)
-    }
+    })
 }
 
 /// Encrypt and store device keys in the local database.

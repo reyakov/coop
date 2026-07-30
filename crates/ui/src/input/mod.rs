@@ -18,9 +18,7 @@ mod state;
 
 pub(crate) use clear_button::*;
 pub use cursor::*;
-#[cfg(target_family = "wasm")]
-pub use display_map::folding::Tree;
-pub use display_map::{BufferPoint, DisplayMap, DisplayPoint, FoldRange};
+pub use display_map::DisplayMap;
 pub use indent::TabSize;
 pub use input::*;
 pub use mask_pattern::MaskPattern;

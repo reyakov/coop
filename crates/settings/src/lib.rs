@@ -1,4 +1,3 @@
-use std::fmt::Display;
 use std::rc::Rc;
 
 use anyhow::{Error, anyhow};
@@ -42,26 +41,8 @@ setting_accessors! {
     pub hide_avatar: bool,
     pub screening: bool,
     pub nip4e: bool,
-    pub auth_mode: AuthMode,
     pub trusted_relays: Vec<String>,
     pub file_server: Url,
-}
-
-/// Authentication mode
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum AuthMode {
-    #[default]
-    Auto,
-    Manual,
-}
-
-impl Display for AuthMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            AuthMode::Auto => write!(f, "Auto"),
-            AuthMode::Manual => write!(f, "Ask every time"),
-        }
-    }
 }
 
 /// Signer kind
@@ -141,9 +122,6 @@ pub struct Settings {
     /// Enable decoupling encryption key
     pub nip4e: bool,
 
-    /// Authentication mode
-    pub auth_mode: AuthMode,
-
     /// Trusted relays; Coop will automatically authenticate with these relays
     pub trusted_relays: Vec<String>,
 
@@ -159,7 +137,6 @@ impl Default for Settings {
             hide_avatar: false,
             screening: true,
             nip4e: false,
-            auth_mode: AuthMode::default(),
             trusted_relays: vec![],
             file_server: Url::parse("https://blossom.band/").unwrap(),
         }

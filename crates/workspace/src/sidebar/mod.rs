@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::ops::Range;
-use std::time::Duration;
 
 use anyhow::Error;
 use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
@@ -12,11 +11,12 @@ use gpui::{
     ParentElement, Render, SharedString, Styled, Subscription, Task, UniformListScrollHandle,
     Window, div, uniform_list,
 };
+use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use smallvec::{SmallVec, smallvec};
 use state::{FIND_DELAY, IMAGE_CACHE_SIZE, NostrRegistry};
-use theme::{ActiveTheme, SIDEBAR_WIDTH, TABBAR_HEIGHT};
+use theme::{ActiveTheme, SIDEBAR_WIDTH};
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
 use ui::indicator::Indicator;
@@ -29,13 +29,8 @@ mod entry;
 
 const INPUT_PLACEHOLDER: &str = "Find or start a conversation";
 
-pub fn init(window: &mut Window, cx: &mut App) -> Entity<Sidebar> {
-    cx.new(|cx| Sidebar::new(window, cx))
-}
-
 /// Sidebar.
 pub struct Sidebar {
-    name: SharedString,
     focus_handle: FocusHandle,
     scroll_handle: UniformListScrollHandle,
 
@@ -80,7 +75,7 @@ pub struct Sidebar {
 }
 
 impl Sidebar {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let chat = ChatRegistry::global(cx);
         let filter = cx.new(|_| RoomKind::Ongoing);
         let contact_list = cx.new(|_| None);
@@ -135,7 +130,6 @@ impl Sidebar {
         );
 
         Self {
-            name: "Sidebar".into(),
             focus_handle: cx.focus_handle(),
             scroll_handle: UniformListScrollHandle::new(),
             find_input,
@@ -335,7 +329,7 @@ impl Sidebar {
                         .organize(&public_key)
                         .kind(RoomKind::Ongoing)
                 });
-                this.emit_room(&room, cx);
+                this.emit_room(&room, _window, cx);
             })?;
 
             // Reset the find panel
@@ -379,9 +373,9 @@ impl Sidebar {
                 let room = item.read(cx);
                 let room_clone = item.clone();
                 let public_key = room.display_member(cx).public_key();
-                let handler = cx.listener(move |_this, _ev, _window, cx| {
+                let handler = cx.listener(move |_this, _ev, window, cx| {
                     ChatRegistry::global(cx).update(cx, |s, cx| {
-                        s.emit_room(&room_clone, cx);
+                        s.emit_room(&room_clone, window, cx);
                     });
                 });
 
@@ -474,7 +468,7 @@ impl Sidebar {
 
 impl Panel for Sidebar {
     fn panel_id(&self) -> SharedString {
-        self.name.clone()
+        "Sidebar".into()
     }
 }
 
@@ -488,8 +482,11 @@ impl Focusable for Sidebar {
 
 impl Render for Sidebar {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let nostr = NostrRegistry::global(cx);
         let chat = ChatRegistry::global(cx);
-        let loading = chat.read(cx).loading();
+        let logged_in = nostr.read(cx).current_user().is_some();
+        let loading = chat.read(cx).loading() && logged_in;
+
         let total_rooms = chat.read(cx).count(self.filter.read(cx), cx);
 
         // Whether the find panel should be shown
@@ -507,27 +504,21 @@ impl Render for Sidebar {
             .size_full()
             .gap_2()
             .child(
-                h_flex()
-                    .h(TABBAR_HEIGHT)
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .bg(cx.theme().tab_background)
-                    .child(
-                        Input::new(&self.find_input)
-                            .appearance(false)
-                            .bordered(false)
-                            .small()
-                            .text_xs()
-                            .when(!self.find_input.read(cx).loading, |this| {
-                                this.suffix(
-                                    Button::new("find-icon")
-                                        .icon(IconName::Search)
-                                        .tooltip("Press Enter to search")
-                                        .transparent()
-                                        .small(),
-                                )
-                            }),
-                    ),
+                h_flex().px_2().py_1().child(
+                    Input::new(&self.find_input)
+                        .small()
+                        .text_xs()
+                        .disabled(loading)
+                        .when(!self.find_input.read(cx).loading, |this| {
+                            this.suffix(
+                                Button::new("find-icon")
+                                    .icon(IconName::Search)
+                                    .tooltip("Press Enter to search")
+                                    .transparent()
+                                    .small(),
+                            )
+                        }),
+                ),
             )
             .child(
                 h_flex()
@@ -539,7 +530,6 @@ impl Render for Sidebar {
                             Button::new("search-results")
                                 .icon(IconName::Search)
                                 .tooltip("All search results")
-                                .small()
                                 .ghost_alt()
                                 .font_semibold()
                                 .flex_1()
@@ -555,9 +545,8 @@ impl Render for Sidebar {
                                     this.icon(IconName::Inbox)
                                 }
                             })
-                            .when(!show_find_panel, |this| this.label("Inbox"))
+                            .when(!show_find_panel, |this| this.label("Inbox").small())
                             .tooltip("All ongoing conversations")
-                            .small()
                             .ghost_alt()
                             .font_semibold()
                             .flex_1()
@@ -577,9 +566,8 @@ impl Render for Sidebar {
                                     this.icon(IconName::Fistbump)
                                 }
                             })
-                            .when(!show_find_panel, |this| this.label("Requests"))
+                            .when(!show_find_panel, |this| this.label("Requests").small())
                             .tooltip("Incoming new conversations")
-                            .small()
                             .ghost_alt()
                             .font_semibold()
                             .flex_1()
@@ -608,17 +596,13 @@ impl Render for Sidebar {
                             .items_center()
                             .justify_center()
                             .text_center()
+                            .child(div().text_sm().font_semibold().child("No conversations"))
                             .child(
                                 div()
-                                    .text_sm()
-                                    .font_semibold()
-                                    .child(SharedString::from("No conversations")),
-                            )
-                            .child(div().text_xs().text_color(cx.theme().text_muted).child(
-                                SharedString::from(
-                                    "Start a conversation with someone to get started.",
-                                ),
-                            )),
+                                    .text_xs()
+                                    .text_color(cx.theme().text_muted)
+                                    .child("Start a conversation with someone to get started."),
+                            ),
                     ),
                 )
             })
@@ -643,7 +627,7 @@ impl Render for Sidebar {
                                                 .font_semibold()
                                                 .text_color(cx.theme().text_muted)
                                                 .child(Icon::new(IconName::ChevronDown))
-                                                .child(SharedString::from("Results")),
+                                                .child("Results"),
                                         )
                                         .child(
                                             uniform_list(
@@ -670,7 +654,7 @@ impl Render for Sidebar {
                                                 .font_semibold()
                                                 .text_color(cx.theme().text_muted)
                                                 .child(Icon::new(IconName::ChevronDown).small())
-                                                .child(SharedString::from("Suggestions")),
+                                                .child("Contacts"),
                                         )
                                         .child(
                                             uniform_list(
@@ -707,17 +691,17 @@ impl Render for Sidebar {
                 this.child(
                     div()
                         .absolute()
-                        .bottom_0()
+                        .bottom_2()
                         .left_0()
                         .h_9()
                         .w_full()
-                        .px_2()
+                        .px_4()
                         .child(
                             Button::new("create")
                                 .label(button_label)
                                 .primary()
-                                .small()
-                                .shadow_lg()
+                                .rounded()
+                                .shadow_md()
                                 .on_click(cx.listener(move |this, _ev, window, cx| {
                                     this.create_room(window, cx);
                                 })),
@@ -740,15 +724,13 @@ impl Render for Sidebar {
                                 .h_9()
                                 .justify_center()
                                 .bg(cx.theme().background.opacity(0.85))
-                                .border_color(cx.theme().border_disabled)
-                                .border_1()
-                                .when(cx.theme().shadow, |this| this.shadow_xs())
+                                .when(cx.theme().shadow, |this| this.shadow_md())
                                 .rounded_full()
                                 .text_xs()
                                 .font_semibold()
                                 .text_color(cx.theme().text_muted)
                                 .child(Indicator::new().small().color(cx.theme().icon_accent))
-                                .child(SharedString::from("Getting messages...")),
+                                .child("Getting messages..."),
                         ),
                 )
             })

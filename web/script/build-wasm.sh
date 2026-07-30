@@ -20,9 +20,26 @@ if [[ "$1" == "--release" ]]; then
     echo -e "${YELLOW}Building in release mode${NC}"
 fi
 
+# macOS: ensure LLVM from Homebrew is available
+if [[ "$(uname)" == "Darwin" ]]; then
+    echo -e "${GREEN}Detected macOS, setting up LLVM...${NC}"
+    if brew list llvm &>/dev/null; then
+        echo -e "${GREEN}LLVM already installed, skipping install${NC}"
+    else
+        echo -e "${YELLOW}LLVM not found, installing via Homebrew...${NC}"
+        brew install llvm
+    fi
+    LLVM_PATH=$(brew --prefix llvm)
+    export AR="${LLVM_PATH}/bin/llvm-ar"
+    export CC="${LLVM_PATH}/bin/clang"
+    echo -e "${GREEN}LLVM path: ${LLVM_PATH}${NC}"
+fi
+
 # Step 1: Build WASM
 echo -e "${GREEN}Step 1: Building WASM...${NC}"
 cd "$PROJECT_ROOT"
+export CARGO_TARGET_DIR="$PROJECT_ROOT/target"
+RUSTFLAGS='-C target-feature=+bulk-memory -C link-arg=--max-memory=4294967296' \
 cargo build --target wasm32-unknown-unknown $RELEASE_FLAG
 
 # Determine the build directory
@@ -33,8 +50,7 @@ else
 fi
 
 # WASM file is in workspace target directory
-WORKSPACE_ROOT="$PROJECT_ROOT/../.."
-WASM_PATH="$WORKSPACE_ROOT/target/wasm32-unknown-unknown/$BUILD_MODE/coop_web.wasm"
+WASM_PATH="$PROJECT_ROOT/target/wasm32-unknown-unknown/$BUILD_MODE/coop_web.wasm"
 
 # Check if WASM file exists
 if [[ ! -f "$WASM_PATH" ]]; then
@@ -45,7 +61,7 @@ fi
 # Step 2: Generate JavaScript bindings
 echo -e "${GREEN}Step 2: Generating JavaScript bindings...${NC}"
 wasm-bindgen "$WASM_PATH" \
-    --out-dir "$PROJECT_ROOT/www/src/wasm" \
+    --out-dir "$PROJECT_ROOT/www/wasm" \
     --target web \
     --no-typescript
 

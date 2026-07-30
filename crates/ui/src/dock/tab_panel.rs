@@ -7,7 +7,7 @@ use gpui::{
     ParentElement, Pixels, Render, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
     WeakEntity, Window, div, px, rems,
 };
-use theme::{ActiveTheme, AxisExt, CLIENT_SIDE_DECORATION_ROUNDING, Placement, TABBAR_HEIGHT};
+use theme::{ActiveTheme, AxisExt, Placement, TABBAR_HEIGHT};
 
 use crate::button::{Button, ButtonVariants as _};
 use crate::dock::dock::DockPlacement;
@@ -567,6 +567,7 @@ impl TabPanel {
         let left_dock_button = self.render_dock_toggle_button(DockPlacement::Left, window, cx);
         let bottom_dock_button = self.render_dock_toggle_button(DockPlacement::Bottom, window, cx);
         let right_dock_button = self.render_dock_toggle_button(DockPlacement::Right, window, cx);
+
         let has_extend_dock_button = left_dock_button.is_some() || bottom_dock_button.is_some();
         let tabs_count = self.panels.len();
         let is_bottom_dock = bottom_dock_button.is_some();
@@ -586,6 +587,7 @@ impl TabPanel {
                 .py_2()
                 .pl_3()
                 .pr_2()
+                .rounded_t(cx.theme().radius_lg)
                 .bg(cx.theme().panel_background)
                 .when(left_dock_button.is_some(), |this| this.pl_2())
                 .when(right_dock_button.is_some(), |this| this.pr_2())
@@ -641,17 +643,14 @@ impl TabPanel {
         TabBar::new("tab-bar")
             .track_scroll(&self.tab_bar_scroll_handle)
             .h(TABBAR_HEIGHT)
+            .bg(cx.theme().panel_background)
+            .rounded_t(cx.theme().radius_lg)
             .when(has_extend_dock_button, |this| {
                 this.prefix(
                     h_flex()
                         .items_center()
                         .top_0()
                         .right(-px(1.))
-                        .border_r_1()
-                        .border_b_1()
-                        .h_full()
-                        .border_color(cx.theme().border)
-                        .bg(cx.theme().tab_background)
                         .pl_0p5()
                         .pr_1()
                         .children(left_dock_button)
@@ -689,6 +688,7 @@ impl TabPanel {
                                     let panel = panel.clone();
                                     move |view, _ev, window, cx| {
                                         view.remove_panel(&panel, window, cx);
+                                        view.set_active_ix(ix, window, cx);
                                     }
                                 })),
                         )
@@ -780,12 +780,8 @@ impl TabPanel {
                         .top_0()
                         .right_0()
                         .h_full()
-                        .border_l_1()
-                        .border_b_1()
                         .px_0p5()
                         .gap_1()
-                        .border_color(cx.theme().border)
-                        .bg(cx.theme().tab_background)
                         .child(self.render_toolbar(state, window, cx))
                         .when_some(right_dock_button, |this, btn| this.child(btn)),
                 )
@@ -815,10 +811,8 @@ impl TabPanel {
             .child(
                 div()
                     .size_full()
+                    .rounded_b(cx.theme().radius_lg)
                     .bg(cx.theme().panel_background)
-                    .when(cx.theme().platform.is_linux(), |this| {
-                        this.rounded_b(CLIENT_SIDE_DECORATION_ROUNDING)
-                    })
                     .overflow_hidden()
                     .child(
                         active_panel
@@ -1140,17 +1134,24 @@ impl Render for TabPanel {
             state.closable = false;
         }
 
-        v_flex()
+        div()
             .when(!self.collapsed, |this| {
                 this.on_action(cx.listener(Self::on_action_toggle_zoom))
                     .on_action(cx.listener(Self::on_action_close_panel))
             })
             .id("tab-panel")
-            .tab_group()
             .track_focus(&focus_handle)
             .size_full()
+            .p_1()
             .overflow_hidden()
-            .child(self.render_title_bar(&state, window, cx))
-            .child(self.render_active_panel(&state, window, cx))
+            .child(
+                v_flex()
+                    .rounded(cx.theme().radius_lg)
+                    .when(cx.theme().shadow, |this| this.shadow_xs())
+                    .size_full()
+                    .tab_group()
+                    .child(self.render_title_bar(&state, window, cx))
+                    .child(self.render_active_panel(&state, window, cx)),
+            )
     }
 }

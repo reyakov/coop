@@ -2,7 +2,6 @@ use std::cell::Cell;
 use std::ops::Deref;
 use std::panic::Location;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
 
 use gpui::{
     Anchor, App, Axis, BorderStyle, Bounds, ContentMask, CursorStyle, Edges, Element, ElementId,
@@ -11,6 +10,7 @@ use gpui::{
     Position, ScrollHandle, ScrollWheelEvent, Size, Style, UniformListScrollHandle, Window, fill,
     point, px, relative, size,
 };
+use instant::{Duration, Instant};
 use theme::{ActiveTheme, AxisExt, ScrollbarMode};
 
 /// The width of the scrollbar (THUMB_ACTIVE_INSET * 2 + THUMB_ACTIVE_WIDTH)
@@ -157,7 +157,7 @@ impl ScrollbarStateInner {
         let mut state = *self;
         state.hovered_axis = axis;
         if axis.is_some() {
-            state.last_scroll_time = Some(std::time::Instant::now());
+            state.last_scroll_time = Some(instant::Instant::now());
         }
         state
     }
@@ -166,7 +166,7 @@ impl ScrollbarStateInner {
         let mut state = *self;
         state.hovered_on_thumb = axis;
         if self.is_scrollbar_visible() && axis.is_some() {
-            state.last_scroll_time = Some(std::time::Instant::now());
+            state.last_scroll_time = Some(instant::Instant::now());
         }
         state
     }

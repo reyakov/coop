@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::time::Duration;
 
 use anyhow::Error;
 use common::TimestampExt;
@@ -8,6 +7,7 @@ use gpui::{
     App, AppContext, Context, Div, Entity, InteractiveElement, IntoElement, ParentElement, Render,
     SharedString, Styled, Subscription, Task, Window, div, px, relative, uniform_list,
 };
+use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry, shorten_pubkey};
 use smallvec::{SmallVec, smallvec};
@@ -55,7 +55,7 @@ impl Screening {
             window.close_all_modals(cx);
         }));
 
-        cx.defer_in(window, move |this, _window, cx| {
+        cx.defer_in(window, |this, _window, cx| {
             this.check_contact(cx);
             this.check_wot(cx);
             this.check_last_activity(cx);
@@ -234,7 +234,8 @@ impl Screening {
             }
             .to_tag();
 
-            let event = EventBuilder::report(vec![tag], "")
+            let event = EventBuilder::new(Kind::Reporting, "")
+                .tag(tag)
                 .finalize_async(&signer)
                 .await?;
 

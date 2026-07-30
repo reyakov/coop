@@ -1,12 +1,8 @@
-use gpui::{
-    Bounds, Context, EntityInputHandler as _, Hsla, Path, PathBuilder, Pixels, SharedString,
-    TextRun, TextStyle, Window, point, px,
-};
+use gpui::{Context, EntityInputHandler, SharedString, Window};
 use ropey::RopeSlice;
 
-use crate::input::element::TextElement;
 use crate::input::mode::InputMode;
-use crate::input::{Indent, IndentInline, InputState, LastLayout, Outdent, OutdentInline, RopeExt};
+use crate::input::{Indent, IndentInline, InputState, Outdent, OutdentInline};
 
 #[derive(Debug, Copy, Clone)]
 pub struct TabSize {
@@ -49,165 +45,14 @@ impl TabSize {
     }
 }
 
-impl InputMode {
-    #[inline]
-    pub(super) fn is_indentable(&self) -> bool {
-        match self {
-            InputMode::PlainText { multi_line, .. } | InputMode::CodeEditor { multi_line, .. } => {
-                *multi_line
-            }
-            _ => false,
-        }
-    }
-
-    #[inline]
-    pub(super) fn has_indent_guides(&self) -> bool {
-        match self {
-            InputMode::CodeEditor {
-                indent_guides,
-                multi_line,
-                ..
-            } => *indent_guides && *multi_line,
-            _ => false,
-        }
-    }
-
-    #[inline]
-    pub(super) fn tab_size(&self) -> TabSize {
-        match self {
-            InputMode::PlainText { tab, .. } => *tab,
-            InputMode::CodeEditor { tab, .. } => *tab,
-            _ => TabSize::default(),
-        }
-    }
-}
-
-impl TextElement {
-    /// Measure the indent width in pixels for given column count.
-    fn measure_indent_width(&self, style: &TextStyle, column: usize, window: &Window) -> Pixels {
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        let layout = window.text_system().shape_line(
-            SharedString::from(" ".repeat(column)),
-            font_size,
-            &[TextRun {
-                len: column,
-                font: style.font(),
-                color: Hsla::default(),
-                background_color: None,
-                strikethrough: None,
-                underline: None,
-            }],
-            None,
-        );
-
-        layout.width
-    }
-
-    pub(super) fn layout_indent_guides(
-        &self,
-        state: &InputState,
-        bounds: &Bounds<Pixels>,
-        last_layout: &LastLayout,
-        text_style: &TextStyle,
-        window: &mut Window,
-    ) -> Option<Path<Pixels>> {
-        if !state.mode.has_indent_guides() {
-            return None;
-        }
-
-        let indent_width =
-            self.measure_indent_width(text_style, state.mode.tab_size().tab_size, window);
-
-        let tab_size = state.mode.tab_size();
-        let line_height = last_layout.line_height;
-        let mut builder = PathBuilder::stroke(px(1.));
-        let mut offset_y = last_layout.visible_top;
-        let mut last_indents = vec![];
-
-        for (&buffer_line, line_layout) in last_layout
-            .visible_buffer_lines
-            .iter()
-            .zip(last_layout.lines.iter())
-        {
-            let line = state.text.slice_line(buffer_line);
-            let mut current_indents = vec![];
-            if line.len() > 0 {
-                let indent_count = tab_size.indent_count(&line);
-                for offset in (0..indent_count).step_by(tab_size.tab_size) {
-                    let x = if indent_count > 0 {
-                        indent_width * offset as f32 / tab_size.tab_size as f32
-                    } else {
-                        px(0.)
-                    };
-
-                    let pos = point(x + last_layout.line_number_width, offset_y);
-
-                    builder.move_to(pos);
-                    builder.line_to(point(pos.x, pos.y + line_height));
-                    current_indents.push(pos.x);
-                }
-            } else if !last_indents.is_empty() {
-                for x in &last_indents {
-                    let pos = point(*x, offset_y);
-                    builder.move_to(pos);
-                    builder.line_to(point(pos.x, pos.y + line_height));
-                }
-                current_indents = last_indents.clone();
-            }
-
-            offset_y += line_layout.wrapped_lines.len() * line_height;
-            last_indents = current_indents;
-        }
-
-        builder.translate(bounds.origin);
-        let path = builder.build().unwrap();
-        Some(path)
-    }
-}
-
 impl InputState {
-    /// Set whether to show indent guides in code editor mode, default is true.
-    ///
-    /// Only for [`InputMode::CodeEditor`] mode.
-    pub fn indent_guides(mut self, indent_guides: bool) -> Self {
-        debug_assert!(self.mode.is_code_editor() && self.mode.is_multi_line());
-        if let InputMode::CodeEditor {
-            indent_guides: l, ..
-        } = &mut self.mode
-        {
-            *l = indent_guides;
-        }
-        self
-    }
-
-    /// Set indent guides in code editor mode.
-    ///
-    /// Only for [`InputMode::CodeEditor`] mode.
-    pub fn set_indent_guides(
-        &mut self,
-        indent_guides: bool,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        debug_assert!(self.mode.is_code_editor());
-        if let InputMode::CodeEditor {
-            indent_guides: l, ..
-        } = &mut self.mode
-        {
-            *l = indent_guides;
-        }
-        cx.notify();
-    }
-
     /// Set the tab size for the input.
     ///
-    /// Only for [`InputMode::PlainText`] and [`InputMode::CodeEditor`] mode with multi_line.
+    /// Only for [`InputMode::PlainText`] mode with multi_line.
     pub fn tab_size(mut self, tab: TabSize) -> Self {
-        debug_assert!(self.mode.is_multi_line() || self.mode.is_code_editor());
-        match &mut self.mode {
-            InputMode::PlainText { tab: t, .. } => *t = tab,
-            InputMode::CodeEditor { tab: t, .. } => *t = tab,
-            _ => {}
+        debug_assert!(self.mode.is_multi_line());
+        if let InputMode::PlainText { tab: t, .. } = &mut self.mode {
+            *t = tab;
         }
         self
     }

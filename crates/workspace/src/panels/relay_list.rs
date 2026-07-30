@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::time::Duration;
 
 use anyhow::{Error, anyhow};
 use gpui::prelude::FluentBuilder;
@@ -8,6 +7,7 @@ use gpui::{
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
     Task, TextAlign, Window, div, px, rems,
 };
+use instant::Duration;
 use nostr_sdk::prelude::*;
 use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
@@ -216,7 +216,7 @@ impl RelayListPanel {
         self.set_updating(true, cx);
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let event = EventBuilder::relay_list(relays)
+            let event = nip65::RelayList::new(relays)
                 .finalize_async(&signer)
                 .await?;
 
@@ -371,12 +371,7 @@ impl Render for RelayListPanel {
                                 h_flex()
                                     .gap_1()
                                     .w_full()
-                                    .child(
-                                        Input::new(&self.input)
-                                            .small()
-                                            .bordered(false)
-                                            .cleanable(true),
-                                    )
+                                    .child(Input::new(&self.input).small().cleanable(true))
                                     .child(
                                         Button::new("metadata")
                                             .map(|this| {
@@ -434,7 +429,6 @@ impl Render for RelayListPanel {
                             .icon(IconName::CheckCircle)
                             .label("Update")
                             .primary()
-                            .small()
                             .font_semibold()
                             .loading(self.updating)
                             .disabled(self.updating)

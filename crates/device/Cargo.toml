@@ -14,6 +14,7 @@ settings = { path = "../settings" }
 
 gpui.workspace = true
 nostr-sdk.workspace = true
+instant.workspace = true
 anyhow.workspace = true
 smallvec.workspace = true
 log.workspace = true

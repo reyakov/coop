@@ -1,4 +1,4 @@
-use std::time::Duration;
+use instant::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{

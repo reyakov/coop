@@ -9,10 +9,7 @@ use std::ops::Range;
 use gpui::{App, Font, Pixels};
 use ropey::Rope;
 
-use super::fold_map::FoldMap;
-use super::text_wrapper::{LineItem, TextWrapper, WrapDisplayPoint};
-use super::{BufferPoint, WrapPoint};
-use crate::input::rope_ext::RopeExt;
+use super::text_wrapper::{LineItem, TextWrapper};
 
 /// WrapMap manages soft-wrapping and provides buffer ↔ wrap coordinate mapping.
 pub struct WrapMap {
@@ -53,49 +50,6 @@ impl WrapMap {
     #[inline]
     pub fn buffer_line_count(&self) -> usize {
         self.wrapper.lines.len()
-    }
-
-    /// Convert buffer position to wrap position
-    pub(super) fn buffer_pos_to_wrap_pos(&self, pos: BufferPoint) -> WrapPoint {
-        let BufferPoint { line, col } = pos;
-
-        // Clamp to valid range
-        let line = line.min(self.buffer_line_count().saturating_sub(1));
-        let line_item = self.wrapper.lines.get(line);
-
-        let col = if let Some(line_item) = line_item {
-            col.min(line_item.len())
-        } else {
-            0
-        };
-
-        // Calculate offset in rope
-        let line_start_offset = self.wrapper.text().line_start_offset(line);
-        let offset = line_start_offset + col;
-
-        // Use TextWrapper's existing conversion
-        let display_point = self.wrapper.offset_to_display_point(offset);
-
-        WrapPoint::new(display_point.row, display_point.column)
-    }
-
-    /// Convert wrap position to buffer position
-    pub(super) fn wrap_pos_to_buffer_pos(&self, pos: WrapPoint) -> BufferPoint {
-        let WrapPoint { row, col } = pos;
-
-        // Clamp wrap_row to valid range
-        let row = row.min(self.wrap_row_count().saturating_sub(1));
-
-        // Use TextWrapper's existing conversion
-        let display_point = WrapDisplayPoint::new(row, 0, col);
-        let offset = self.wrapper.display_point_to_offset(display_point);
-
-        // Convert offset to buffer position
-        let point = self.wrapper.text().offset_to_point(offset);
-        let line_start = self.wrapper.text().line_start_offset(point.row);
-        let col = offset.saturating_sub(line_start);
-
-        BufferPoint::new(point.row, col)
     }
 
     /// Get the buffer line for a given wrap row
@@ -176,8 +130,6 @@ impl WrapMap {
         let wrap_row_count = self.wrapper.len();
 
         // Skip if nothing changed: both buffer line count and total wrap row count must match.
-        // Checking wrap_row_count is essential because soft-wrap can change the number of
-        // wrap rows per line without changing the buffer line count.
         if line_count == self.cached_line_count
             && wrap_row_count == self.cached_wrap_row_count
             && !self.buffer_line_starts.is_empty()
@@ -212,11 +164,9 @@ impl WrapMap {
         self.wrapper.text()
     }
 
-    /// Calculate how many wrap rows of a buffer line are visible (not folded)
-    pub fn visible_wrap_row_count_for_line(&self, line: usize, fold_map: &FoldMap) -> usize {
-        let wrap_range = self.buffer_line_to_wrap_row_range(line);
-        wrap_range
-            .filter(|&wr| fold_map.wrap_row_to_display_row(wr).is_some())
-            .count()
+    /// Calculate how many wrap rows of a buffer line are visible.
+    /// Without folding, all wrap rows are visible.
+    pub fn visible_wrap_row_count_for_buffer_line(&self, line: usize) -> usize {
+        self.buffer_line_to_wrap_row_range(line).len()
     }
 }

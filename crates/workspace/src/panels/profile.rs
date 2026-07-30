@@ -1,5 +1,4 @@
 use std::str::FromStr;
-use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Error};
 use gpui::{
@@ -7,6 +6,7 @@ use gpui::{
     Focusable, IntoElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task,
     Window, div,
 };
+use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry, shorten_pubkey};
 use settings::AppSettings;
@@ -132,7 +132,7 @@ impl ProfilePanel {
         cx.notify();
 
         if status {
-            cx.spawn_in(window, async move |this, cx| {
+            self.tasks.push(cx.spawn_in(window, async move |this, cx| {
                 cx.background_executor().timer(Duration::from_secs(2)).await;
 
                 // Reset the copied state after a delay
@@ -143,8 +143,9 @@ impl ProfilePanel {
                     .ok();
                 })
                 .ok();
-            })
-            .detach();
+
+                Ok(())
+            }));
         }
     }
 
@@ -352,7 +353,7 @@ impl Render for ProfilePanel {
                             .text_color(cx.theme().text_muted)
                             .child(SharedString::from("What should people call you?")),
                     )
-                    .child(Input::new(&self.name_input).bordered(false).small()),
+                    .child(Input::new(&self.name_input).small()),
             )
             .child(
                 v_flex()
@@ -363,7 +364,7 @@ impl Render for ProfilePanel {
                             .text_color(cx.theme().text_muted)
                             .child(SharedString::from("A short introduction about you:")),
                     )
-                    .child(Input::new(&self.bio_input).bordered(false).small()),
+                    .child(Input::new(&self.bio_input).small()),
             )
             .child(
                 v_flex()
@@ -374,7 +375,7 @@ impl Render for ProfilePanel {
                             .text_color(cx.theme().text_muted)
                             .child(SharedString::from("Website:")),
                     )
-                    .child(Input::new(&self.website_input).bordered(false).small()),
+                    .child(Input::new(&self.website_input).small()),
             )
             .child(
                 v_flex()
@@ -418,7 +419,6 @@ impl Render for ProfilePanel {
                     .icon(IconName::CheckCircle)
                     .label("Update")
                     .primary()
-                    .small()
                     .font_semibold()
                     .loading(self.updating)
                     .disabled(self.updating)

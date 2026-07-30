@@ -34,7 +34,7 @@ pub const CLIENT_SIDE_DECORATION_BORDER: Pixels = px(1.0);
 pub const TITLEBAR_HEIGHT: Pixels = px(36.0);
 
 /// Defines workspace tabbar height
-pub const TABBAR_HEIGHT: Pixels = px(28.0);
+pub const TABBAR_HEIGHT: Pixels = px(44.0);
 
 /// Defines default sidebar width
 pub const SIDEBAR_WIDTH: Pixels = px(240.);

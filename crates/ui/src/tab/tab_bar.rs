@@ -2,19 +2,17 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Anchor, AnyElement, App, Div, Edges, ElementId, InteractiveElement, IntoElement, ParentElement,
+    Anchor, AnyElement, App, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
     RenderOnce, ScrollHandle, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled,
     Window, div, px,
 };
 use smallvec::SmallVec;
-use theme::ActiveTheme;
 
-use super::{Tab, TabVariant};
+use super::Tab;
 use crate::button::{Button, ButtonVariants as _};
 use crate::menu::{DropdownMenu as _, PopupMenuItem};
-use crate::{IconName, Selectable, Sizable, Size, StyledExt, h_flex};
+use crate::{IconName, Selectable, Sizable, StyledExt, h_flex};
 
-#[allow(clippy::type_complexity)]
 /// A TabBar element that contains multiple [`Tab`] items.
 #[derive(IntoElement)]
 pub struct TabBar {
@@ -26,9 +24,8 @@ pub struct TabBar {
     children: SmallVec<[Tab; 2]>,
     last_empty_space: AnyElement,
     selected_index: Option<usize>,
-    variant: TabVariant,
-    size: Size,
     menu: bool,
+    #[allow(clippy::type_complexity)]
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
 }
 
@@ -42,43 +39,11 @@ impl TabBar {
             scroll_handle: None,
             prefix: None,
             suffix: None,
-            variant: TabVariant::default(),
-            size: Size::default(),
             last_empty_space: div().w_3().into_any_element(),
             selected_index: None,
             on_click: None,
             menu: false,
         }
-    }
-
-    /// Set the Tab variant, all children will inherit the variant.
-    pub fn with_variant(mut self, variant: TabVariant) -> Self {
-        self.variant = variant;
-        self
-    }
-
-    /// Set the Tab variant to Pill, all children will inherit the variant.
-    pub fn pill(mut self) -> Self {
-        self.variant = TabVariant::Pill;
-        self
-    }
-
-    /// Set the Tab variant to Outline, all children will inherit the variant.
-    pub fn outline(mut self) -> Self {
-        self.variant = TabVariant::Outline;
-        self
-    }
-
-    /// Set the Tab variant to Segmented, all children will inherit the variant.
-    pub fn segmented(mut self) -> Self {
-        self.variant = TabVariant::Segmented;
-        self
-    }
-
-    /// Set the Tab variant to Underline, all children will inherit the variant.
-    pub fn underline(mut self) -> Self {
-        self.variant = TabVariant::Underline;
-        self
     }
 
     /// Set whether to show the menu button when tabs overflow, default is false.
@@ -105,13 +70,13 @@ impl TabBar {
         self
     }
 
-    /// Add children of the TabBar, all children will inherit the variant.
+    /// Add children of the TabBar.
     pub fn children(mut self, children: impl IntoIterator<Item = impl Into<Tab>>) -> Self {
         self.children.extend(children.into_iter().map(Into::into));
         self
     }
 
-    /// Add child of the TabBar, tab will inherit the variant.
+    /// Add child of the TabBar.
     pub fn child(mut self, child: impl Into<Tab>) -> Self {
         self.children.push(child.into());
         self
@@ -147,60 +112,8 @@ impl Styled for TabBar {
     }
 }
 
-impl Sizable for TabBar {
-    fn with_size(mut self, size: impl Into<Size>) -> Self {
-        self.size = size.into();
-        self
-    }
-}
-
 impl RenderOnce for TabBar {
-    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let default_gap = match self.size {
-            Size::Small | Size::XSmall => px(8.),
-            Size::Large => px(16.),
-            _ => px(12.),
-        };
-        let (bg, paddings, gap) = match self.variant {
-            TabVariant::Tab => {
-                let padding = Edges::all(px(0.));
-                (cx.theme().tab_background, padding, px(0.))
-            }
-            TabVariant::Outline => {
-                let padding = Edges::all(px(0.));
-                (gpui::transparent_black(), padding, default_gap)
-            }
-            TabVariant::Pill => {
-                let padding = Edges::all(px(0.));
-                (gpui::transparent_black(), padding, px(4.))
-            }
-            TabVariant::Segmented => {
-                let padding_x = match self.size {
-                    Size::XSmall => px(2.),
-                    Size::Small => px(3.),
-                    _ => px(4.),
-                };
-                let padding = Edges {
-                    left: padding_x,
-                    right: padding_x,
-                    ..Default::default()
-                };
-
-                (cx.theme().tab_background, padding, px(2.))
-            }
-            TabVariant::Underline => {
-                // This gap is same as the tab inner_paddings
-                let gap = match self.size {
-                    Size::XSmall => px(10.),
-                    Size::Small => px(12.),
-                    Size::Large => px(20.),
-                    _ => px(16.),
-                };
-
-                (gpui::transparent_black(), Edges::all(px(0.)), gap)
-            }
-        };
-
+    fn render(self, _: &mut Window, _cx: &mut App) -> impl IntoElement {
         let mut item_labels = Vec::new();
         let selected_index = self.selected_index;
         let on_click = self.on_click.clone();
@@ -210,25 +123,6 @@ impl RenderOnce for TabBar {
             .relative()
             .flex()
             .items_center()
-            .bg(bg)
-            .text_color(cx.theme().tab_foreground)
-            .when(
-                self.variant == TabVariant::Underline || self.variant == TabVariant::Tab,
-                |this| {
-                    this.child(
-                        div()
-                            .id("border-b")
-                            .absolute()
-                            .left_0()
-                            .bottom_0()
-                            .size_full()
-                            .border_b_1()
-                            .border_color(cx.theme().border),
-                    )
-                },
-            )
-            .rounded(self.variant.tab_bar_radius(self.size, cx))
-            .paddings(paddings)
             .refine_style(&self.style)
             .when_some(self.prefix, |this, prefix| this.child(prefix))
             .child(
@@ -239,15 +133,13 @@ impl RenderOnce for TabBar {
                     .when_some(self.scroll_handle, |this, scroll_handle| {
                         this.track_scroll(&scroll_handle)
                     })
-                    .gap(gap)
+                    .gap(px(0.))
                     .children(self.children.into_iter().enumerate().map(|(ix, child)| {
                         item_labels.push((child.label.clone(), child.disabled));
                         let tab_bar_prefix = child.tab_bar_prefix.unwrap_or(true);
                         child
                             .ix(ix)
                             .tab_bar_prefix(tab_bar_prefix)
-                            .with_variant(self.variant)
-                            .with_size(self.size)
                             .when_some(self.selected_index, |this, selected_ix| {
                                 this.selected(selected_ix == ix)
                             })

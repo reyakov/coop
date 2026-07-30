@@ -1,10 +1,9 @@
-use std::time::Duration;
-
 use anyhow::Error;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window, div,
 };
+use instant::Duration;
 use nostr_sdk::prelude::*;
 use state::USER_KEYRING;
 use theme::ActiveTheme;
@@ -155,12 +154,7 @@ impl Render for BackupPanel {
                                     .text_color(cx.theme().text_muted)
                                     .child(SharedString::from("Public Key:")),
                             )
-                            .child(
-                                Input::new(&self.npub_input)
-                                    .small()
-                                    .bordered(false)
-                                    .disabled(true),
-                            ),
+                            .child(Input::new(&self.npub_input).small().disabled(true)),
                     )
                     .child(
                         v_flex()
@@ -173,12 +167,7 @@ impl Render for BackupPanel {
                                     .text_color(cx.theme().text_muted)
                                     .child(SharedString::from("Secret Key:")),
                             )
-                            .child(
-                                Input::new(&self.nsec_input)
-                                    .small()
-                                    .bordered(false)
-                                    .disabled(true),
-                            ),
+                            .child(Input::new(&self.nsec_input).small().disabled(true)),
                     )
                     .child(
                         Button::new("copy")

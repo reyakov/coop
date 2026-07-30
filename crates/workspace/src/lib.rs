@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use ::settings::AppSettings;
+use anyhow::Error;
 use chat::{ChatEvent, ChatRegistry};
 use common::{CoopImageCache, download_dir};
 use device::{DeviceEvent, DeviceRegistry};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window, div,
-    image_cache, px, relative,
+    Render, SharedString, Styled, Subscription, Task, Window, div, image_cache, px,
 };
 use nostr_sdk::prelude::*;
 use person::{PersonRegistry, shorten_pubkey};
@@ -26,7 +26,8 @@ use ui::{Icon, IconName, Root, Sizable, TitleBar, WindowExtension, h_flex, v_fle
 use crate::dialogs::import::ImportIdentity;
 use crate::dialogs::restore::RestoreEncryption;
 use crate::dialogs::settings;
-use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list, trash};
+use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list};
+use crate::sidebar::Sidebar;
 
 mod dialogs;
 mod panels;
@@ -59,11 +60,15 @@ enum Command {
 }
 
 pub struct Workspace {
+    sidebar: Entity<Sidebar>,
     /// App's Dock Area
     dock: Entity<DockArea>,
 
     /// App's Image Cache
     image_cache: Entity<CoopImageCache>,
+
+    /// Async tasks
+    tasks: Vec<Task<Result<(), Error>>>,
 
     /// Event subscriptions
     _subscriptions: SmallVec<[Subscription; 6]>,
@@ -75,19 +80,11 @@ impl Workspace {
         let device = DeviceRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
 
+        let sidebar = cx.new(|cx| Sidebar::new(window, cx));
         let dock = cx.new(|cx| DockArea::new(window, cx));
         let image_cache = CoopImageCache::new(IMAGE_CACHE_SIZE, cx);
 
         let mut subscriptions = smallvec![];
-
-        subscriptions.push(
-            // Observe sign in state changes
-            cx.observe_in(&nostr, window, move |this, nostr, window, cx| {
-                if nostr.read(cx).current_user().is_some() {
-                    this.set_center_layout(window, cx);
-                }
-            }),
-        );
 
         subscriptions.push(
             // Observe system appearance and update theme
@@ -101,11 +98,7 @@ impl Workspace {
             cx.subscribe_in(&nostr, window, move |this, _state, event, window, cx| {
                 match event {
                     StateEvent::SignerChanged => {
-                        this.set_center_layout(window, cx);
-
-                        cx.defer_in(window, |_this, window, cx| {
-                            window.close_all_modals(cx);
-                        });
+                        window.close_all_modals(cx);
                     }
                     StateEvent::NoSigner => {
                         this.import_identity(window, cx);
@@ -226,25 +219,22 @@ impl Workspace {
             }),
         );
 
-        subscriptions.push(
-            // Observe the chat registry
-            cx.observe(&chat, move |this, chat, cx| {
-                let ids = this.panel_ids(cx);
-
-                chat.update(cx, |this, cx| {
-                    this.refresh_rooms(&ids, cx);
-                });
-            }),
-        );
-
-        // Set the layout at the end of cycle
         cx.defer_in(window, |this, window, cx| {
-            this.set_layout(window, cx);
+            let dock = this.dock.downgrade();
+            let greeter = Arc::new(greeter::init(window, cx));
+            let tabs = DockItem::tabs(vec![greeter], None, &dock, window, cx);
+            let center = DockItem::split(Axis::Vertical, vec![tabs], &dock, window, cx);
+
+            this.dock.update(cx, |this, cx| {
+                this.set_center(center, window, cx);
+            });
         });
 
         Self {
+            sidebar,
             dock,
             image_cache,
+            tasks: vec![],
             _subscriptions: subscriptions,
         }
     }
@@ -263,40 +253,6 @@ impl Workspace {
                 });
             });
         }
-    }
-
-    /// Get all panel ids
-    fn panel_ids(&self, cx: &App) -> Vec<u64> {
-        self.dock
-            .read(cx)
-            .items
-            .panel_ids(cx)
-            .into_iter()
-            .filter_map(|panel| panel.parse::<u64>().ok())
-            .collect()
-    }
-
-    /// Set the dock layout
-    fn set_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let left = DockItem::panel(Arc::new(sidebar::init(window, cx)));
-
-        // Update the dock layout with sidebar on the left
-        self.dock.update(cx, |this, cx| {
-            this.set_left_dock(left, Some(SIDEBAR_WIDTH), true, window, cx);
-        });
-    }
-
-    /// Set the center dock layout
-    fn set_center_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let dock = self.dock.downgrade();
-        let greeter = Arc::new(greeter::init(window, cx));
-        let tabs = DockItem::tabs(vec![greeter], None, &dock, window, cx);
-        let center = DockItem::split(Axis::Vertical, vec![tabs], &dock, window, cx);
-
-        // Update the layout with center dock
-        self.dock.update(cx, |this, cx| {
-            this.set_center(center, window, cx);
-        });
     }
 
     /// Handle command events
@@ -320,7 +276,7 @@ impl Workspace {
                     self.dock.update(cx, |this, cx| {
                         this.add_panel(
                             Arc::new(profile::init(public_key, window, cx)),
-                            DockPlacement::Right,
+                            DockPlacement::Left,
                             window,
                             cx,
                         );
@@ -331,7 +287,7 @@ impl Workspace {
                 self.dock.update(cx, |this, cx| {
                     this.add_panel(
                         Arc::new(contact_list::init(window, cx)),
-                        DockPlacement::Right,
+                        DockPlacement::Left,
                         window,
                         cx,
                     );
@@ -341,7 +297,7 @@ impl Workspace {
                 self.dock.update(cx, |this, cx| {
                     this.add_panel(
                         Arc::new(backup::init(window, cx)),
-                        DockPlacement::Right,
+                        DockPlacement::Left,
                         window,
                         cx,
                     );
@@ -351,7 +307,7 @@ impl Workspace {
                 self.dock.update(cx, |this, cx| {
                     this.add_panel(
                         Arc::new(messaging_relays::init(window, cx)),
-                        DockPlacement::Right,
+                        DockPlacement::Left,
                         window,
                         cx,
                     );
@@ -361,7 +317,7 @@ impl Workspace {
                 let chat = ChatRegistry::global(cx);
                 // Trigger a refresh of the chat registry
                 chat.update(cx, |this, cx| {
-                    this.refresh(cx);
+                    this.reload(cx);
                 });
             }
             Command::ShowRelayList => {
@@ -390,7 +346,7 @@ impl Workspace {
                 let device = DeviceRegistry::global(cx).downgrade();
                 let save_dialog = cx.prompt_for_new_path(download_dir(), Some("encryption.txt"));
 
-                cx.spawn_in(window, async move |_this, cx| {
+                self.tasks.push(cx.spawn_in(window, async move |_this, cx| {
                     // Get the output path from the save dialog
                     let output_path = match save_dialog.await {
                         Ok(Ok(Some(path))) => path,
@@ -417,9 +373,8 @@ impl Workspace {
                         cx.open_with_system(output_path.as_path());
                     })?;
 
-                    Ok::<_, anyhow::Error>(())
-                })
-                .detach();
+                    Ok(())
+                }));
             }
             Command::ImportEncryption => {
                 self.import_encryption(window, cx);
@@ -479,10 +434,11 @@ impl Workspace {
         let import = cx.new(|cx| ImportIdentity::new(window, cx));
 
         window.open_modal(cx, move |this, _window, _cx| {
-            this.width(px(420.))
+            this.width(px(450.))
                 .show_close(false)
                 .overlay_closable(false)
-                .title("Import Identity")
+                .keyboard(false)
+                .title("Onboarding")
                 .child(import.clone())
         });
     }
@@ -642,9 +598,7 @@ impl Workspace {
 
     fn titlebar_right(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let chat = ChatRegistry::global(cx);
-        let trash_messages = chat.read(cx).count_trash_messages(cx);
-
-        let is_nip4e_enabled = AppSettings::get_nip4e(cx);
+        let nip4e_enabled = AppSettings::get_nip4e(cx);
         let nostr = NostrRegistry::global(cx);
 
         let Some(public_key) = nostr.read(cx).current_user() else {
@@ -658,39 +612,7 @@ impl Workspace {
         h_flex()
             .when(!cx.theme().platform.is_mac(), |this| this.pr_2())
             .gap_2()
-            .when(trash_messages > 0, |this| {
-                this.child(
-                    h_flex()
-                        .id("trash-messages")
-                        .h_6()
-                        .px_1()
-                        .gap_1()
-                        .rounded(cx.theme().radius)
-                        .hover(|this| this.bg(cx.theme().ghost_element_hover))
-                        .child(
-                            Icon::new(IconName::Warning)
-                                .small()
-                                .text_color(cx.theme().text_danger),
-                        )
-                        .child(
-                            div()
-                                .text_xs()
-                                .line_height(relative(1.))
-                                .child(format!("{trash_messages}")),
-                        )
-                        .on_click(move |_ev, window, cx| {
-                            cx.stop_propagation();
-                            // Add the trash panel to the center workspace
-                            Self::add_panel(
-                                trash::init(window, cx),
-                                DockPlacement::Center,
-                                window,
-                                cx,
-                            );
-                        }),
-                )
-            })
-            .when(is_nip4e_enabled, |this| {
+            .when(nip4e_enabled, |this| {
                 this.child(
                     Button::new("key")
                         .icon(IconName::UserKey)
@@ -782,17 +704,7 @@ impl Workspace {
                                     .w_full()
                                     .text_sm()
                                     .justify_between()
-                                    .child(
-                                        h_flex()
-                                            .gap_2()
-                                            .child(
-                                                div()
-                                                    .size_1p5()
-                                                    .rounded_full()
-                                                    .bg(cx.theme().icon_accent),
-                                            )
-                                            .child(url.clone()),
-                                    )
+                                    .child(url.clone())
                                     .child(
                                         div()
                                             .text_xs()
@@ -805,19 +717,20 @@ impl Workspace {
                         // Footer
                         menu.separator()
                             .menu_with_icon(
-                                "Reload",
-                                IconName::Refresh,
-                                Box::new(Command::RefreshMessagingRelays),
-                            )
-                            .menu_with_icon(
                                 "Manage gossip relays",
                                 IconName::Relay,
                                 Box::new(Command::ShowRelayList),
                             )
                             .menu_with_icon(
                                 "Manage messaging relays",
-                                IconName::Settings,
+                                IconName::Relay,
                                 Box::new(Command::ShowMessaging),
+                            )
+                            .separator()
+                            .menu_with_icon(
+                                "Reload",
+                                IconName::Refresh,
+                                Box::new(Command::RefreshMessagingRelays),
                             )
                     }),
             )
@@ -830,7 +743,7 @@ impl Render for Workspace {
         let notification_layer = Root::render_notification_layer(window, cx);
 
         div()
-            .id(SharedString::from("workspace"))
+            .id("workspace")
             .on_action(cx.listener(Self::on_command))
             .relative()
             .size_full()
@@ -847,8 +760,19 @@ impl Render for Workspace {
                                     .child(self.titlebar_left(cx))
                                     .child(self.titlebar_right(cx)),
                             )
-                            // Dock
-                            .child(self.dock.clone()),
+                            // Main
+                            .child(
+                                h_flex()
+                                    .size_full()
+                                    .child(
+                                        div()
+                                            .flex_shrink_0()
+                                            .h_full()
+                                            .w(SIDEBAR_WIDTH)
+                                            .child(self.sidebar.clone()),
+                                    )
+                                    .child(self.dock.clone()),
+                            ),
                     ),
             )
             // Notifications

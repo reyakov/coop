@@ -17,6 +17,7 @@ person = { path = "../person" }
 
 gpui.workspace = true
 nostr-sdk.workspace = true
+instant.workspace = true
 nostr-connect.workspace = true
 
 anyhow.workspace = true

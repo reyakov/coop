@@ -3,9 +3,8 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, Bounds, Corners, Edges, Element, ElementId, ElementInputHandler, Entity,
-    GlobalElementId, Half, HighlightStyle, Hitbox, HitboxBehavior, Hsla, InteractiveElement,
-    IntoElement, LayoutId, MouseButton, MouseMoveEvent, MouseUpEvent, Path, Pixels, Point,
-    Position, ShapedLine, SharedString, Size, Style, Styled as _, TextAlign, TextRun, TextStyle,
+    GlobalElementId, Half, Hsla, IntoElement, LayoutId, MouseButton, MouseMoveEvent, MouseUpEvent,
+    Path, Pixels, Point, Position, SharedString, Size, Style, TextAlign, TextRun, TextStyle,
     UnderlineStyle, Window, fill, point, px, relative, size,
 };
 use ropey::Rope;
@@ -14,19 +13,14 @@ use theme::ActiveTheme;
 
 use super::mode::InputMode;
 use super::{InputState, LastLayout, WhitespaceIndicators};
-use crate::button::{Button, ButtonVariants as _};
+use crate::Root;
 use crate::input::RopeExt as _;
 use crate::input::blink_cursor::CURSOR_WIDTH;
 use crate::input::display_map::LineLayout;
 use crate::scroll::Scrollbar;
-use crate::{IconName, Root, Selectable, Sizable as _};
 
 const BOTTOM_MARGIN_ROWS: usize = 3;
 pub(super) const RIGHT_MARGIN: Pixels = px(10.);
-pub(super) const LINE_NUMBER_RIGHT_MARGIN: Pixels = px(10.);
-const FOLD_ICON_WIDTH: Pixels = px(14.);
-const FOLD_ICON_HITBOX_WIDTH: Pixels = px(18.);
-const MAX_HIGHLIGHT_LINE_LENGTH: usize = 10_000;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct EditorScrollbarLayout {
@@ -72,7 +66,7 @@ impl EditorScrollbarLayout {
         let left = if line_number_width == px(0.) {
             px(0.)
         } else {
-            paddings.left + line_number_width - LINE_NUMBER_RIGHT_MARGIN
+            paddings.left + line_number_width
         };
 
         Self {
@@ -216,14 +210,6 @@ fn masked_display_offset(text: &Rope, original_offset: usize) -> usize {
     text.offset_to_char_index(original_offset) * MASK_CHAR.len_utf8()
 }
 
-/// Layout information for fold icons.
-struct FoldIconLayout {
-    /// Hitbox for the line number area (used for hover detection)
-    line_number_hitbox: Hitbox,
-    /// List of (display_row, is_folded, icon_element) pairs for each fold candidate
-    icons: Vec<(usize, bool, gpui::AnyElement)>,
-}
-
 pub(super) struct TextElement {
     pub(crate) state: Entity<InputState>,
     placeholder: SharedString,
@@ -285,7 +271,7 @@ impl TextElement {
         scroll_size: Size<Pixels>,
         _: &mut Window,
         cx: &mut App,
-    ) -> (Option<Bounds<Pixels>>, Point<Pixels>, Option<usize>) {
+    ) -> (Option<Bounds<Pixels>>, Point<Pixels>) {
         let state = self.state.read(cx);
 
         let line_height = last_layout.line_height;
@@ -307,7 +293,6 @@ impl TextElement {
             cursor = masked_display_offset(&state.text, cursor);
         }
 
-        let mut current_row = None;
         let mut scroll_offset = state.scroll_handle.offset();
         let mut cursor_bounds = None;
 
@@ -330,7 +315,6 @@ impl TextElement {
         let visible_buffer_lines = &last_layout.visible_buffer_lines;
         let mut vi = 0; // index into visible_buffer_lines / lines
         for (ix, wrap_line) in buffer_lines.iter().enumerate() {
-            let row = ix;
             let line_origin = point(px(0.), offset_y);
 
             // break loop if all cursor positions are found
@@ -353,7 +337,6 @@ impl TextElement {
                     if let Some(pos) =
                         line.position_for_index(offset, last_layout, state.cursor_line_end_affinity)
                     {
-                        current_row = Some(row);
                         cursor_pos = Some(line_origin + pos);
                     }
                 }
@@ -377,7 +360,6 @@ impl TextElement {
                 // Not visible (before visible range or hidden/folded).
                 // Just increase the offset_y and prev_lines_offset for scroll tracking.
                 if prev_lines_offset >= cursor && cursor_pos.is_none() {
-                    current_row = Some(row);
                     cursor_pos = Some(line_origin);
                 }
                 if prev_lines_offset >= selected_range.start && cursor_start.is_none() {
@@ -494,7 +476,7 @@ impl TextElement {
 
         bounds.origin += scroll_offset;
 
-        (cursor_bounds, scroll_offset, current_row)
+        (cursor_bounds, scroll_offset)
     }
 
     /// Layout the match range to a Path.
@@ -642,41 +624,6 @@ impl TextElement {
         builder.build().ok()
     }
 
-    fn layout_search_matches(
-        &self,
-        _last_layout: &LastLayout,
-        _bounds: &Bounds<Pixels>,
-        _cx: &mut App,
-    ) -> Vec<(Path<Pixels>, bool)> {
-        vec![]
-    }
-
-    fn layout_hover_highlight(
-        &self,
-        _last_layout: &LastLayout,
-        _bounds: &Bounds<Pixels>,
-        _cx: &mut App,
-    ) -> Option<Path<Pixels>> {
-        None
-    }
-
-    fn layout_document_colors(
-        &self,
-        document_colors: &[(Range<usize>, Hsla)],
-        last_layout: &LastLayout,
-        bounds: &Bounds<Pixels>,
-        _cx: &mut App,
-    ) -> Vec<(Path<Pixels>, Hsla)> {
-        let mut paths = vec![];
-        for (range, color) in document_colors.iter() {
-            if let Some(path) = Self::layout_match_range(range.clone(), last_layout, bounds) {
-                paths.push((path, *color));
-            }
-        }
-
-        paths
-    }
-
     fn layout_selections(
         &self,
         last_layout: &LastLayout,
@@ -784,267 +731,20 @@ impl TextElement {
         (visible_range, visible_buffer_lines, visible_top)
     }
 
-    /// Return (line_number_width, line_number_len)
-    fn layout_line_numbers(
-        state: &InputState,
-        text: &Rope,
-        font_size: Pixels,
-        style: &TextStyle,
-        window: &mut Window,
-    ) -> (Pixels, usize) {
-        let total_lines = text.lines_len();
-        let line_number_len = match total_lines {
-            0..=9999 => 5,
-            10000..=99999 => 6,
-            100000..=999999 => 7,
-            _ => 8,
-        };
-
-        let mut line_number_width = if state.mode.line_number() {
-            let empty_line_number = window.text_system().shape_line(
-                "+".repeat(line_number_len).into(),
-                font_size,
-                &[TextRun {
-                    len: line_number_len,
-                    font: style.font(),
-                    color: gpui::black(),
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                }],
-                None,
-            );
-
-            empty_line_number.width + LINE_NUMBER_RIGHT_MARGIN
-        } else if state.mode.is_code_editor() && state.mode.is_multi_line() {
-            LINE_NUMBER_RIGHT_MARGIN
-        } else {
-            px(0.)
-        };
-
-        if state.mode.is_folding() {
-            // Add extra space for fold icons
-            line_number_width += FOLD_ICON_HITBOX_WIDTH
-        }
-
-        (line_number_width, line_number_len)
-    }
-
     /// Layout shaped lines for whitespace indicators (space and tab).
     ///
     /// Returns `WhitespaceIndicators` with shaped lines for space and tab characters.
     fn layout_whitespace_indicators(
-        state: &InputState,
+        _state: &InputState,
         text_size: Pixels,
         style: &TextStyle,
         window: &mut Window,
         cx: &App,
     ) -> Option<WhitespaceIndicators> {
-        if !state.show_whitespaces {
-            return None;
-        }
-
-        let invisible_color = cx.theme().text_muted;
-        let space_font_size = text_size.half();
-        let tab_font_size = text_size;
-
-        let space_text = SharedString::new_static("•");
-        let space = window.text_system().shape_line(
-            space_text.clone(),
-            space_font_size,
-            &[TextRun {
-                len: space_text.len(),
-                font: style.font(),
-                color: invisible_color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            }],
-            None,
-        );
-
-        let tab_text = SharedString::new_static("→");
-        let tab = window.text_system().shape_line(
-            tab_text.clone(),
-            tab_font_size,
-            &[TextRun {
-                len: tab_text.len(),
-                font: style.font(),
-                color: invisible_color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            }],
-            None,
-        );
-
-        Some(WhitespaceIndicators { space, tab })
-    }
-
-    /// Compute inline completion ghost lines for rendering.
-    ///
-    /// Returns (first_line, ghost_lines) where:
-    /// - first_line: Shaped text for the first line (goes after cursor on same line)
-    /// - ghost_lines: Shaped lines for subsequent lines (shift content down)
-    fn layout_inline_completion(
-        _state: &InputState,
-        _visible_range: &Range<usize>,
-        _font_size: Pixels,
-        _window: &mut Window,
-        _cx: &App,
-    ) -> (Option<ShapedLine>, Vec<ShapedLine>) {
-        (None, vec![])
-    }
-
-    /// Return (line_number_width, line_number_len)
-    /// Layout fold icon hitboxes during prepaint phase.
-    ///
-    /// This creates hitboxes for the fold icon area, positioned to the right of line numbers.
-    /// Icons are created and prepainted here to avoid panics.
-    fn layout_fold_icons(
-        &self,
-        origin_x: Pixels,
-        bounds: &Bounds<Pixels>,
-        last_layout: &LastLayout,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> FoldIconLayout {
-        // First pass: collect fold information from state
-        struct FoldInfo {
-            buffer_line: usize,
-            is_folded: bool,
-            display_row: usize,
-            offset_y: Pixels,
-        }
-
-        let line_number_hitbox = window.insert_hitbox(
-            Bounds::new(
-                point(origin_x, bounds.origin.y + last_layout.visible_top),
-                size(last_layout.line_number_width, bounds.size.height),
-            ),
-            HitboxBehavior::Normal,
-        );
-
-        let mut icon_layout = FoldIconLayout {
-            line_number_hitbox,
-            icons: vec![],
-        };
-
-        let fold_infos: Vec<FoldInfo> = {
-            let state = self.state.read(cx);
-            if !state.mode.is_folding() {
-                return icon_layout;
-            }
-
-            let mut infos = Vec::with_capacity(last_layout.visible_buffer_lines.len());
-            let mut offset_y = last_layout.visible_top;
-
-            for (line, &buffer_line) in last_layout
-                .lines
-                .iter()
-                .zip(last_layout.visible_buffer_lines.iter())
-            {
-                if state.display_map.is_fold_candidate(buffer_line) {
-                    let is_folded = state.display_map.is_folded_at(buffer_line);
-                    infos.push(FoldInfo {
-                        buffer_line,
-                        is_folded,
-                        display_row: buffer_line,
-                        offset_y,
-                    });
-                }
-
-                offset_y += line.wrapped_lines.len() * last_layout.line_height;
-            }
-
-            infos
-        }; // state is dropped here
-
-        // Second pass: create and prepaint icons
-        let line_height = last_layout.line_height;
-        let line_number_width =
-            last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN - FOLD_ICON_HITBOX_WIDTH;
-        let icon_relative_pos = point(
-            (FOLD_ICON_HITBOX_WIDTH - FOLD_ICON_WIDTH).half(),
-            (line_height - FOLD_ICON_WIDTH).half(),
-        );
-
-        for (ix, info) in fold_infos.iter().enumerate() {
-            // Position fold icon to the right of line numbers.
-            // Use origin_x (unscrolled) so icons stay fixed in the gutter during horizontal scroll.
-            let fold_icon_bounds = Bounds::new(
-                point(
-                    origin_x + icon_relative_pos.x + line_number_width,
-                    bounds.origin.y + icon_relative_pos.y + info.offset_y,
-                ),
-                size(FOLD_ICON_HITBOX_WIDTH, line_height),
-            );
-
-            // Create and prepaint icon
-            let mut icon = Button::new(("fold", ix))
-                .ghost()
-                .icon(if info.is_folded {
-                    IconName::CaretRight
-                } else {
-                    IconName::CaretDown
-                })
-                .xsmall()
-                .rounded_xs()
-                .size(FOLD_ICON_WIDTH)
-                .selected(info.is_folded)
-                .on_mouse_down(MouseButton::Left, {
-                    let state = self.state.clone();
-                    let buffer_line = info.buffer_line;
-                    move |_, _: &mut Window, cx: &mut App| {
-                        cx.stop_propagation();
-
-                        state.update(cx, |state, cx| {
-                            state.display_map.toggle_fold(buffer_line);
-                            cx.notify();
-                        });
-                    }
-                })
-                .into_any_element();
-
-            icon.prepaint_as_root(
-                fold_icon_bounds.origin,
-                fold_icon_bounds.size.into(),
-                window,
-                cx,
-            );
-
-            icon_layout
-                .icons
-                .push((info.display_row, info.is_folded, icon));
-        }
-
-        icon_layout
-    }
-
-    /// Paint fold icons using prepaint hitboxes.
-    ///
-    /// This handles:
-    /// - Rendering fold icons (chevron-right for folded, chevron-down for expanded)
-    /// - Mouse click handling to toggle fold state
-    /// - Cursor style changes on hover
-    /// - Only show icon on hover or for current line
-    fn paint_fold_icons(
-        &mut self,
-        fold_icon_layout: &mut FoldIconLayout,
-        current_row: Option<usize>,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let is_hovered = fold_icon_layout.line_number_hitbox.is_hovered(window);
-        for (display_row, is_folded, icon) in fold_icon_layout.icons.iter_mut() {
-            let is_current_line = current_row == Some(*display_row);
-
-            if !is_hovered && !is_current_line && !*is_folded {
-                continue;
-            }
-
-            icon.paint(window, cx);
-        }
+        // Whitespace indicators are not currently enabled.
+        // When re-enabled, check `state.show_whitespaces` to conditionally enable.
+        let _ = (text_size, style, window, cx);
+        None
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1098,10 +798,6 @@ impl TextElement {
         }
 
         let mut lines = Vec::with_capacity(last_layout.visible_buffer_lines.len());
-        // run_offset tracks position in the runs vec coordinate space (only visible line bytes).
-        // This is separate from the visible_text offset because runs from highlight_lines
-        // only cover visible (non-folded) lines.
-        let mut run_offset = 0;
 
         for (vi, &buffer_line) in last_layout.visible_buffer_lines.iter().enumerate() {
             let line_text: String = display_text.slice_line(buffer_line).into();
@@ -1112,9 +808,10 @@ impl TextElement {
             debug_assert_eq!(line_item.len(), line_text.len());
 
             let mut wrapped_lines = SmallVec::with_capacity(1);
+            let line_offset = display_text.line_start_offset(buffer_line);
 
             for range in &line_item.wrapped_lines {
-                let line_runs = runs_for_range(runs, run_offset, range);
+                let line_runs = runs_for_range(runs, line_offset, range);
                 let line_runs = if bg_segments.is_empty() {
                     line_runs
                 } else {
@@ -1137,107 +834,21 @@ impl TextElement {
                 .lines(wrapped_lines)
                 .with_whitespaces(whitespace_indicators.clone());
             lines.push(line_layout);
-
-            // +1 for the `\n`
-            run_offset += line_text.len() + 1;
         }
 
         lines
-    }
-
-    /// First usize is the offset of skipped.
-    fn highlight_lines(
-        &mut self,
-        visible_buffer_lines: &[usize],
-        _visible_top: Pixels,
-        _visible_byte_range: Range<usize>,
-        cx: &mut App,
-    ) -> Option<Vec<(Range<usize>, HighlightStyle)>> {
-        let state = self.state.read(cx);
-        let text = &state.text;
-        let is_multi_line = state.mode.is_multi_line();
-
-        let mut styles = Vec::with_capacity(visible_buffer_lines.len());
-
-        // Helper to flush a contiguous range of lines. These ranges are disjoint,
-        // so appending avoids repeatedly cloning and recombining prior styles.
-        let flush_range = |start_line: usize, end_line: usize, _skip: bool, styles: &mut Vec<_>| {
-            let byte_start = text.line_start_offset(start_line);
-            let byte_end = if is_multi_line {
-                // +1 for `\n`
-                text.line_start_offset(end_line + 1)
-            } else {
-                text.line_end_offset(end_line)
-            };
-            let range_styles = vec![(byte_start..byte_end, HighlightStyle::default())];
-            styles.extend(range_styles);
-        };
-
-        // Group contiguous visible lines into ranges and call styles() once per range
-        let mut visible_iter = visible_buffer_lines.iter().peekable();
-        let mut range_start: Option<usize> = None;
-
-        while let Some(&line) = visible_iter.next() {
-            // Check if this line is too long for highlighting
-            let line_len = text.slice_line(line).len();
-            if line_len > MAX_HIGHLIGHT_LINE_LENGTH {
-                // Flush any accumulated range first
-                if let Some(start) = range_start.take() {
-                    flush_range(start, line - 1, false, &mut styles);
-                }
-
-                flush_range(line, line, true, &mut styles);
-                continue;
-            }
-
-            range_start.get_or_insert(line);
-
-            // Check if next line is contiguous, if so keep accumulating
-            if visible_iter
-                .peek()
-                .map(|&&next| next == line + 1)
-                .unwrap_or(false)
-            {
-                continue;
-            }
-
-            // Flush the contiguous range
-            let start_line = range_start.take().unwrap();
-            flush_range(start_line, line, false, &mut styles);
-        }
-
-        Some(styles)
     }
 }
 
 pub(super) struct PrepaintState {
     /// The lines of entire lines.
     last_layout: LastLayout,
-    /// The lines only contains the visible lines in the viewport, based on `visible_range`.
-    ///
-    /// The child is the soft lines.
-    line_numbers: Option<Vec<SmallVec<[ShapedLine; 1]>>>,
     /// Size of the scrollable area by entire lines.
     scroll_size: Size<Pixels>,
     cursor_bounds: Option<Bounds<Pixels>>,
     cursor_scroll_offset: Point<Pixels>,
-    /// row index (zero based), no wrap, same line as the cursor.
-    current_row: Option<usize>,
     selection_path: Option<Path<Pixels>>,
-    hover_highlight_path: Option<Path<Pixels>>,
-    search_match_paths: Vec<(Path<Pixels>, bool)>,
-    document_color_paths: Vec<(Path<Pixels>, Hsla)>,
-    hover_definition_hitbox: Option<Hitbox>,
-    indent_guides_path: Option<Path<Pixels>>,
     bounds: Bounds<Pixels>,
-    /// Fold icon layout data
-    fold_icon_layout: FoldIconLayout,
-    // Inline completion rendering data
-    /// Shaped ghost lines to paint after cursor row (completion lines 2+)
-    ghost_lines: Vec<ShapedLine>,
-    /// First line of inline completion (painted after cursor on same line)
-    ghost_first_line: Option<ShapedLine>,
-    ghost_lines_height: Pixels,
 }
 
 impl PrepaintState {
@@ -1356,13 +967,6 @@ impl Element for TextElement {
             .text
             .line_end_offset(visible_range.end.saturating_sub(1));
 
-        let highlight_styles = self.highlight_lines(
-            &visible_buffer_lines,
-            visible_top,
-            visible_start_offset..visible_end_offset,
-            cx,
-        );
-
         let state = self.state.read(cx);
         let multi_line = state.mode.is_multi_line();
         let text = state.text.clone();
@@ -1382,9 +986,8 @@ impl Element for TextElement {
             (&text, fg)
         };
 
-        // Calculate the width of the line numbers
-        let (line_number_width, line_number_len) =
-            Self::layout_line_numbers(state, &text, text_size, &text_style, window);
+        // Line numbers are not used (code editor mode removed)
+        let line_number_width = px(0.);
 
         let mut bounds = bounds;
         let wrap_width = if multi_line && state.soft_wrap {
@@ -1452,28 +1055,7 @@ impl Element for TextElement {
         };
 
         let runs = if !is_empty {
-            if let Some(highlight_styles) = highlight_styles {
-                let mut runs = Vec::with_capacity(highlight_styles.len());
-
-                runs.extend(highlight_styles.iter().map(|(range, style)| {
-                    let mut run = text_style.clone().highlight(*style).to_run(range.len());
-
-                    if let Some(ime_marked_range) = &state.ime_marked_range
-                        && range.start >= ime_marked_range.start
-                        && range.end <= ime_marked_range.end
-                    {
-                        run.color = marked_run.color;
-                        run.strikethrough = marked_run.strikethrough;
-                        run.underline = marked_run.underline;
-                    }
-
-                    run
-                }));
-
-                runs.into_iter().filter(|run| run.len > 0).collect()
-            } else {
-                vec![run]
-            }
+            vec![run]
         } else if let Some(ime_marked_range) = &state.ime_marked_range {
             // IME marked text
             vec![
@@ -1498,8 +1080,6 @@ impl Element for TextElement {
             vec![run]
         };
 
-        let document_colors = [];
-
         // Create shaped lines for whitespace indicators before layout
         let whitespace_indicators =
             Self::layout_whitespace_indicators(state, text_size, &text_style, window, cx);
@@ -1510,7 +1090,7 @@ impl Element for TextElement {
             &last_layout,
             text_size,
             &runs,
-            &document_colors,
+            &[],
             whitespace_indicators,
             window,
         );
@@ -1540,26 +1120,8 @@ impl Element for TextElement {
         }
         last_layout.lines = Rc::new(lines);
 
-        let (ghost_first_line, ghost_lines) = Self::layout_inline_completion(
-            state,
-            &last_layout.visible_range,
-            text_size,
-            window,
-            cx,
-        );
-        let ghost_line_count = ghost_lines.len();
-        let ghost_lines_height = ghost_line_count as f32 * line_height;
-
         let total_wrapped_lines = state.display_map.wrap_row_count();
-        let empty_bottom_height = if state.mode.is_code_editor() {
-            bounds
-                .size
-                .height
-                .half()
-                .max(BOTTOM_MARGIN_ROWS * line_height)
-        } else {
-            px(0.)
-        };
+        let empty_bottom_height = px(0.);
 
         let mut scroll_size = size(
             if longest_line_width + line_number_width + RIGHT_MARGIN > bounds.size.width {
@@ -1567,7 +1129,7 @@ impl Element for TextElement {
             } else {
                 longest_line_width
             },
-            (total_wrapped_lines as f32 * line_height + empty_bottom_height + ghost_lines_height)
+            (total_wrapped_lines as f32 * line_height + empty_bottom_height)
                 .max(bounds.size.height),
         );
 
@@ -1608,75 +1170,16 @@ impl Element for TextElement {
 
         // Calculate the scroll offset to keep the cursor in view
 
-        // Save the unscrolled x before layout_cursor modifies bounds.origin with scroll_offset.
-        // Fold icons and their hitboxes must use this value so they stay fixed in the gutter
-        // regardless of horizontal scroll position.
+        // Save the bounds before layout_cursor modifies bounds.origin with scroll_offset.
         let input_bounds = bounds;
-        let original_x = bounds.origin.x;
 
-        let (cursor_bounds, cursor_scroll_offset, current_row) =
+        let (cursor_bounds, cursor_scroll_offset) =
             self.layout_cursor(&last_layout, &mut bounds, scroll_size, window, cx);
         last_layout.cursor_bounds = cursor_bounds;
 
-        let search_match_paths = self.layout_search_matches(&last_layout, &bounds, cx);
         let selection_path = self.layout_selections(&last_layout, &mut bounds, window, cx);
-        let hover_highlight_path = self.layout_hover_highlight(&last_layout, &bounds, cx);
-        let document_color_paths =
-            self.layout_document_colors(&document_colors, &last_layout, &bounds, cx);
 
         let state = self.state.read(cx);
-        let line_numbers = if state.mode.line_number() {
-            let mut line_numbers = Vec::with_capacity(last_layout.visible_buffer_lines.len());
-            let other_line_runs = vec![TextRun {
-                len: line_number_len,
-                font: style.font(),
-                color: cx.theme().text_muted,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            }];
-            let current_line_runs = vec![TextRun {
-                len: line_number_len,
-                font: style.font(),
-                color: cx.theme().text,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            }];
-
-            // build line numbers
-            for (line, &buffer_line) in last_layout
-                .lines
-                .iter()
-                .zip(last_layout.visible_buffer_lines.iter())
-            {
-                let line_no: SharedString =
-                    format!("{:>width$}", buffer_line + 1, width = line_number_len).into();
-
-                let runs = if current_row == Some(buffer_line) {
-                    &current_line_runs
-                } else {
-                    &other_line_runs
-                };
-
-                let mut sub_lines: SmallVec<[ShapedLine; 1]> = SmallVec::new();
-                sub_lines.push(
-                    window
-                        .text_system()
-                        .shape_line(line_no, text_size, runs, None),
-                );
-                for _ in 0..line.wrapped_lines.len().saturating_sub(1) {
-                    sub_lines.push(ShapedLine::default());
-                }
-                line_numbers.push(sub_lines);
-            }
-            Some(line_numbers)
-        } else {
-            None
-        };
-
-        let indent_guides_path =
-            self.layout_indent_guides(state, &bounds, &last_layout, &text_style, window);
 
         state
             .editor_scrollbar_snapshot
@@ -1688,27 +1191,13 @@ impl Element for TextElement {
                 state,
             )));
 
-        let fold_icon_layout =
-            self.layout_fold_icons(original_x, &bounds, &last_layout, window, cx);
-
         PrepaintState {
             bounds,
             last_layout,
             scroll_size,
-            line_numbers,
             cursor_bounds,
             cursor_scroll_offset,
-            current_row,
             selection_path,
-            search_match_paths,
-            hover_highlight_path,
-            hover_definition_hitbox: None,
-            document_color_paths,
-            indent_guides_path,
-            fold_icon_layout,
-            ghost_first_line,
-            ghost_lines,
-            ghost_lines_height,
         }
     }
 
@@ -1765,56 +1254,15 @@ impl Element for TextElement {
 
         let invisible_top_padding = prepaint.last_layout.visible_top;
 
-        // Paint active line
-        let mut offset_y = px(0.);
-        if let Some(line_numbers) = prepaint.line_numbers.as_ref() {
-            offset_y += invisible_top_padding;
-
-            // Each item is the normal lines.
-            for (lines, _) in line_numbers
-                .iter()
-                .zip(prepaint.last_layout.visible_buffer_lines.iter())
-            {
-                let height = line_height * lines.len() as f32;
-                offset_y += height;
-            }
-        }
-
-        // Paint indent guides
-        if let Some(path) = prepaint.indent_guides_path.take() {
-            window.paint_path(path, cx.theme().border.opacity(0.85));
-        }
-
         // Paint selections
-        if window.is_window_active() {
-            let secondary_selection = cx.theme().selection;
-            for (path, is_active) in prepaint.search_match_paths.iter() {
-                window.paint_path(path.clone(), secondary_selection);
-
-                if *is_active {
-                    window.paint_path(path.clone(), cx.theme().selection);
-                }
-            }
-
-            if let Some(path) = prepaint.selection_path.take() {
-                window.paint_path(path, cx.theme().selection);
-            }
-
-            // Paint hover highlight
-            if let Some(path) = prepaint.hover_highlight_path.take() {
-                window.paint_path(path, secondary_selection);
-            }
+        if window.is_window_active()
+            && let Some(path) = prepaint.selection_path.take()
+        {
+            window.paint_path(path, cx.theme().selection);
         }
 
-        // Paint document colors
-        for (path, color) in prepaint.document_color_paths.iter() {
-            window.paint_path(path.clone(), *color);
-        }
-
-        // Paint text with inline completion ghost line support
+        // Paint text
         let mut offset_y = invisible_top_padding;
-        let ghost_lines = &prepaint.ghost_lines;
-        let has_ghost_lines = !ghost_lines.is_empty();
 
         // Keep scrollbar offset always be positive，Start from the left position
         let scroll_offset = if text_align == TextAlign::Right {
@@ -1827,16 +1275,12 @@ impl Element for TextElement {
             px(0.)
         };
 
-        // Track the y-position of the cursor row for positioning the first line suffix
-        let mut cursor_row_y = None;
-
-        for (line, &buffer_line) in prepaint
+        for (line, _buffer_line) in prepaint
             .last_layout
             .lines
             .iter()
             .zip(prepaint.last_layout.visible_buffer_lines.iter())
         {
-            let row = buffer_line;
             let line_y = origin.y + offset_y;
             let p = point(
                 origin.x + prepaint.last_layout.line_number_width + (scroll_offset),
@@ -1853,40 +1297,6 @@ impl Element for TextElement {
                 cx,
             );
             offset_y += line.size(line_height).height;
-
-            if Some(row) == prepaint.current_row {
-                cursor_row_y = Some(line_y);
-            }
-
-            // After the cursor row, paint ghost lines (which shifts subsequent content down)
-            if has_ghost_lines && Some(row) == prepaint.current_row {
-                let ghost_x = origin.x + prepaint.last_layout.line_number_width;
-
-                for ghost_line in ghost_lines {
-                    let ghost_p = point(ghost_x, origin.y + offset_y);
-
-                    // Paint semi-transparent background for ghost line
-                    let ghost_bounds = Bounds::new(
-                        ghost_p,
-                        size(
-                            bounds.size.width - prepaint.last_layout.line_number_width,
-                            line_height,
-                        ),
-                    );
-                    window.paint_quad(fill(ghost_bounds, cx.theme().surface_background));
-
-                    // Paint ghost line text
-                    _ = ghost_line.paint(
-                        ghost_p,
-                        line_height,
-                        text_align,
-                        Some(prepaint.last_layout.content_width),
-                        window,
-                        cx,
-                    );
-                    offset_y += line_height;
-                }
-            }
         }
 
         // Paint blinking cursor
@@ -1896,49 +1306,6 @@ impl Element for TextElement {
         {
             window.paint_quad(fill(cursor_bounds, cx.theme().cursor));
         }
-
-        // Paint line numbers
-        let mut offset_y = px(0.);
-        if let Some(line_numbers) = prepaint.line_numbers.as_ref() {
-            offset_y += invisible_top_padding;
-
-            window.paint_quad(fill(
-                Bounds {
-                    origin: input_bounds.origin,
-                    size: size(
-                        prepaint.last_layout.line_number_width - LINE_NUMBER_RIGHT_MARGIN,
-                        input_bounds.size.height + prepaint.ghost_lines_height,
-                    ),
-                },
-                cx.theme().surface_background,
-            ));
-
-            // Each item is the normal lines.
-            for (lines, &buffer_line) in line_numbers
-                .iter()
-                .zip(prepaint.last_layout.visible_buffer_lines.iter())
-            {
-                let p = point(input_bounds.origin.x, origin.y + offset_y);
-
-                for line in lines {
-                    _ = line.paint(p, line_height, TextAlign::Left, None, window, cx);
-                    offset_y += line_height;
-                }
-
-                // Add ghost line height after cursor row for line numbers alignment
-                if !prepaint.ghost_lines.is_empty() && prepaint.current_row == Some(buffer_line) {
-                    offset_y += prepaint.ghost_lines_height;
-                }
-            }
-        }
-
-        // Paint fold icons (only visible on hover or for current line)
-        self.paint_fold_icons(
-            &mut prepaint.fold_icon_layout,
-            prepaint.current_row,
-            window,
-            cx,
-        );
 
         self.state.update(cx, |state, cx| {
             state.last_layout = Some(prepaint.last_layout.clone());
@@ -1952,27 +1319,6 @@ impl Element for TextElement {
 
             cx.notify();
         });
-
-        if let Some(hitbox) = prepaint.hover_definition_hitbox.as_ref() {
-            window.set_cursor_style(gpui::CursorStyle::PointingHand, hitbox);
-        }
-
-        // Paint inline completion first line suffix (after cursor on same line)
-        if focused
-            && let Some(first_line) = &prepaint.ghost_first_line
-            && let (Some(cursor_bounds), Some(cursor_row_y)) =
-                (prepaint.cursor_bounds_with_scroll(), cursor_row_y)
-        {
-            let first_line_x = cursor_bounds.origin.x + cursor_bounds.size.width;
-            let p = point(first_line_x, cursor_row_y);
-
-            // Paint background to cover any existing text
-            let bg_bounds = Bounds::new(p, size(first_line.width + px(4.), line_height));
-            window.paint_quad(fill(bg_bounds, cx.theme().surface_background));
-
-            // Paint first line completion text
-            _ = first_line.paint(p, line_height, text_align, None, window, cx);
-        }
 
         self.paint_mouse_listeners(window, cx);
     }

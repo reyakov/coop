@@ -1,12 +1,11 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::sync::Arc;
-#[cfg(target_arch = "wasm32")]
-use std::sync::RwLock;
+use std::collections::{BTreeMap, HashSet};
+use std::sync::{Arc, RwLock};
 
 pub use actions::*;
 use anyhow::{Context as AnyhowContext, Error};
 use chat::{ChatRegistry, Message, Room, RoomEvent, SendReport, SendStatus};
 use common::{TimestampExt, coop_cache};
+use futures::lock::Mutex;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
@@ -20,8 +19,6 @@ use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
 use settings::{AppSettings, SignerKind};
 use smallvec::{SmallVec, smallvec};
-#[cfg(not(target_arch = "wasm32"))]
-use smol::lock::RwLock;
 use state::{NostrRegistry, upload};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
@@ -56,14 +53,14 @@ pub struct ChatPanel {
     /// Message list state
     list_state: ListState,
 
-    /// All messages
-    messages: BTreeSet<Message>,
+    /// All messages (sorted by created_at)
+    messages: Vec<Message>,
 
     /// Mapping message ids to their rendered texts
     rendered_texts_by_id: BTreeMap<EventId, RenderedText>,
 
     /// Mapping message (rumor event) ids to their reports
-    reports_by_id: Entity<BTreeMap<EventId, Vec<SendReport>>>,
+    reports_by_id: Arc<RwLock<BTreeMap<EventId, Vec<SendReport>>>>,
 
     /// Chat input state
     input: Entity<InputState>,
@@ -75,7 +72,7 @@ pub struct ChatPanel {
     subject_bar: Entity<bool>,
 
     /// Sent message ids
-    sent_ids: Arc<RwLock<Vec<EventId>>>,
+    sent_ids: Arc<Mutex<Vec<EventId>>>,
 
     /// Replies to
     replies_to: Entity<HashSet<EventId>>,
@@ -98,10 +95,10 @@ impl ChatPanel {
         // Define attachments and replies_to entities
         let attachments = cx.new(|_| vec![]);
         let replies_to = cx.new(|_| HashSet::new());
-        let reports_by_id = cx.new(|_| BTreeMap::new());
+        let reports_by_id = Arc::new(RwLock::new(BTreeMap::new()));
 
         // Define list of messages
-        let messages = BTreeSet::default();
+        let messages = Vec::new();
         let list_state = ListState::new(messages.len(), ListAlignment::Bottom, px(1024.));
 
         // Get room id and name
@@ -172,7 +169,7 @@ impl ChatPanel {
             attachments,
             rendered_texts_by_id: BTreeMap::new(),
             reports_by_id,
-            sent_ids: Arc::new(RwLock::new(Vec::new())),
+            sent_ids: Arc::new(Mutex::new(Vec::new())),
             uploading: false,
             subscriptions,
             tasks: vec![],
@@ -192,7 +189,7 @@ impl ChatPanel {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let sent_ids = self.sent_ids.clone();
-        let reports = self.reports_by_id.downgrade();
+        let reports = self.reports_by_id.clone();
 
         let (tx, rx) = flume::bounded::<Arc<SendStatus>>(256);
 
@@ -207,7 +204,7 @@ impl ChatPanel {
                         message,
                     } = *message
                 {
-                    let sent_ids = sent_ids.read().await;
+                    let sent_ids = sent_ids.lock().await;
 
                     if sent_ids.contains(&event_id) {
                         let status = if status {
@@ -223,10 +220,11 @@ impl ChatPanel {
             Ok(())
         }));
 
-        self.tasks.push(cx.spawn(async move |_this, cx| {
+        self.tasks.push(cx.spawn(async move |this, cx| {
             while let Ok(status) = rx.recv_async().await {
-                reports.update(cx, |this, cx| {
-                    for reports in this.values_mut() {
+                {
+                    let mut map = reports.write().unwrap();
+                    for reports in map.values_mut() {
                         for report in reports.iter_mut() {
                             let Some(output) = report.output.as_mut() else {
                                 continue;
@@ -243,10 +241,10 @@ impl ChatPanel {
                                     }
                                 }
                             }
-                            cx.notify();
                         }
                     }
-                })?;
+                }
+                this.update(cx, |_, cx| cx.notify()).ok();
             }
             Ok(())
         }));
@@ -264,7 +262,11 @@ impl ChatPanel {
                             this.insert_message(message, false, cx);
                         }
                         RoomEvent::Reload => {
-                            this.get_messages(window, cx);
+                            // Defer to avoid re-entrant read on Room while
+                            // emit_refresh holds a write lock (via refresh_rooms).
+                            cx.defer_in(window, |this, window, cx| {
+                                this.get_messages(window, cx);
+                            });
                         }
                     };
                 },
@@ -345,69 +347,47 @@ impl ChatPanel {
             return;
         }
 
-        // Get room entity
         let room = self.room.clone();
-
-        // Get content and replies
         let replies: Vec<EventId> = self.replies_to.read(cx).iter().copied().collect();
         let content = value.to_string();
-
-        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            let room = room.upgrade().context("Room is not available")?;
-
-            this.update_in(cx, |this, window, cx| {
-                match room.read(cx).rumor(content, replies, cx) {
-                    Some(rumor) => {
-                        this.insert_message(&rumor, true, cx);
-                        this.send_and_wait(rumor, window, cx);
-                        this.clear(window, cx);
-                    }
-                    None => {
-                        window.push_notification("Failed to create message", cx);
-                    }
-                }
-            })?;
-
-            Ok(())
-        }));
-    }
-
-    /// Send message in the background and wait for the response
-    fn send_and_wait(&mut self, rumor: UnsignedEvent, window: &mut Window, cx: &mut Context<Self>) {
         let sent_ids = self.sent_ids.clone();
 
-        // This can't fail, because we already ensured that the ID is set
-        let id = rumor.id.unwrap();
+        // Upgrade room and create rumor + send task in a single read lock
+        let Some(room_entity) = room.upgrade() else {
+            return;
+        };
+        let (rumor, send_task) = match room_entity.read_with(cx, |room, cx| {
+            let rumor = room.rumor(content.clone(), replies, cx)?;
+            let send_task = room.send(rumor.clone(), cx)?;
+            Some((rumor, send_task))
+        }) {
+            Some(pair) => pair,
+            None => {
+                window.push_notification("Failed to create message", cx);
+                return;
+            }
+        };
 
-        // Add empty reports
+        let id = rumor.id.expect("rumor must have an id");
+
+        // Insert optimistic message and clear input
+        self.insert_message(&rumor, true, cx);
         self.insert_reports(id, vec![], cx);
+        self.clear(window, cx);
 
-        // Upgrade room reference
-        let Some(room) = self.room.upgrade() else {
-            return;
-        };
-
-        // Get the send message task
-        let Some(task) = room.read(cx).send(rumor, cx) else {
-            window.push_notification("Failed to send message", cx);
-            return;
-        };
-
+        // Spawn a single task to await the send and update reports
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            // Send and get reports
-            let outputs = task.await;
+            let outputs = send_task.await;
 
-            // Add sent IDs to the list
-            let mut sent_ids = sent_ids.write().await;
+            let mut sent_ids = sent_ids.lock().await;
             sent_ids.extend(outputs.iter().filter_map(|output| output.gift_wrap_id));
 
-            // Update the state
             this.update(cx, |this, cx| {
                 this.insert_reports(id, outputs, cx);
             })?;
 
             Ok(())
-        }))
+        }));
     }
 
     /// Clear the input field, attachments, and replies
@@ -429,10 +409,13 @@ impl ChatPanel {
 
     /// Insert reports
     fn insert_reports(&mut self, id: EventId, reports: Vec<SendReport>, cx: &mut Context<Self>) {
-        self.reports_by_id.update(cx, |this, cx| {
-            this.entry(id).or_default().extend(reports);
-            cx.notify();
-        });
+        self.reports_by_id
+            .write()
+            .unwrap()
+            .entry(id)
+            .or_default()
+            .extend(reports);
+        cx.notify();
     }
 
     /// Insert a message into the chat panel
@@ -441,9 +424,10 @@ impl ChatPanel {
         E: Into<Message>,
     {
         let old_len = self.messages.len();
+        let msg: Message = m.into();
 
-        // Extend the messages list with the new events
-        if self.messages.insert(m.into()) {
+        if let Err(pos) = self.messages.binary_search(&msg) {
+            self.messages.insert(pos, msg);
             self.list_state.splice(old_len..old_len, 1);
 
             if scroll {
@@ -466,13 +450,12 @@ impl ChatPanel {
     }
 
     /// Check if a message has any reports
-    fn has_reports(&self, id: &EventId, cx: &App) -> bool {
-        self.reports_by_id.read(cx).get(id).is_some()
+    fn has_reports(&self, id: &EventId, _cx: &App) -> bool {
+        self.reports_by_id.read().unwrap().get(id).is_some()
     }
 
-    /// Get all sent reports for a message by its ID
-    fn sent_reports(&self, id: &EventId, cx: &App) -> Option<Vec<SendReport>> {
-        self.reports_by_id.read(cx).get(id).cloned()
+    fn sent_reports(&self, id: &EventId, _cx: &App) -> Option<Vec<SendReport>> {
+        self.reports_by_id.read().unwrap().get(id).cloned()
     }
 
     /// Get a message by its ID
@@ -796,10 +779,8 @@ impl ChatPanel {
             return true;
         }
 
-        let mut iter = self.messages.iter();
-
-        if let Some(previous) = iter.nth(ix - 1)
-            && let Some(current) = iter.next()
+        if let Some(previous) = self.messages.get(ix - 1)
+            && let Some(current) = self.messages.get(ix)
         {
             if current.author != previous.author {
                 return true;
@@ -822,7 +803,7 @@ impl ChatPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        if let Some(message) = self.messages.iter().nth(ix) {
+        if let Some(message) = self.messages.get(ix) {
             let persons = PersonRegistry::global(cx);
             let show_author = self.is_group_start(ix);
             let text = self
@@ -1496,12 +1477,7 @@ impl Render for ChatPanel {
                         .gap_2()
                         .border_b_1()
                         .border_color(cx.theme().border)
-                        .child(
-                            Input::new(&self.subject_input)
-                                .text_sm()
-                                .small()
-                                .bordered(false),
-                        )
+                        .child(Input::new(&self.subject_input).text_sm().small())
                         .child(
                             Button::new("change")
                                 .icon(IconName::CheckCircle)

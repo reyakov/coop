@@ -12,7 +12,6 @@ use theme::ActiveTheme;
 use crate::{Icon, IconName, InteractiveElementExt as _, Sizable as _, StyledExt, h_flex};
 
 pub const TITLE_BAR_HEIGHT: Pixels = px(34.);
-#[cfg(target_os = "macos")]
 pub const TRAFFIC_LIGHT_PADDING: f32 = 80.;
 
 /// TitleBar used to customize the appearance of the title bar.
@@ -284,8 +283,6 @@ impl RenderOnce for TitleBar {
                         this.px_2()
                     }
                 })
-                .border_b_1()
-                .border_color(cx.theme().border)
                 .bg(cx.theme().title_bar)
                 .refine_style(&self.style)
                 .when(is_linux, |this| {

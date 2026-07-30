@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::time::Duration;
 
 use anyhow::Error;
 use gpui::prelude::FluentBuilder;
@@ -8,6 +7,7 @@ use gpui::{
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
     Task, TextAlign, Window, div, rems,
 };
+use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use smallvec::{SmallVec, smallvec};
@@ -17,6 +17,7 @@ use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
 use ui::input::{Input, InputEvent, InputState};
+use ui::scroll::ScrollableElement;
 use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<ContactListPanel> {
@@ -220,8 +221,7 @@ impl ContactListPanel {
                     .px_2()
                     .justify_between()
                     .rounded(cx.theme().radius)
-                    .bg(cx.theme().secondary_background)
-                    .text_color(cx.theme().secondary_foreground)
+                    .hover(|this| this.bg(cx.theme().ghost_element_hover))
                     .child(
                         h_flex()
                             .gap_2()
@@ -283,79 +283,78 @@ impl Focusable for ContactListPanel {
 
 impl Render for ContactListPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        v_flex().p_3().gap_3().w_full().child(
-            v_flex()
-                .gap_2()
-                .flex_1()
-                .w_full()
-                .text_sm()
-                .child(
-                    div()
-                        .text_xs()
-                        .font_semibold()
-                        .text_color(cx.theme().text_muted)
-                        .child(SharedString::from("New contact:")),
-                )
-                .child(
-                    v_flex()
-                        .gap_1()
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .w_full()
-                                .child(
-                                    Input::new(&self.input)
-                                        .small()
-                                        .bordered(false)
-                                        .cleanable(true),
-                                )
-                                .child(
-                                    Button::new("add")
-                                        .icon(IconName::Plus)
-                                        .tooltip("Add contact")
-                                        .ghost()
-                                        .size(rems(2.))
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.add(window, cx);
-                                        })),
-                                ),
-                        )
-                        .when_some(self.error.as_ref(), |this, error| {
-                            this.child(
-                                div()
-                                    .italic()
-                                    .text_xs()
-                                    .text_color(cx.theme().text_danger)
-                                    .child(error.clone()),
+        v_flex()
+            .p_3()
+            .gap_3()
+            .w_full()
+            .overflow_y_scrollbar()
+            .child(
+                v_flex()
+                    .gap_2()
+                    .flex_1()
+                    .w_full()
+                    .text_sm()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(cx.theme().text_muted)
+                            .child("New contact:"),
+                    )
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(
+                                h_flex()
+                                    .gap_1()
+                                    .w_full()
+                                    .child(Input::new(&self.input).small().cleanable(true))
+                                    .child(
+                                        Button::new("add")
+                                            .icon(IconName::Plus)
+                                            .tooltip("Add contact")
+                                            .ghost()
+                                            .size(rems(2.))
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.add(window, cx);
+                                            })),
+                                    ),
                             )
-                        }),
-                )
-                .map(|this| {
-                    if self.contacts.is_empty() {
-                        this.child(self.render_empty(window, cx))
-                    } else {
-                        this.child(
-                            v_flex()
-                                .gap_1()
-                                .flex_1()
-                                .w_full()
-                                .children(self.render_list_items(cx)),
-                        )
-                    }
-                })
-                .child(
-                    Button::new("submit")
-                        .icon(IconName::CheckCircle)
-                        .label("Update")
-                        .primary()
-                        .small()
-                        .font_semibold()
-                        .loading(self.updating)
-                        .disabled(self.updating)
-                        .on_click(cx.listener(move |this, _ev, window, cx| {
-                            this.update(window, cx);
-                        })),
-                ),
-        )
+                            .when_some(self.error.as_ref(), |this, error| {
+                                this.child(
+                                    div()
+                                        .italic()
+                                        .text_xs()
+                                        .text_color(cx.theme().text_danger)
+                                        .child(error.clone()),
+                                )
+                            }),
+                    )
+                    .map(|this| {
+                        if self.contacts.is_empty() {
+                            this.child(self.render_empty(window, cx))
+                        } else {
+                            this.child(
+                                v_flex()
+                                    .gap_1()
+                                    .flex_1()
+                                    .w_full()
+                                    .children(self.render_list_items(cx)),
+                            )
+                        }
+                    })
+                    .child(
+                        Button::new("submit")
+                            .icon(IconName::CheckCircle)
+                            .label("Update")
+                            .primary()
+                            .font_semibold()
+                            .loading(self.updating)
+                            .disabled(self.updating)
+                            .on_click(cx.listener(move |this, _ev, window, cx| {
+                                this.update(window, cx);
+                            })),
+                    ),
+            )
     }
 }

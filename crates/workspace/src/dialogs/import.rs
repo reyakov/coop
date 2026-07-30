@@ -1,11 +1,10 @@
-use std::time::Duration;
-
 use anyhow::{Error, anyhow};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
     Subscription, Task, Window, div,
 };
+use instant::Duration;
 use nostr_connect::prelude::*;
 use state::{CoopAuthUrlHandler, NostrRegistry, USER_KEYRING};
 use theme::ActiveTheme;
@@ -36,7 +35,7 @@ pub struct ImportIdentity {
 
 impl ImportIdentity {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let key_input = cx.new(|cx| InputState::new(window, cx));
+        let key_input = cx.new(|cx| InputState::new(window, cx).placeholder("nsec or bunker://"));
         let pass_input = cx.new(|cx| InputState::new(window, cx).masked(true));
         let error = cx.new(|_| None);
 
@@ -135,7 +134,6 @@ impl ImportIdentity {
                     })?;
                 }
             }
-
             Ok(())
         }));
     }
@@ -146,7 +144,7 @@ impl ImportIdentity {
         let password = uri.to_string();
         let save = cx.write_credentials(USER_KEYRING, "bunker", password.as_bytes());
 
-        cx.spawn_in(window, async move |_this, cx| {
+        self.tasks.push(cx.spawn_in(window, async move |_this, cx| {
             let keys = master_keys.await;
             let timeout = Duration::from_secs(30);
 
@@ -162,9 +160,8 @@ impl ImportIdentity {
                 cx.notify();
             });
 
-            Ok::<(), anyhow::Error>(())
-        })
-        .detach();
+            Ok(())
+        }));
     }
 
     fn set_loading(&mut self, status: bool, cx: &mut Context<Self>) {
@@ -209,40 +206,45 @@ impl Render for ImportIdentity {
 
         v_flex()
             .size_full()
-            .gap_2()
+            .gap_4()
+            .text_sm()
             .child(
                 v_flex()
-                    .gap_1()
-                    .text_color(cx.theme().text_muted)
-                    .child("Continue with existing key or bunker connection")
-                    .child(Input::new(&self.key_input)),
+                    .gap_2()
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .text_color(cx.theme().text_muted)
+                            .child("Continue with existing key or bunker connection")
+                            .child(Input::new(&self.key_input)),
+                    )
+                    .when(require_password, |this| {
+                        this.child(
+                            v_flex()
+                                .gap_1()
+                                .text_color(cx.theme().text_muted)
+                                .child("Decrypt Password:")
+                                .child(Input::new(&self.pass_input)),
+                        )
+                    })
+                    .when(key_warning, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().text_warning)
+                                .child(div().font_semibold().child("Warning"))
+                                .child(div().child(MSG)),
+                        )
+                    }),
             )
-            .when(require_password, |this| {
-                this.child(
-                    v_flex()
-                        .gap_1()
-                        .text_color(cx.theme().text_muted)
-                        .child("Decrypt Password:")
-                        .child(Input::new(&self.pass_input)),
-                )
-            })
-            .when(key_warning, |this| {
-                this.child(
-                    div()
-                        .v_flex()
-                        .text_xs()
-                        .text_color(cx.theme().text_warning)
-                        .child(div().font_semibold().child("Warning"))
-                        .child(div().child(MSG)),
-                )
-            })
             .child(
                 Button::new("login")
                     .label("Continue")
                     .primary()
+                    .font_semibold()
                     .loading(self.loading)
                     .disabled(self.loading)
-                    .on_click(cx.listener(move |this, _, window, cx| {
+                    .on_click(cx.listener(move |this, _ev, window, cx| {
                         this.login(window, cx);
                     })),
             )

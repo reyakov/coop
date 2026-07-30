@@ -3,7 +3,6 @@
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Error, anyhow};
 use gpui::http_client::{AsyncBody, HttpClient};
@@ -11,6 +10,7 @@ use gpui::{
     App, AppContext, AsyncApp, BackgroundExecutor, Context, Entity, Global, Subscription, Task,
     Window,
 };
+use instant::Duration;
 use semver::Version;
 use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};

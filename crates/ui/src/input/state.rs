@@ -99,9 +99,6 @@ actions!(
         MoveToPreviousWord,
         MoveToNextWord,
         Escape,
-        ToggleCodeActions,
-        Search,
-        GoToDefinition,
     ]
 );
 
@@ -250,14 +247,6 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("ctrl-z", Undo, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-y", Redo, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-.", ToggleCodeActions, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-.", ToggleCodeActions, Some(CONTEXT)),
-        #[cfg(target_os = "macos")]
-        KeyBinding::new("cmd-f", Search, Some(CONTEXT)),
-        #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-f", Search, Some(CONTEXT)),
     ]);
 }
 
@@ -355,7 +344,6 @@ pub struct InputState {
     pub(super) clean_on_escape: bool,
     pub(super) submit_on_enter: bool,
     pub(super) soft_wrap: bool,
-    pub(super) show_whitespaces: bool,
     /// This flag tells the renderer to prefer the end of the current visual line.
     pub(crate) cursor_line_end_affinity: bool,
     pub(super) pattern: Option<regex::Regex>,
@@ -395,7 +383,7 @@ impl InputState {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus_handle = cx.focus_handle().tab_stop(true);
         let blink_cursor = cx.new(|_| BlinkCursor::new());
-        let history = History::new().group_interval(std::time::Duration::from_secs(1));
+        let history = History::new().group_interval(instant::Duration::from_secs(1));
 
         let _subscriptions = vec![
             // Observe the blink cursor to repaint the view when it changes.
@@ -435,7 +423,6 @@ impl InputState {
             clean_on_escape: false,
             submit_on_enter: false,
             soft_wrap: true,
-            show_whitespaces: false,
             loading: false,
             pattern: None,
             validate: None,
@@ -480,33 +467,6 @@ impl InputState {
         self
     }
 
-    /// Set Input to use [`InputMode::CodeEditor`] mode.
-    ///
-    /// Default options:
-    ///
-    /// - line_number: true
-    /// - tab_size: 2
-    /// - hard_tabs: false
-    /// - height: 100%
-    /// - multi_line: true
-    /// - indent_guides: true
-    ///
-    /// If `highlighter` is None, will use the default highlighter.
-    ///
-    /// Code Editor aim for help used to simple code editing or display, not a full-featured code editor.
-    ///
-    /// ## Features
-    ///
-    /// - Syntax Highlighting
-    /// - Auto Indent
-    /// - Line Number
-    /// - Large Text support, up to 50K lines.
-    pub fn code_editor(mut self, language: impl Into<SharedString>) -> Self {
-        let language: SharedString = language.into();
-        self.mode = InputMode::code_editor(language);
-        self
-    }
-
     /// Set whether search UI allows replacement, default is true.
     pub fn replaceable(mut self, allow: bool) -> Self {
         self.replaceable = allow;
@@ -519,49 +479,6 @@ impl InputState {
         self
     }
 
-    /// Set enable/disable code folding, only for [`InputMode::CodeEditor`] mode.
-    ///
-    /// Default: true
-    pub fn folding(mut self, folding: bool) -> Self {
-        debug_assert!(self.mode.is_code_editor());
-        if let InputMode::CodeEditor { folding: f, .. } = &mut self.mode {
-            *f = folding;
-        }
-        self
-    }
-
-    /// Set code folding at runtime, only for [`InputMode::CodeEditor`] mode.
-    ///
-    /// When disabling, all existing folds are cleared.
-    pub fn set_folding(&mut self, folding: bool, _: &mut Window, cx: &mut Context<Self>) {
-        debug_assert!(self.mode.is_code_editor());
-        if let InputMode::CodeEditor { folding: f, .. } = &mut self.mode {
-            *f = folding;
-        }
-        if !folding {
-            self.display_map.clear_folds();
-        }
-        cx.notify();
-    }
-
-    /// Set enable/disable line number, only for [`InputMode::CodeEditor`] mode.
-    pub fn line_number(mut self, line_number: bool) -> Self {
-        debug_assert!(self.mode.is_code_editor() && self.mode.is_multi_line());
-        if let InputMode::CodeEditor { line_number: l, .. } = &mut self.mode {
-            *l = line_number;
-        }
-        self
-    }
-
-    /// Set line number, only for [`InputMode::CodeEditor`] mode.
-    pub fn set_line_number(&mut self, line_number: bool, _: &mut Window, cx: &mut Context<Self>) {
-        debug_assert!(self.mode.is_code_editor() && self.mode.is_multi_line());
-        if let InputMode::CodeEditor { line_number: l, .. } = &mut self.mode {
-            *l = line_number;
-        }
-        cx.notify();
-    }
-
     /// Set the number of rows for the multi-line Textarea.
     ///
     /// This is only used when `multi_line` is set to true.
@@ -569,9 +486,7 @@ impl InputState {
     /// default: 2
     pub fn rows(mut self, rows: usize) -> Self {
         match &mut self.mode {
-            InputMode::PlainText { rows: r, .. } | InputMode::CodeEditor { rows: r, .. } => {
-                *r = rows
-            }
+            InputMode::PlainText { rows: r, .. } => *r = rows,
             InputMode::AutoGrow {
                 max_rows: max_r,
                 rows: r,
@@ -582,31 +497,6 @@ impl InputState {
             }
         }
         self
-    }
-
-    /// Set highlighter language for for [`InputMode::CodeEditor`] mode.
-    pub fn set_highlighter(
-        &mut self,
-        new_language: impl Into<SharedString>,
-        cx: &mut Context<Self>,
-    ) {
-        if let InputMode::CodeEditor {
-            language,
-            parse_task,
-            ..
-        } = &mut self.mode
-        {
-            *language = new_language.into();
-            parse_task.borrow_mut().take();
-        }
-        cx.notify();
-    }
-
-    fn reset_highlighter(&mut self, cx: &mut Context<Self>) {
-        if let InputMode::CodeEditor { parse_task, .. } = &mut self.mode {
-            parse_task.borrow_mut().take();
-        }
-        cx.notify();
     }
 
     /// Set placeholder
@@ -726,7 +616,6 @@ impl InputState {
         let text: SharedString = text.into();
         let range = 0..self.text.chars().map(|c| c.len_utf16()).sum();
         self.replace_text_in_range_silent(Some(range), &text, window, cx);
-        self.reset_highlighter(cx);
         self.disabled = was_disabled;
     }
 
@@ -779,12 +668,6 @@ impl InputState {
         self
     }
 
-    /// Set whether to show whitespace characters.
-    pub fn show_whitespaces(mut self, show: bool) -> Self {
-        self.show_whitespaces = show;
-        self
-    }
-
     /// Update the soft wrap mode for multi-line input, default is true.
     pub fn set_soft_wrap(&mut self, wrap: bool, _: &mut Window, cx: &mut Context<Self>) {
         debug_assert!(self.mode.is_multi_line());
@@ -805,12 +688,6 @@ impl InputState {
         } else {
             self.display_map.on_layout_changed(None, cx);
         }
-        cx.notify();
-    }
-
-    /// Update whether to show whitespace characters.
-    pub fn set_show_whitespaces(&mut self, show: bool, _: &mut Window, cx: &mut Context<Self>) {
-        self.show_whitespaces = show;
         cx.notify();
     }
 
@@ -1038,7 +915,7 @@ impl InputState {
         let row = self.text.offset_to_point(self.cursor()).row;
         let logical_start = self.text.line_start_offset(row);
 
-        if self.soft_wrap && self.mode.is_code_editor() {
+        if self.soft_wrap {
             let wrap_point = self.display_map.offset_to_wrap_display_point(self.cursor());
             if let Some(line) = self.display_map.lines().get(row)
                 && let Some(range) = line.wrapped_lines.get(wrap_point.local_row)
@@ -1066,7 +943,7 @@ impl InputState {
         let logical_start = self.text.line_start_offset(row);
         let logical_end = self.text.line_end_offset(row);
 
-        if self.soft_wrap && self.mode.is_code_editor() {
+        if self.soft_wrap {
             let wrap_point = self.display_map.offset_to_wrap_display_point(self.cursor());
             if let Some(line) = self.display_map.lines().get(row)
                 && let Some(range) = line.wrapped_lines.get(wrap_point.local_row)
@@ -1264,7 +1141,7 @@ impl InputState {
 
         if insert_newline {
             // Get current line indent
-            let indent = if self.mode.is_code_editor() {
+            let indent = if self.mode.is_indentable() {
                 self.indent_of_next_line()
             } else {
                 "".to_string()
@@ -1465,11 +1342,7 @@ impl InputState {
 
         // Check if row_offset_y is out of the viewport
         // If row offset is not in the viewport, scroll to make it visible
-        let edge_height = if direction.is_some() && self.mode.is_code_editor() {
-            3 * line_height
-        } else {
-            line_height
-        };
+        let edge_height = line_height;
         if row_offset_y - edge_height + line_height < -scroll_offset.y {
             // Scroll up
             scroll_offset.y = -row_offset_y + edge_height - line_height;
@@ -1749,34 +1622,6 @@ impl InputState {
         self.offset_from_utf16(range_utf16.start)..self.offset_from_utf16(range_utf16.end)
     }
 
-    /// If offset falls on a hidden (folded) line, clamp backward to the end of
-    /// the fold header line (last visible position before the fold).
-    fn clamp_offset_to_visible_backward(&self, offset: usize) -> usize {
-        let line = self.text.offset_to_point(offset).row;
-        if self.display_map.is_buffer_line_hidden(line) {
-            for fold in self.display_map.folded_ranges() {
-                if line > fold.start_line && line <= fold.end_line {
-                    return self.text.line_end_offset(fold.start_line);
-                }
-            }
-        }
-        offset
-    }
-
-    /// If offset falls on a hidden (folded) line, clamp forward to the start of
-    /// the fold end line (first visible position after the fold).
-    fn clamp_offset_to_visible_forward(&self, offset: usize) -> usize {
-        let line = self.text.offset_to_point(offset).row;
-        if self.display_map.is_buffer_line_hidden(line) {
-            for fold in self.display_map.folded_ranges() {
-                if line > fold.start_line && line <= fold.end_line {
-                    return self.text.line_start_offset(fold.end_line);
-                }
-            }
-        }
-        offset
-    }
-
     pub(super) fn previous_boundary(&self, offset: usize) -> usize {
         let mut offset = self.text.clip_offset(offset.saturating_sub(1), Bias::Left);
         if let Some(ch) = self.text.char_at(offset)
@@ -1785,7 +1630,7 @@ impl InputState {
             offset -= 1;
         }
 
-        self.clamp_offset_to_visible_backward(offset)
+        offset
     }
 
     pub(super) fn next_boundary(&self, offset: usize) -> usize {
@@ -1796,7 +1641,7 @@ impl InputState {
             offset += 1;
         }
 
-        self.clamp_offset_to_visible_forward(offset)
+        offset
     }
 
     /// Returns the true to let InputElement to render cursor, when Input is focused and current BlinkCursor is visible.

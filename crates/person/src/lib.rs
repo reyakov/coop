@@ -1,7 +1,6 @@
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
-use std::time::Duration;
+use std::sync::RwLock;
+use instant::Duration;
 
 use anyhow::{Error, anyhow};
 use common::EventExt;
@@ -24,9 +23,9 @@ impl Global for GlobalPersonRegistry {}
 
 #[derive(Debug, Clone)]
 enum Dispatch {
-    Person(Box<Person>),
-    Announcement(Box<Event>),
-    Relays(Box<Event>),
+    Person(Person),
+    Announcement(Event),
+    Relays(Event),
 }
 
 /// Person Registry
@@ -36,7 +35,7 @@ pub struct PersonRegistry {
     persons: HashMap<PublicKey, Entity<Person>>,
 
     /// Set of public keys that have been seen
-    seens: Rc<RefCell<HashSet<PublicKey>>>,
+    seen: RwLock<HashSet<PublicKey>>,
 
     /// Sender for requesting metadata
     sender: flume::Sender<PublicKey>,
@@ -63,53 +62,38 @@ impl PersonRegistry {
 
         // Channel for communication between nostr and gpui
         let (tx, rx) = flume::bounded::<Dispatch>(100);
-        let (mta_tx, mta_rx) = flume::unbounded::<PublicKey>();
+        let (metadata_tx, metadata_rx) = flume::unbounded::<PublicKey>();
 
         let mut tasks = smallvec![];
 
-        tasks.push(
-            // Handle nostr notifications
-            cx.background_spawn({
-                let client = client.clone();
+        let client2 = client.clone();
+        tasks.push(cx.background_spawn(async move {
+            Self::handle_notifications(&client2, &tx).await;
+        }));
 
-                async move {
-                    Self::handle_notifications(&client, &tx).await;
-                }
-            }),
-        );
+        let client3 = client.clone();
+        tasks.push(cx.background_spawn(async move {
+            Self::handle_requests(&client3, &metadata_rx).await;
+        }));
 
-        tasks.push(
-            // Handle metadata requests
-            cx.background_spawn({
-                let client = client.clone();
-
-                async move {
-                    Self::handle_requests(&client, &mta_rx).await;
-                }
-            }),
-        );
-
-        tasks.push(
-            // Update GPUI state
-            cx.spawn(async move |this, cx| {
-                while let Ok(event) = rx.recv_async().await {
-                    this.update(cx, |this, cx| {
-                        match event {
-                            Dispatch::Person(person) => {
-                                this.insert(*person, cx);
-                            }
-                            Dispatch::Announcement(event) => {
-                                this.set_announcement(&event, cx);
-                            }
-                            Dispatch::Relays(event) => {
-                                this.set_messaging_relays(&event, cx);
-                            }
-                        };
-                    })
-                    .ok();
-                }
-            }),
-        );
+        tasks.push(cx.spawn(async move |this, cx| {
+            while let Ok(event) = rx.recv_async().await {
+                this.update(cx, |this, cx| {
+                    match event {
+                        Dispatch::Person(person) => {
+                            this.insert(person, cx);
+                        }
+                        Dispatch::Announcement(event) => {
+                            this.set_announcement(&event, cx);
+                        }
+                        Dispatch::Relays(event) => {
+                            this.set_messaging_relays(&event, cx);
+                        }
+                    };
+                })
+                .ok();
+            }
+        }));
 
         // Load all user profiles from the database
         cx.defer_in(window, |this, _window, cx| {
@@ -118,8 +102,8 @@ impl PersonRegistry {
 
         Self {
             persons: HashMap::new(),
-            seens: Rc::new(RefCell::new(HashSet::new())),
-            sender: mta_tx,
+            seen: RwLock::new(HashSet::new()),
+            sender: metadata_tx,
             tasks,
         }
     }
@@ -145,24 +129,25 @@ impl PersonRegistry {
                     Kind::Metadata => {
                         let metadata = Metadata::from_json(&event.content).unwrap_or_default();
                         let person = Person::new(event.pubkey, metadata);
-                        let val = Box::new(person);
-                        // Send
-                        tx.send_async(Dispatch::Person(val)).await.ok();
+                        if tx.send_async(Dispatch::Person(person)).await.is_err() {
+                            log::warn!("PersonRegistry channel closed, dropping metadata event");
+                        }
                     }
                     Kind::ContactList => {
                         let public_keys = event.extract_public_keys();
-                        // Get metadata for all public keys
-                        get_metadata(client, public_keys).await.ok();
+                        if let Err(e) = get_metadata(client, public_keys).await {
+                            log::warn!("Failed to get metadata for contact list: {e}");
+                        }
                     }
                     Kind::InboxRelays => {
-                        let val = Box::new(event.into_owned());
-                        // Send
-                        tx.send_async(Dispatch::Relays(val)).await.ok();
+                        tx.send_async(Dispatch::Relays(event.into_owned()))
+                            .await
+                            .ok();
                     }
                     Kind::Custom(10044) => {
-                        let val = Box::new(event.into_owned());
-                        // Send
-                        tx.send_async(Dispatch::Announcement(val)).await.ok();
+                        tx.send_async(Dispatch::Announcement(event.into_owned()))
+                            .await
+                            .ok();
                     }
                     _ => {}
                 }
@@ -182,13 +167,17 @@ impl PersonRegistry {
                 Ok(Some(public_key)) => {
                     batch.insert(public_key);
                     // Process the batch if it's full
-                    if batch.len() >= 20 {
-                        get_metadata(client, std::mem::take(&mut batch)).await.ok();
+                    if batch.len() >= 20
+                        && let Err(e) = get_metadata(client, std::mem::take(&mut batch)).await
+                    {
+                        log::warn!("Failed to get metadata batch: {e}");
                     }
                 }
                 _ => {
-                    if !batch.is_empty() {
-                        get_metadata(client, std::mem::take(&mut batch)).await.ok();
+                    if !batch.is_empty()
+                        && let Err(e) = get_metadata(client, std::mem::take(&mut batch)).await
+                    {
+                        log::warn!("Failed to get metadata batch: {e}");
                     }
                 }
             }
@@ -217,7 +206,7 @@ impl PersonRegistry {
         self.tasks.push(cx.spawn(async move |this, cx| {
             if let Ok(persons) = task.await {
                 this.update(cx, |this, cx| {
-                    this.bulk_inserts(persons, cx);
+                    this.bulk_insert(persons, cx);
                 })
                 .ok();
             }
@@ -256,7 +245,7 @@ impl PersonRegistry {
     }
 
     /// Insert batch of persons
-    fn bulk_inserts(&mut self, persons: Vec<Person>, cx: &mut Context<Self>) {
+    fn bulk_insert(&mut self, persons: Vec<Person>, cx: &mut Context<Self>) {
         for person in persons.into_iter() {
             let public_key = person.public_key();
             self.persons
@@ -290,15 +279,14 @@ impl PersonRegistry {
         }
 
         let public_key = *public_key;
-        let mut seen = self.seens.borrow_mut();
 
-        if seen.insert(public_key) {
+        if self.seen.write().unwrap().insert(public_key) {
             let sender = self.sender.clone();
 
             // Spawn background task to request metadata
             cx.background_spawn(async move {
                 if let Err(e) = sender.send_async(public_key).await {
-                    log::warn!("Failed to send public key for metadata request: {}", e);
+                    log::warn!("Failed to send public key for metadata request: {e}");
                 }
             })
             .detach();

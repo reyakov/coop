@@ -112,7 +112,7 @@ impl ThemeColors {
             elevated_surface_background: neutral().light().step_3(),
             panel_background: neutral().light().step_1(),
             overlay: neutral().light_alpha().step_3(),
-            title_bar: neutral().light().step_3(),
+            title_bar: neutral().light().step_2(),
             title_bar_inactive: neutral().light().step_1(),
             window_border: hsl(240.0, 5.9, 78.0),
 
@@ -198,7 +198,7 @@ impl ThemeColors {
             elevated_surface_background: neutral().dark().step_3(),
             panel_background: neutral().dark().step_1(),
             overlay: neutral().dark_alpha().step_3(),
-            title_bar: neutral().dark().step_3(),
+            title_bar: neutral().dark().step_2(),
             title_bar_inactive: neutral().dark().step_1(),
             window_border: hsl(240.0, 3.7, 28.0),
 

@@ -1,5 +1,4 @@
 use std::ops::Range;
-use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -9,6 +8,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription, Task,
     UniformListScrollHandle, Window, div, px, size, uniform_list,
 };
+use instant::Duration;
 use theme::ActiveTheme;
 
 use crate::actions::{Cancel, Confirm, SelectDown, SelectUp};

@@ -38,7 +38,7 @@ preview: ## Preview production build
 clean: ## Clean build artifacts
 	@echo "Cleaning build artifacts..."
 	@rm -rf www/dist
-	@rm -rf www/src/wasm/*.js www/src/wasm/*.wasm
+	@rm -rf www/wasm/*.js www/wasm/*.wasm
 	@cargo clean
 
 watch-wasm: ## Watch Rust code changes and auto-rebuild WASM

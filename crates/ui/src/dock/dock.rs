@@ -214,6 +214,8 @@ impl Dock {
     pub fn set_open(&mut self, open: bool, window: &mut Window, cx: &mut Context<Self>) {
         self.open = open;
         let item = self.panel.clone();
+        // Use defer_in (not window.defer) so the callback is cancelled
+        // if this Dock entity is dropped before the deferred frame runs.
         cx.defer_in(window, move |_, window, cx| {
             item.set_collapsed(!open, window, cx);
         });
