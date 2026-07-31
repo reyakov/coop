@@ -1,11 +1,11 @@
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
-use instant::Duration;
 
 use anyhow::{Error, anyhow};
 use common::EventExt;
 use device::DeviceRegistry;
 use gpui::{App, AppContext, Context, EventEmitter, SharedString, Task};
+use instant::Duration;
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
@@ -271,8 +271,8 @@ impl Room {
     }
 
     /// Returns the members of the room
-    pub fn members(&self) -> Vec<PublicKey> {
-        self.members.clone()
+    pub fn members(&self) -> &[PublicKey] {
+        &self.members
     }
 
     /// Checks if the room has more than two members (group)
@@ -356,7 +356,7 @@ impl Room {
     pub fn connect(&self, cx: &App) -> Task<Result<(), Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let members = self.members();
+        let members = self.members().to_vec();
 
         cx.background_spawn(async move {
             let opts = SubscribeAutoCloseOptions::default()
@@ -419,12 +419,23 @@ impl Room {
     }
 
     // Construct a rumor event for direct message
-    pub fn rumor<S, I>(&self, content: S, replies: I, cx: &App) -> Option<UnsignedEvent>
+    pub fn rumor<S, I>(
+        &self,
+        content: S,
+        replies: I,
+        reaction: bool,
+        cx: &App,
+    ) -> Option<UnsignedEvent>
     where
         S: Into<String>,
         I: IntoIterator<Item = EventId>,
     {
-        let kind = Kind::PrivateDirectMessage;
+        let kind = if reaction {
+            Kind::Reaction
+        } else {
+            Kind::PrivateDirectMessage
+        };
+
         let content: String = content.into();
         let replies: Vec<EventId> = replies.into_iter().collect();
 

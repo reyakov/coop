@@ -1087,6 +1087,7 @@ dependencies = [
  "nostr-sdk",
  "person",
  "pulldown-cmark",
+ "regex",
  "serde",
  "settings",
  "smallvec",

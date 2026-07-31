@@ -1,5 +1,5 @@
 use std::cmp::Reverse;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet, hash_map};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, RwLock};
 
@@ -79,6 +79,9 @@ impl Signal {
 pub struct ChatRegistry {
     /// Chat rooms
     rooms: Vec<Entity<Room>>,
+
+    /// O(1) room lookup by room ID
+    room_index: HashMap<u64, Entity<Room>>,
 
     /// Events that failed to unwrap for any reason
     trash: Entity<BTreeSet<FailedMessage>>,
@@ -170,6 +173,7 @@ impl ChatRegistry {
 
         Self {
             rooms: vec![],
+            room_index: HashMap::new(),
             trash: cx.new(|_| BTreeSet::default()),
             seen: Arc::new(RwLock::new(HashMap::default())),
             event_map: Arc::new(RwLock::new(HashMap::default())),
@@ -436,12 +440,9 @@ impl ChatRegistry {
         self.tracking.load(Ordering::Acquire)
     }
 
-    /// Get a weak reference to a room by its ID.
-    pub fn room(&self, id: &u64, cx: &App) -> Option<WeakEntity<Room>> {
-        self.rooms
-            .iter()
-            .find(|this| &this.read(cx).id == id)
-            .map(|this| this.downgrade())
+    /// Get a weak reference to a room by its ID
+    pub fn room(&self, id: &u64, _cx: &App) -> Option<WeakEntity<Room>> {
+        self.room_index.get(id).map(|room| room.downgrade())
     }
 
     /// Get all rooms based on the filter.
@@ -511,7 +512,11 @@ impl ChatRegistry {
         };
 
         let room: Room = room.into().organize(&public_key);
-        self.rooms.insert(0, cx.new(|_| room));
+        let room_id = room.id;
+        let entity = cx.new(|_| room);
+
+        self.room_index.insert(room_id, entity.clone());
+        self.rooms.insert(0, entity);
 
         cx.emit(ChatEvent::Ping);
         cx.notify();
@@ -524,9 +529,11 @@ impl ChatRegistry {
         // Get the room's ID.
         let id = room.read(cx).id;
 
-        // If the room is new, add it to the registry.
-        if !self.rooms.iter().any(|r| r.read(cx).id == id) {
-            self.rooms.insert(0, room.to_owned());
+        // If the room is new, add it to the registry and index.
+        if let hash_map::Entry::Vacant(e) = self.room_index.entry(id) {
+            let entity = room.to_owned();
+            e.insert(entity.clone());
+            self.rooms.insert(0, entity);
         }
 
         // Emit the open room event deferred to avoid re-entrant reads
@@ -537,17 +544,23 @@ impl ChatRegistry {
 
     /// Close a room.
     pub fn close_room(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        if self.rooms.iter().any(|r| r.read(cx).id == id) {
+        if self.room_index.contains_key(&id) {
+            self.room_index.remove(&id);
+            self.rooms.retain(|r| r.read(cx).id != id);
             cx.defer_in(window, move |_this, _window, cx| {
                 cx.emit(ChatEvent::CloseRoom(id));
             });
         }
     }
 
-    /// Sort rooms by their created at.
+    /// Sort rooms by their created at. Only notifies if order changed.
     pub fn sort(&mut self, cx: &mut Context<Self>) {
+        let before: Vec<_> = self.rooms.iter().map(|ev| ev.read(cx).id).collect();
         self.rooms.sort_by_key(|ev| Reverse(ev.read(cx).created_at));
-        cx.notify();
+        let after: Vec<_> = self.rooms.iter().map(|ev| ev.read(cx).id).collect();
+        if before != after {
+            cx.notify();
+        }
     }
 
     /// Finding rooms based on a query.
@@ -574,6 +587,7 @@ impl ChatRegistry {
     /// Reset the registry.
     pub fn reset(&mut self, cx: &mut Context<Self>) {
         self.rooms.clear();
+        self.room_index.clear();
         self.trash.update(cx, |this, cx| {
             this.clear();
             cx.notify();
@@ -601,7 +615,9 @@ impl ChatRegistry {
                 });
             } else {
                 let new_room_id = new_room.id;
-                self.rooms.push(cx.new(|_| new_room));
+                let entity = cx.new(|_| new_room);
+                self.room_index.insert(new_room_id, entity.clone());
+                self.rooms.push(entity);
 
                 let new_index = self.rooms.len();
                 room_map.insert(new_room_id, new_index);
@@ -713,7 +729,7 @@ impl ChatRegistry {
             return;
         };
 
-        match self.rooms.iter().find(|e| e.read(cx).id == message.room) {
+        match self.room_index.get(&message.room).cloned() {
             Some(room) => {
                 room.update(cx, |this, cx| {
                     if this.kind == RoomKind::Request && message.rumor.pubkey == public_key {

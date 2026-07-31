@@ -1,5 +1,5 @@
-use std::collections::{BTreeMap, HashSet};
-use std::sync::{Arc, RwLock};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::{Arc, LazyLock, RwLock};
 
 pub use actions::*;
 use anyhow::{Context as AnyhowContext, Error};
@@ -17,6 +17,7 @@ use gpui::{
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
+use regex::Regex;
 use settings::{AppSettings, SignerKind};
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, upload};
@@ -34,6 +35,14 @@ use ui::{
 };
 
 use crate::text::RenderedText;
+
+const REACTION_EMOJIS: &[&str] = &["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
+const COMPACT_REACTION_EMOJIS: &[&str] = &["👍", "❤️", "👀"];
+
+/// Regex matching strings that consist entirely of emoji characters,
+/// zero-width joiners, variation selectors, and keycap combiners.
+static EMOJI_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[\p{Emoji}\u{200D}\u{FE0F}\u{20E3}]+$").unwrap());
 
 mod actions;
 mod text;
@@ -55,6 +64,12 @@ pub struct ChatPanel {
 
     /// All messages (sorted by created_at)
     messages: Vec<Message>,
+
+    /// O(1) message lookup by EventId
+    message_index: HashMap<EventId, usize>,
+
+    /// All reactions
+    reactions: BTreeMap<EventId, Vec<(SharedString, PublicKey)>>,
 
     /// Mapping message ids to their rendered texts
     rendered_texts_by_id: BTreeMap<EventId, RenderedText>,
@@ -160,6 +175,8 @@ impl ChatPanel {
             focus_handle: cx.focus_handle(),
             id,
             messages,
+            message_index: HashMap::new(),
+            reactions: BTreeMap::new(),
             room,
             list_state,
             input,
@@ -224,23 +241,29 @@ impl ChatPanel {
             while let Ok(status) = rx.recv_async().await {
                 {
                     let mut map = reports.write().unwrap();
-                    for reports in map.values_mut() {
-                        for report in reports.iter_mut() {
+                    let status_id = match &*status {
+                        SendStatus::Ok { id, .. } => *id,
+                        SendStatus::Failed { id, .. } => *id,
+                    };
+
+                    // Find the matching report and update it (exit early on first match)
+                    'outer: for reports_list in map.values_mut() {
+                        for report in reports_list.iter_mut() {
                             let Some(output) = report.output.as_mut() else {
                                 continue;
                             };
+                            if *output.id() != status_id {
+                                continue;
+                            }
                             match &*status {
-                                SendStatus::Ok { id, relay } => {
-                                    if output.id() == id {
-                                        output.success.insert(relay.clone(), EventSendStatus::Sent);
-                                    }
+                                SendStatus::Ok { relay, .. } => {
+                                    output.success.insert(relay.clone(), EventSendStatus::Sent);
                                 }
-                                SendStatus::Failed { id, relay, message } => {
-                                    if output.id() == id {
-                                        output.failed.insert(relay.clone(), message.clone());
-                                    }
+                                SendStatus::Failed { relay, message, .. } => {
+                                    output.failed.insert(relay.clone(), message.clone());
                                 }
                             }
+                            break 'outer;
                         }
                     }
                 }
@@ -259,7 +282,11 @@ impl ChatPanel {
                 move |this, _room, event, window, cx| {
                     match event {
                         RoomEvent::Incoming(message) => {
-                            this.insert_message(message, false, cx);
+                            if message.rumor.kind == Kind::Reaction {
+                                this.insert_reaction(&message.rumor, cx);
+                            } else {
+                                this.insert_message(message, false, cx);
+                            }
                         }
                         RoomEvent::Reload => {
                             // Defer to avoid re-entrant read on Room while
@@ -331,24 +358,60 @@ impl ChatPanel {
         // Get the message which includes all attachments
         let content = self.get_input_value(cx);
 
+        // Get the replies to this message
+        let replies: Vec<EventId> = self.replies_to.read(cx).iter().copied().collect();
+
         // Return if message is empty
         if content.trim().is_empty() {
             window.push_notification("Cannot send an empty message", cx);
             return;
         }
 
-        self.send_message(&content, window, cx);
+        // If replying to exactly one message with only a valid emoji,
+        // send as a reaction instead of a text message
+        if replies.len() == 1 && EMOJI_RE.is_match(&content) && self.attachments.read(cx).is_empty()
+        {
+            for reply in &replies {
+                self.send_reaction(&content, reply, window, cx);
+            }
+            self.clear(window, cx);
+            return;
+        }
+
+        self.send_message(&content, replies, false, window, cx);
+    }
+
+    fn send_reaction(
+        &mut self,
+        emoji: &str,
+        target: &EventId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Return if emoji is empty
+        if emoji.trim().is_empty() {
+            window.push_notification("Cannot send an empty reaction", cx);
+            return;
+        }
+
+        self.send_message(emoji, vec![*target], true, window, cx);
     }
 
     /// Send a message to all members of the chat
-    fn send_message(&mut self, value: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn send_message(
+        &mut self,
+        value: &str,
+        replies: Vec<EventId>,
+        reaction: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if value.trim().is_empty() {
             window.push_notification("Cannot send an empty message", cx);
             return;
         }
 
         let room = self.room.clone();
-        let replies: Vec<EventId> = self.replies_to.read(cx).iter().copied().collect();
         let content = value.to_string();
         let sent_ids = self.sent_ids.clone();
 
@@ -356,8 +419,10 @@ impl ChatPanel {
         let Some(room_entity) = room.upgrade() else {
             return;
         };
+
+        // Create rumor and send task
         let (rumor, send_task) = match room_entity.read_with(cx, |room, cx| {
-            let rumor = room.rumor(content.clone(), replies, cx)?;
+            let rumor = room.rumor(content.clone(), replies.clone(), reaction, cx)?;
             let send_task = room.send(rumor.clone(), cx)?;
             Some((rumor, send_task))
         }) {
@@ -371,9 +436,15 @@ impl ChatPanel {
         let id = rumor.id.expect("rumor must have an id");
 
         // Insert optimistic message and clear input
-        self.insert_message(&rumor, true, cx);
+        if rumor.kind != Kind::Reaction {
+            self.insert_message(&rumor, true, cx);
+            self.clear(window, cx);
+        } else {
+            self.insert_reaction(&rumor, cx);
+        }
+
+        // Update reports
         self.insert_reports(id, vec![], cx);
-        self.clear(window, cx);
 
         // Spawn a single task to await the send and update reports
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
@@ -428,6 +499,10 @@ impl ChatPanel {
 
         if let Err(pos) = self.messages.binary_search(&msg) {
             self.messages.insert(pos, msg);
+            // Rebuild message index after insertion (indices from pos to end shift)
+            for (i, message) in self.messages.iter().enumerate().skip(pos) {
+                self.message_index.insert(message.id, i);
+            }
             self.list_state.splice(old_len..old_len, 1);
 
             if scroll {
@@ -444,23 +519,56 @@ impl ChatPanel {
     /// Convert and insert a vector of nostr events into the chat panel
     fn insert_messages(&mut self, events: &[UnsignedEvent], cx: &mut Context<Self>) {
         for event in events.iter() {
+            if event.kind == Kind::Reaction {
+                self.insert_reaction(event, cx);
+                continue;
+            }
             // Bulk inserting messages, so no need to scroll to the latest message
             self.insert_message(event, false, cx);
         }
     }
 
-    /// Check if a message has any reports
-    fn has_reports(&self, id: &EventId, _cx: &App) -> bool {
-        self.reports_by_id.read().unwrap().get(id).is_some()
+    /// Insert a reaction into the chat panel
+    fn insert_reaction(&mut self, event: &UnsignedEvent, cx: &mut Context<Self>) {
+        if event.kind != Kind::Reaction {
+            return;
+        }
+
+        for id in event.tags.event_ids() {
+            self.reactions
+                .entry(id)
+                .or_default()
+                .push((SharedString::from(&event.content), event.pubkey));
+        }
+
+        cx.notify();
     }
 
-    fn sent_reports(&self, id: &EventId, _cx: &App) -> Option<Vec<SendReport>> {
+    /// Check if a message has any reports
+    fn has_reports(&self, id: &EventId) -> bool {
+        self.reports_by_id.read().unwrap().contains_key(id)
+    }
+
+    /// Clone reports for a message (used for modal display, not called during render)
+    fn sent_reports(&self, id: &EventId) -> Option<Vec<SendReport>> {
         self.reports_by_id.read().unwrap().get(id).cloned()
     }
 
-    /// Get a message by its ID
+    /// Get a message by its ID (O(1) lookup)
     fn message(&self, id: &EventId) -> Option<&Message> {
-        self.messages.iter().find(|msg| &msg.id == id)
+        self.message_index
+            .get(id)
+            .and_then(|&ix| self.messages.get(ix))
+    }
+
+    /// Get a reaction by its target ID (returns reference, no allocation)
+    fn reaction(&self, id: &EventId) -> &[(SharedString, PublicKey)] {
+        self.reactions.get(id).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// Check if a message has any reactions
+    fn has_reaction(&self, id: &EventId) -> bool {
+        self.reactions.contains_key(id)
     }
 
     /// Scroll to a message by its ID
@@ -575,7 +683,10 @@ impl ChatPanel {
     fn on_command(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) {
         match command {
             Command::Insert(content) => {
-                self.send_message(content, window, cx);
+                self.input.update(cx, |this, cx| {
+                    let new_value = format!("{} {}", this.value(), content);
+                    this.set_value(new_value, window, cx);
+                });
             }
             Command::ChangeSubject(subject) => {
                 if self
@@ -834,7 +945,8 @@ impl ChatPanel {
 
         let replies = message.replies_to.as_slice();
         let has_replies = !replies.is_empty();
-        let has_reports = self.has_reports(&id, cx);
+        let has_reactions = self.has_reaction(&id);
+        let has_reports = self.has_reports(&id);
 
         // Hide avatar setting
         let hide_avatar = AppSettings::get_hide_avatar(cx);
@@ -879,12 +991,7 @@ impl ChatPanel {
                                         .gap_2()
                                         .text_sm()
                                         .text_color(cx.theme().text_placeholder)
-                                        .child(
-                                            div()
-                                                .font_semibold()
-                                                .text_color(cx.theme().text)
-                                                .child(author.name()),
-                                        )
+                                        .child(div().font_semibold().child(author.name()))
                                         .child(message.created_at.to_human_time())
                                         .when(has_reports, |this| {
                                             this.child(self.render_sent_reports(&id, cx))
@@ -895,7 +1002,10 @@ impl ChatPanel {
                                 this.children(self.render_message_replies(replies, cx))
                             })
                             .child(rendered_text)
-                            .child(self.render_media(&message.media, cx)),
+                            .child(self.render_media(&message.media, cx))
+                            .when(has_reactions, |this| {
+                                this.child(self.render_reactions(&id, cx))
+                            }),
                     ),
             )
             .child(
@@ -990,13 +1100,9 @@ impl ChatPanel {
                     .w_full()
                     .px_2()
                     .border_l_2()
-                    .border_color(cx.theme().element_selected)
+                    .border_color(cx.theme().element_active)
                     .text_sm()
-                    .child(
-                        div()
-                            .text_color(cx.theme().text_accent)
-                            .child(author.name()),
-                    )
+                    .child(div().font_semibold().child(author.name()))
                     .child(
                         div()
                             .w_full()
@@ -1017,8 +1123,45 @@ impl ChatPanel {
         items
     }
 
+    fn render_reactions(&self, id: &EventId, cx: &App) -> impl IntoElement {
+        let current_user = NostrRegistry::global(cx).read(cx).current_user();
+        let reactions = self.reaction(id);
+
+        // Group reactions by emoji and collect authors for each
+        let mut grouped: BTreeMap<SharedString, Vec<PublicKey>> = BTreeMap::new();
+        for (emoji, author) in reactions {
+            grouped.entry(emoji.clone()).or_default().push(*author);
+        }
+
+        h_flex()
+            .mt_2()
+            .gap_1()
+            .children(grouped.into_iter().map(|(emoji, authors)| {
+                let count = authors.len();
+                let has_reacted = current_user
+                    .map(|pk| authors.contains(&pk))
+                    .unwrap_or(false);
+
+                h_flex()
+                    .gap_2()
+                    .py_0p5()
+                    .px_1()
+                    .rounded(cx.theme().radius)
+                    .text_xs()
+                    .border_1()
+                    .when(has_reacted, |this| {
+                        this.text_color(cx.theme().secondary_foreground)
+                            .bg(cx.theme().secondary_background)
+                            .border_color(cx.theme().secondary_active)
+                    })
+                    .when(!has_reacted, |this| this.border_color(cx.theme().border))
+                    .child(emoji)
+                    .child(SharedString::from(count.to_string()))
+            }))
+    }
+
     fn render_sent_reports(&self, id: &EventId, cx: &App) -> impl IntoElement {
-        let reports = self.sent_reports(id, cx);
+        let reports = self.sent_reports(id);
 
         let pending = reports
             .as_ref()
@@ -1192,6 +1335,29 @@ impl ChatPanel {
             .border_1()
             .border_color(cx.theme().border)
             .bg(cx.theme().background)
+            .children({
+                let mut items = vec![];
+
+                for emoji in COMPACT_REACTION_EMOJIS {
+                    items.push(
+                        Button::new(*emoji)
+                            .label(*emoji)
+                            .tooltip(*emoji)
+                            .small()
+                            .ghost()
+                            .on_click({
+                                let emoji = *emoji;
+                                let id = *id;
+                                cx.listener(move |this, _event, window, cx| {
+                                    this.send_reaction(emoji, &id, window, cx);
+                                })
+                            }),
+                    );
+                }
+
+                items
+            })
+            .child(div().flex_shrink_0().h_4().w_px().bg(cx.theme().border))
             .child(
                 Button::new("reply")
                     .icon(IconName::Reply)
@@ -1305,7 +1471,7 @@ impl ChatPanel {
                                 .gap_1()
                                 .text_xs()
                                 .text_color(cx.theme().text_muted)
-                                .child(SharedString::from("Replying to:"))
+                                .child("Replying to:")
                                 .child(
                                     div()
                                         .text_color(cx.theme().text_accent)
@@ -1402,15 +1568,10 @@ impl ChatPanel {
             .ghost()
             .large()
             .dropdown_menu_with_anchor(gpui::Anchor::BottomLeft, move |this, _window, _cx| {
-                this.horizontal()
-                    .menu("👍", Box::new(Command::Insert("👍")))
-                    .menu("👎", Box::new(Command::Insert("👎")))
-                    .menu("😄", Box::new(Command::Insert("😄")))
-                    .menu("🎉", Box::new(Command::Insert("🎉")))
-                    .menu("😕", Box::new(Command::Insert("😕")))
-                    .menu("❤️", Box::new(Command::Insert("❤️")))
-                    .menu("🚀", Box::new(Command::Insert("🚀")))
-                    .menu("👀", Box::new(Command::Insert("👀")))
+                let menu = this.horizontal();
+                REACTION_EMOJIS.iter().fold(menu, |this, emoji| {
+                    this.menu(*emoji, Box::new(Command::Insert(emoji)))
+                })
             })
     }
 }
