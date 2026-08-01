@@ -164,9 +164,7 @@ impl RenderOnce for RoomEntry {
                                 )
                                 .on_cancel(move |_event, window, cx| {
                                     window.dispatch_action(Box::new(ClosePanel), cx);
-                                    // Prevent closing the modal on click
-                                    // modal will be automatically closed after closing panel
-                                    false
+                                    true
                                 })
                         });
                     }

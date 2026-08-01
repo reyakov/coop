@@ -15,4 +15,3 @@ anyhow.workspace = true
 smallvec.workspace = true
 flume.workspace = true
 log.workspace = true
-urlencoding = "2.1.3"

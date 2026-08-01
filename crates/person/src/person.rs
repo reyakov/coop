@@ -5,8 +5,6 @@ use gpui::SharedString;
 use nostr_sdk::prelude::*;
 use state::Announcement;
 
-const IMAGE_RESIZER: &str = "https://wsrv.nl";
-
 /// Person
 #[derive(Debug, Clone)]
 pub struct Person {
@@ -111,13 +109,7 @@ impl Person {
             .picture
             .as_ref()
             .filter(|picture| !picture.is_empty())
-            .map(|picture| {
-                let encoded_picture = urlencoding::encode(picture);
-                let url = format!(
-                    "{IMAGE_RESIZER}/?url={encoded_picture}&w=100&h=100&fit=cover&mask=circle&n=-1"
-                );
-                url.into()
-            })
+            .map(|picture| picture.into())
             .unwrap_or_else(|| "brand/avatar.png".into())
     }
 

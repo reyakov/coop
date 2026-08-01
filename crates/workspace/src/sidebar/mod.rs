@@ -354,6 +354,14 @@ impl Sidebar {
             cx.notify();
         });
         self.new_requests = false;
+
+        // Reset search state when switching to inbox/requests
+        self.reset(window, cx);
+
+        // Clear the find input value
+        self.find_input.update(cx, |this, cx| {
+            this.set_value("", window, cx);
+        });
     }
 
     fn render_list_items(

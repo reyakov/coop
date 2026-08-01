@@ -183,12 +183,10 @@ impl RenderOnce for Tab {
             .items_center()
             .flex_shrink_0()
             .h(TABBAR_HEIGHT)
+            .relative()
             .overflow_hidden()
             .text_color(fg)
             .text_sm()
-            .when(!self.selected && !self.disabled, |this| {
-                this.hover(|this| this.text_color(cx.theme().secondary_foreground))
-            })
             .when_some(self.prefix, |this, prefix| this.child(prefix))
             .child(
                 h_flex()
@@ -222,5 +220,21 @@ impl RenderOnce for Tab {
                     this.on_click(move |event, window, cx| on_click(event, window, cx))
                 })
             })
+            .child(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .h_0p5()
+                    .when(self.selected && !self.disabled, |this| {
+                        this.bg(cx.theme().element_active)
+                    })
+                    .when(!self.selected && !self.disabled, |this| {
+                        this.invisible().group_hover("", |this| {
+                            this.visible().bg(cx.theme().secondary_background)
+                        })
+                    }),
+            )
     }
 }

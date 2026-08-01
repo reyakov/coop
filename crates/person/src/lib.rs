@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
-use instant::Duration;
 
 use anyhow::{Error, anyhow};
 use common::EventExt;
 use gpui::{App, AppContext, Context, Entity, Global, Task, Window};
+use instant::Duration;
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use state::{Announcement, BOOTSTRAP_RELAYS, NostrRegistry, TIMEOUT};

@@ -51,7 +51,7 @@ impl Render for DragPanel {
             .overflow_hidden()
             .whitespace_nowrap()
             .rounded(cx.theme().radius)
-            .text_xs()
+            .text_sm()
             .text_color(cx.theme().text)
             .text_ellipsis()
             .when(cx.theme().shadow, |this| this.shadow_xs())
@@ -312,6 +312,7 @@ impl TabPanel {
 
         cx.emit(PanelEvent::ZoomOut);
         cx.emit(PanelEvent::LayoutChanged);
+        cx.notify();
     }
 
     fn detach_panel(
@@ -321,10 +322,22 @@ impl TabPanel {
         cx: &mut Context<Self>,
     ) {
         let panel_view = panel.view();
+        let removed_ix = self.panels.iter().position(|p| p.view() == panel_view);
         self.panels.retain(|p| p.view() != panel_view);
 
         if self.active_ix >= self.panels.len() {
             self.set_active_ix(self.panels.len().saturating_sub(1), window, cx)
+        } else if let Some(removed_ix) = removed_ix {
+            if removed_ix < self.active_ix {
+                self.active_ix = self.active_ix.saturating_sub(1);
+            } else if removed_ix == self.active_ix {
+                // The active panel was removed and another panel shifted into
+                // its position. Activate the new panel at the same index.
+                if let Some(new_active) = self.panels.get(self.active_ix) {
+                    new_active.set_active(true, cx);
+                }
+                self.focus_active_panel(window, cx);
+            }
         }
     }
 
@@ -613,7 +626,7 @@ impl TabPanel {
                             div()
                                 .w_full()
                                 .text_ellipsis()
-                                .text_xs()
+                                .text_sm()
                                 .child(panel.title(cx)),
                         )
                         .when(state.draggable, |this| {
@@ -687,8 +700,8 @@ impl TabPanel {
                                 .on_click(cx.listener({
                                     let panel = panel.clone();
                                     move |view, _ev, window, cx| {
+                                        cx.stop_propagation();
                                         view.remove_panel(&panel, window, cx);
-                                        view.set_active_ix(ix, window, cx);
                                     }
                                 })),
                         )

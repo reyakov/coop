@@ -16,7 +16,7 @@ use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::indicator::Indicator;
-use ui::{Icon, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::{Disableable, Icon, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 pub fn init(public_key: PublicKey, window: &mut Window, cx: &mut App) -> Entity<Screening> {
     cx.new(|cx| Screening::new(public_key, window, cx))
@@ -263,7 +263,7 @@ impl Screening {
             let contacts = contacts.clone();
             let total = contacts.len();
 
-            this.title(SharedString::from("Mutual contacts")).child(
+            this.title("Mutual contacts").child(
                 v_flex().gap_1().pb_2().child(
                     uniform_list("contacts", total, move |range, _window, cx| {
                         let persons = PersonRegistry::global(cx);
@@ -342,7 +342,7 @@ impl Render for Screening {
                             .h_7()
                             .justify_center()
                             .rounded_full()
-                            .bg(cx.theme().surface_background)
+                            .bg(cx.theme().elevated_surface_background)
                             .text_sm()
                             .truncate()
                             .text_ellipsis()
@@ -355,7 +355,8 @@ impl Render for Screening {
                             .gap_1()
                             .child(
                                 Button::new("njump")
-                                    .label("View on njump.me")
+                                    .icon(IconName::Link)
+                                    .label("njump.me")
                                     .secondary()
                                     .small()
                                     .rounded()
@@ -386,21 +387,18 @@ impl Render for Screening {
                             .text_sm()
                             .child(status_badge(Some(self.followed), cx))
                             .child(
-                                v_flex()
-                                    .text_sm()
-                                    .child(SharedString::from("Contact"))
-                                    .child(
-                                        div()
-                                            .line_clamp(1)
-                                            .text_color(cx.theme().text_muted)
-                                            .child({
-                                                if self.followed {
-                                                    SharedString::from(CONTACT)
-                                                } else {
-                                                    SharedString::from(NOT_CONTACT)
-                                                }
-                                            }),
-                                    ),
+                                v_flex().text_sm().child("Contact").child(
+                                    div()
+                                        .line_clamp(1)
+                                        .text_color(cx.theme().text_muted)
+                                        .child({
+                                            if self.followed {
+                                                SharedString::from(CONTACT)
+                                            } else {
+                                                SharedString::from(NOT_CONTACT)
+                                            }
+                                        }),
+                                ),
                             ),
                     )
                     .child(
@@ -415,7 +413,7 @@ impl Render for Screening {
                                     .child(
                                         h_flex()
                                             .gap_0p5()
-                                            .child(SharedString::from("Activity on Public Relays"))
+                                            .child("Activity on Public Relays")
                                             .child(
                                                 Button::new("active")
                                                     .icon(IconName::Info)
@@ -484,25 +482,8 @@ impl Render for Screening {
                             .gap_2()
                             .child(status_badge(Some(mutuals > 0), cx))
                             .child(
-                                v_flex()
+                                h_flex()
                                     .text_sm()
-                                    .child(
-                                        h_flex()
-                                            .gap_0p5()
-                                            .child(SharedString::from("Mutual contacts"))
-                                            .child(
-                                                Button::new("mutuals")
-                                                    .icon(IconName::Info)
-                                                    .xsmall()
-                                                    .ghost()
-                                                    .rounded()
-                                                    .on_click(cx.listener(
-                                                        move |this, _, window, cx| {
-                                                            this.mutual_contacts(window, cx);
-                                                        },
-                                                    )),
-                                            ),
-                                    )
                                     .child(
                                         div()
                                             .line_clamp(1)
@@ -514,6 +495,17 @@ impl Render for Screening {
                                                     SharedString::from(NO_MUTUAL)
                                                 }
                                             }),
+                                    )
+                                    .child(
+                                        Button::new("mutuals")
+                                            .icon(IconName::Info)
+                                            .xsmall()
+                                            .ghost()
+                                            .rounded()
+                                            .disabled(mutuals == 0)
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.mutual_contacts(window, cx);
+                                            })),
                                     ),
                             ),
                     ),

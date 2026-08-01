@@ -1,8 +1,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AbsoluteLength, App, Div, Hsla, ImageSource, Img, InteractiveElement, Interactivity,
-    IntoElement, ParentElement, RenderOnce, StyleRefinement, Styled, StyledImage, Window, div, img,
-    px,
+    IntoElement, ObjectFit, ParentElement, RenderOnce, StyleRefinement, Styled, StyledImage,
+    Window, div, img, px,
 };
 use theme::ActiveTheme;
 
@@ -26,9 +26,7 @@ pub(super) fn avatar_size(size: Size) -> AbsoluteLength {
 /// ```
 /// use ui::{Avatar};
 ///
-/// Avatar::new("path/to/image.png")
-///     .grayscale(true)
-///     .border_color(gpui::red());
+/// Avatar::new("path/to/image.png").grayscale(true).border_color(gpui::red());
 /// ```
 #[derive(IntoElement)]
 pub struct Avatar {
@@ -130,7 +128,7 @@ impl RenderOnce for Avatar {
                 self.image
                     .size(image_size)
                     .rounded_full()
-                    .object_fit(gpui::ObjectFit::Fill)
+                    .object_fit(ObjectFit::Cover)
                     .bg(cx.theme().ghost_element_background)
                     .with_fallback(move || {
                         img("brand/avatar.png")
