@@ -59,7 +59,7 @@ pub fn run() -> Result<(), JsValue> {
             settings::init(window, cx);
 
             // Initialize the nostr client
-            state::init(window, cx);
+            state::init(window, cx, None);
 
             // Initialize person registry
             person::init(window, cx);

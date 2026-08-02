@@ -627,13 +627,7 @@ impl ChatRegistry {
 
     /// Load all rooms from the database.
     pub fn get_rooms(&mut self, cx: &mut Context<Self>) {
-        let nostr = NostrRegistry::global(cx);
-
-        let Some(public_key) = nostr.read(cx).current_user() else {
-            return;
-        };
-
-        let task = self.get_rooms_from_database(public_key, cx);
+        let task = self.get_rooms_task(cx);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
@@ -655,61 +649,53 @@ impl ChatRegistry {
     }
 
     /// Create a task to load rooms from the database
-    fn get_rooms_from_database(
-        &self,
-        public_key: PublicKey,
-        cx: &App,
-    ) -> Task<Result<HashSet<Room>, Error>> {
+    fn get_rooms_task(&self, cx: &App) -> Task<Result<HashSet<Room>, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
 
         cx.background_spawn(async move {
+            let public_key = signer.get_public_key_async().await?;
             let contacts = client
                 .database()
                 .contacts_public_keys(public_key)
                 .await
                 .unwrap_or_default();
 
-            // Query all cached rumor events (works with both old and new cache formats)
             let filter = Filter::new()
                 .kind(Kind::ApplicationSpecificData)
                 .custom_tag(SingleLetterTag::lowercase(Alphabet::K), "14");
-            let events = client.database().query(filter).await?;
 
-            let mut rooms: HashSet<Room> = HashSet::new();
+            let events = client.database().query(filter).await?;
             let mut grouped: HashMap<u64, Vec<UnsignedEvent>> = HashMap::new();
 
             for raw in events.into_iter() {
                 if let Ok(rumor) = UnsignedEvent::from_json(&raw.content)
-                    && rumor.tags.public_keys().peekable().peek().is_some()
+                    && rumor.tags.public_keys().next().is_some()
                 {
+                    if rumor.pubkey != public_key
+                        && !rumor.tags.public_keys().any(|k| k == public_key)
+                    {
+                        continue;
+                    }
                     grouped.entry(rumor.uniq_id()).or_default().push(rumor);
                 }
             }
 
-            for (_id, mut messages) in grouped.into_iter() {
-                messages.sort_by_key(|m| Reverse(m.created_at));
+            let mut rooms = HashSet::with_capacity(grouped.len());
 
-                // Always use the latest message
-                let Some(latest) = messages.first() else {
-                    continue;
-                };
+            for (_id, messages) in grouped.into_iter() {
+                let latest = messages.iter().max_by_key(|m| m.created_at).unwrap();
+                let room = Room::from(latest).organize(&public_key);
 
-                // Construct the room from the latest message.
-                //
-                // Call `.organize` to ensure the current user is at the end of the list.
-                let mut room = Room::from(latest).organize(&public_key);
-
-                // Check if the user has responded to the room
                 let user_sent = messages.iter().any(|m| m.pubkey == public_key);
-
-                // Check if public keys are from the user's contacts
                 let is_contact = room.members.iter().any(|k| contacts.contains(k));
 
-                // Set the room's kind based on status
-                if user_sent || is_contact {
-                    room = room.kind(RoomKind::Ongoing);
-                }
+                let room = if user_sent || is_contact {
+                    room.kind(RoomKind::Ongoing)
+                } else {
+                    room
+                };
 
                 rooms.insert(room);
             }

@@ -24,7 +24,7 @@ pub use nip4e::*;
 pub use nip05::*;
 pub use signer::{CoopAuthUrlHandler, UniversalSigner};
 
-pub fn init(window: &mut Window, cx: &mut App) {
+pub fn init(window: &mut Window, cx: &mut App, cli_key: Option<SecretKey>) {
     // rustls uses the `aws_lc_rs` provider by default
     // This only errors if the default provider has already
     // been installed. We can ignore this `Result`.
@@ -37,7 +37,7 @@ pub fn init(window: &mut Window, cx: &mut App) {
     #[cfg(not(target_arch = "wasm32"))]
     gpui_tokio::init(cx);
 
-    NostrRegistry::set_global(cx.new(|cx| NostrRegistry::new(window, cx)), cx);
+    NostrRegistry::set_global(cx.new(|cx| NostrRegistry::new(window, cx, cli_key)), cx);
 }
 
 struct GlobalNostrRegistry(Entity<NostrRegistry>);
@@ -58,15 +58,15 @@ pub enum StateEvent {
 }
 
 impl StateEvent {
+    pub fn signer_changed(&self) -> bool {
+        matches!(self, StateEvent::SignerChanged)
+    }
+
     pub fn error<T>(error: T) -> Self
     where
         T: Into<String>,
     {
         Self::Error(error.into())
-    }
-
-    pub fn signer_changed(&self) -> bool {
-        matches!(self, StateEvent::SignerChanged)
     }
 }
 
@@ -100,7 +100,7 @@ impl NostrRegistry {
     }
 
     /// Create a new nostr instance
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(window: &mut Window, cx: &mut Context<Self>, cli_key: Option<SecretKey>) -> Self {
         let signer = UniversalSigner::new(Keys::generate());
         let authenticator = SignerAuthenticator::new(signer.clone());
 
@@ -133,6 +133,10 @@ impl NostrRegistry {
 
             if cfg!(target_arch = "wasm32") {
                 cx.emit(StateEvent::NoSigner);
+            } else if let Some(secret) = cli_key {
+                // Use CLI-provided key -- same path as get_user_credential
+                let keys = Keys::new(secret);
+                this.set_signer(keys, cx);
             } else {
                 this.get_user_credential(cx);
             }
