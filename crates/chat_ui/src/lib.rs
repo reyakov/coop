@@ -11,8 +11,9 @@ use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, MouseButton,
     ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, SharedUri,
-    StatefulInteractiveElement, Styled, StyledImage, Subscription, Task, WeakEntity, Window, div,
-    img, list, px, red, relative, svg, white,
+    StatefulInteractiveElement, Styled, StyledImage, Subscription, SystemNotification,
+    SystemNotificationAction, Task, WeakEntity, Window, div, img, list, px, red, relative, svg,
+    white,
 };
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
@@ -275,30 +276,44 @@ impl ChatPanel {
 
     /// Subscribe to room events
     fn subscribe_room_events(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(room) = self.room.upgrade() {
-            self.subscriptions.push(cx.subscribe_in(
-                &room,
-                window,
-                move |this, _room, event, window, cx| {
-                    match event {
-                        RoomEvent::Incoming(message) => {
-                            if message.rumor.kind == Kind::Reaction {
-                                this.insert_reaction(&message.rumor, cx);
-                            } else {
-                                this.insert_message(message, false, cx);
+        let Some(room) = self.room.upgrade() else {
+            return;
+        };
+
+        self.subscriptions.push(cx.subscribe_in(
+            &room,
+            window,
+            move |this, _room, event, window, cx| {
+                match event {
+                    RoomEvent::Incoming(message) => {
+                        if message.rumor.kind == Kind::Reaction {
+                            this.insert_reaction(&message.rumor, cx);
+                        } else {
+                            this.insert_message(message, false, cx);
+
+                            if !window.is_window_active() {
+                                cx.show_system_notification(SystemNotification {
+                                    tag: "message".into(),
+                                    title: "New Message".into(),
+                                    body: "You have a new message.".into(),
+                                    actions: vec![SystemNotificationAction {
+                                        id: "open".into(),
+                                        label: "Open".into(),
+                                    }],
+                                });
                             }
                         }
-                        RoomEvent::Reload => {
-                            // Defer to avoid re-entrant read on Room while
-                            // emit_refresh holds a write lock (via refresh_rooms).
-                            cx.defer_in(window, |this, window, cx| {
-                                this.get_messages(window, cx);
-                            });
-                        }
-                    };
-                },
-            ));
-        }
+                    }
+                    RoomEvent::Reload => {
+                        // Defer to avoid re-entrant read on Room while
+                        // emit_refresh holds a write lock (via refresh_rooms).
+                        cx.defer_in(window, |this, window, cx| {
+                            this.get_messages(window, cx);
+                        });
+                    }
+                };
+            },
+        ));
     }
 
     /// Load all messages belonging to this room

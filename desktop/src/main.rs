@@ -24,6 +24,9 @@ fn main() {
             // Load embedded fonts in assets/fonts
             load_embedded_fonts(cx);
 
+            // Set app identity
+            cx.set_app_identity(APP_ID, CLIENT_NAME);
+
             // Register the `quit` function
             cx.on_action(quit);
 
