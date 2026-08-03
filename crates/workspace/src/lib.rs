@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use ::settings::AppSettings;
 use anyhow::Error;
+use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry};
 use common::{CoopImageCache, download_dir};
 use device::{DeviceEvent, DeviceRegistry};
@@ -44,13 +45,12 @@ struct MsgRelayNotification;
 #[action(namespace = workspace, no_json)]
 enum Command {
     ToggleTheme,
-
+    Update,
     RefreshMessagingRelays,
     BackupEncryption,
     ImportEncryption,
     RefreshEncryption,
     ResetEncryption,
-
     ShowRelayList,
     ShowMessaging,
     ShowProfile,
@@ -379,6 +379,14 @@ impl Workspace {
             Command::ImportEncryption => {
                 self.import_encryption(window, cx);
             }
+            Command::Update => {
+                let auto_updater = AutoUpdater::global(cx);
+                auto_updater.update(cx, |this, cx| {
+                    this.updater.update(cx, |updater, cx| {
+                        updater.check(cx);
+                    });
+                });
+            }
         }
     }
 
@@ -587,6 +595,11 @@ impl Workspace {
                                 )
                                 .separator()
                                 .menu_with_icon(
+                                    "Check for Updates",
+                                    IconName::Device,
+                                    Box::new(Command::Update),
+                                )
+                                .menu_with_icon(
                                     "Settings",
                                     IconName::Settings,
                                     Box::new(Command::ShowSettings),
@@ -597,6 +610,7 @@ impl Workspace {
     }
 
     fn titlebar_right(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let updater = AutoUpdater::global(cx);
         let chat = ChatRegistry::global(cx);
         let nip4e_enabled = AppSettings::get_nip4e(cx);
         let nostr = NostrRegistry::global(cx);
@@ -608,10 +622,15 @@ impl Workspace {
         let persons = PersonRegistry::global(cx);
         let profile = persons.read(cx).get(&public_key, cx);
         let announcement = profile.announcement();
+        let updater_idle = updater.read(cx).idle(cx);
 
         h_flex()
             .when(!cx.theme().platform.is_mac(), |this| this.pr_2())
             .gap_2()
+            .when(!updater_idle, |this| {
+                let status = updater.read(cx).status(cx);
+                this.child(div().text_xs().italic().child(status))
+            })
             .when(nip4e_enabled, |this| {
                 this.child(
                     Button::new("key")
