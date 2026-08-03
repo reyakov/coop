@@ -10,7 +10,7 @@ use state::{CoopAuthUrlHandler, NostrRegistry, USER_KEYRING};
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::input::{Input, InputEvent, InputState};
-use ui::{Disableable, StyledExt, WindowExtension, v_flex};
+use ui::{Disableable, StyledExt, WindowExtension, divider, v_flex};
 
 #[derive(Debug)]
 pub struct ImportIdentity {
@@ -164,6 +164,14 @@ impl ImportIdentity {
         }));
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn proxy(&mut self, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        nostr.update(cx, |this, cx| {
+            this.connect_proxy(cx);
+        });
+    }
+
     fn set_loading(&mut self, status: bool, cx: &mut Context<Self>) {
         self.loading = status;
         cx.notify();
@@ -199,10 +207,13 @@ impl ImportIdentity {
 
 impl Render for ImportIdentity {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
-        const MSG: &str = "Coop won't store your identity key on the local device. You need to re-login again in the next session. You can use Nostr Connect for persistent login.";
+        const BUNKER_WARN: &str = "Nostr Connect will usually take more time to get all your messages. Please keep your session open until you see all your messages.";
+        const KEY_WARN: &str = "Coop won't store your identity key on the local device. You need to re-login again in the next session. You can use Nostr Connect for persistent login.";
 
+        let is_wasm = cfg!(target_arch = "wasm32");
         let require_password = self.key_input.read(cx).value().starts_with("ncryptsec1");
         let key_warning = self.key_input.read(cx).value().starts_with("nsec1") || require_password;
+        let bunker_warning = self.key_input.read(cx).value().starts_with("bunker://");
 
         v_flex()
             .size_full()
@@ -227,13 +238,20 @@ impl Render for ImportIdentity {
                                 .child(Input::new(&self.pass_input)),
                         )
                     })
+                    .when(bunker_warning, |this| {
+                        this.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().text_warning)
+                                .child(div().child(BUNKER_WARN)),
+                        )
+                    })
                     .when(key_warning, |this| {
                         this.child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().text_warning)
-                                .child(div().font_semibold().child("Warning"))
-                                .child(div().child(MSG)),
+                                .child(div().child(KEY_WARN)),
                         )
                     }),
             )
@@ -248,6 +266,19 @@ impl Render for ImportIdentity {
                         this.login(window, cx);
                     })),
             )
+            .child(divider(cx))
+            .when(!is_wasm, |this| {
+                this.child(
+                    Button::new("proxy")
+                        .label("Connect via Web Extension (Experimental)")
+                        .ghost_alt()
+                        .loading(self.loading)
+                        .disabled(self.loading)
+                        .on_click(cx.listener(move |this, _ev, _window, cx| {
+                            this.proxy(cx);
+                        })),
+                )
+            })
             .when_some(self.error.read(cx).as_ref(), |this, error| {
                 this.child(
                     div()

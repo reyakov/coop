@@ -494,6 +494,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c59bdb34bc650a32731b31bd8f0829cc15d24a708ee31559e0bb34f2bc320cba"
 
 [[package]]
+name = "atomic-destructor"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d919cb60ba95c87ba42777e9e246c4e8d658057299b437b7512531ce0a09a23"
+
+[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -837,6 +843,21 @@ checksum = "a88b7ea17d208c4193f2c1e6de3c35fe71f98c96982d5ced308bdcc749ff6e1f"
 dependencies = [
  "bytes",
  "cfg_aliases",
+]
+
+[[package]]
+name = "browser-signer-proxy"
+version = "0.1.0"
+dependencies = [
+ "atomic-destructor",
+ "event-listener",
+ "nostr",
+ "opaquerr",
+ "serde",
+ "serde_json",
+ "smol",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -4206,7 +4227,7 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 [[package]]
 name = "nostr"
 version = "0.45.0-alpha.8"
-source = "git+https://github.com/rust-nostr/nostr#83cb556fa59259eb30f3df63f153f42aab77519b"
+source = "git+https://github.com/rust-nostr/nostr#d0a1d67d3c9e5cf9710807a6a414c155a5f47215"
 dependencies = [
  "aes",
  "base64",
@@ -4231,7 +4252,7 @@ dependencies = [
 [[package]]
 name = "nostr-blossom"
 version = "0.45.0-alpha.8"
-source = "git+https://github.com/rust-nostr/nostr#83cb556fa59259eb30f3df63f153f42aab77519b"
+source = "git+https://github.com/rust-nostr/nostr#d0a1d67d3c9e5cf9710807a6a414c155a5f47215"
 dependencies = [
  "base64",
  "bitcoin_hashes",
@@ -4244,7 +4265,7 @@ dependencies = [
 [[package]]
 name = "nostr-connect"
 version = "0.45.0-alpha.8"
-source = "git+https://github.com/rust-nostr/nostr#83cb556fa59259eb30f3df63f153f42aab77519b"
+source = "git+https://github.com/rust-nostr/nostr#d0a1d67d3c9e5cf9710807a6a414c155a5f47215"
 dependencies = [
  "async-utility",
  "futures-core",
@@ -4258,7 +4279,7 @@ dependencies = [
 [[package]]
 name = "nostr-database"
 version = "0.45.0-alpha.8"
-source = "git+https://github.com/rust-nostr/nostr#83cb556fa59259eb30f3df63f153f42aab77519b"
+source = "git+https://github.com/rust-nostr/nostr#d0a1d67d3c9e5cf9710807a6a414c155a5f47215"
 dependencies = [
  "btreecap",
  "flatbuffers",
@@ -4269,7 +4290,7 @@ dependencies = [
 [[package]]
 name = "nostr-gossip"
 version = "0.45.0-alpha.8"
-source = "git+https://github.com/rust-nostr/nostr#83cb556fa59259eb30f3df63f153f42aab77519b"
+source = "git+https://github.com/rust-nostr/nostr#d0a1d67d3c9e5cf9710807a6a414c155a5f47215"
 dependencies = [
  "nostr",
  "opaquerr",
@@ -4278,7 +4299,7 @@ dependencies = [
 [[package]]
 name = "nostr-gossip-memory"
 version = "0.45.0-alpha.8"
-source = "git+https://github.com/rust-nostr/nostr#83cb556fa59259eb30f3df63f153f42aab77519b"
+source = "git+https://github.com/rust-nostr/nostr#d0a1d67d3c9e5cf9710807a6a414c155a5f47215"
 dependencies = [
  "indexmap",
  "lru",
@@ -4290,7 +4311,7 @@ dependencies = [
 [[package]]
 name = "nostr-lmdb"
 version = "0.45.0-alpha.8"
-source = "git+https://github.com/rust-nostr/nostr#83cb556fa59259eb30f3df63f153f42aab77519b"
+source = "git+https://github.com/rust-nostr/nostr#d0a1d67d3c9e5cf9710807a6a414c155a5f47215"
 dependencies = [
  "async-utility",
  "flume 0.12.0",
@@ -4304,7 +4325,7 @@ dependencies = [
 [[package]]
 name = "nostr-memory"
 version = "0.45.0-alpha.8"
-source = "git+https://github.com/rust-nostr/nostr#83cb556fa59259eb30f3df63f153f42aab77519b"
+source = "git+https://github.com/rust-nostr/nostr#d0a1d67d3c9e5cf9710807a6a414c155a5f47215"
 dependencies = [
  "btreecap",
  "nostr",
@@ -4315,7 +4336,7 @@ dependencies = [
 [[package]]
 name = "nostr-sdk"
 version = "0.45.0-alpha.8"
-source = "git+https://github.com/rust-nostr/nostr#83cb556fa59259eb30f3df63f153f42aab77519b"
+source = "git+https://github.com/rust-nostr/nostr#d0a1d67d3c9e5cf9710807a6a414c155a5f47215"
 dependencies = [
  "async-utility",
  "async-wsocket",
@@ -6682,6 +6703,7 @@ name = "state"
 version = "1.0.0-beta5"
 dependencies = [
  "anyhow",
+ "browser-signer-proxy",
  "common",
  "flume 0.11.1",
  "futures",
@@ -9003,6 +9025,7 @@ name = "workspace"
 version = "1.0.0-beta5"
 dependencies = [
  "anyhow",
+ "browser-signer-proxy",
  "chat",
  "chat_ui",
  "common",

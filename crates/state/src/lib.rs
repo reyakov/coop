@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 
 use anyhow::{Error, anyhow};
+#[cfg(not(target_arch = "wasm32"))]
+use browser_signer_proxy::prelude::*;
 use common::config_dir;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Task, Window};
+use gpui_tokio::Tokio;
 use instant::Duration;
 use nostr_connect::prelude::*;
 use nostr_gossip_memory::prelude::*;
@@ -262,6 +265,11 @@ impl NostrRegistry {
                             this.set_signer(signer, cx);
                             cx.notify();
                         })?;
+                    } else if content == "proxy" {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        this.update(cx, |this, cx| {
+                            this.connect_proxy(cx);
+                        })?;
                     }
                 }
                 _ => {
@@ -305,6 +313,81 @@ impl NostrRegistry {
 
             keys
         })
+    }
+
+    /// Start the browser proxy
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn connect_proxy(&mut self, cx: &mut Context<Self>) {
+        let proxy = BrowserSignerProxy::new(BrowserSignerProxyOptions::default());
+        let (tx, rx) = flume::bounded::<String>(1);
+
+        self.tasks.push(Tokio::spawn_result(cx, {
+            let proxy = proxy.clone();
+            async move {
+                // Start the proxy and get the web url
+                proxy.start().await?;
+                // Notify GPUI
+                let url = proxy.url();
+                tx.send(url).ok();
+                Ok(())
+            }
+        }));
+
+        self.tasks.push(Tokio::spawn_result(cx, {
+            let proxy = proxy.clone();
+            async move {
+                loop {
+                    if proxy.is_session_active() {
+                        break;
+                    }
+                    smol::Timer::after(Duration::from_secs(1)).await;
+                }
+                Ok(())
+            }
+        }));
+
+        self.tasks.push(cx.spawn({
+            let proxy = proxy.clone();
+            async move |this, cx| {
+                while let Ok(url) = rx.recv_async().await {
+                    this.update(cx, |this, cx| {
+                        let save = cx.write_credentials(USER_KEYRING, "proxy", b"proxy");
+                        cx.background_spawn(async move { save.await.ok() }).detach();
+                        cx.open_url(&url);
+                        this.set_signer(proxy.clone(), cx);
+                    })?;
+                }
+                Ok(())
+            }
+        }));
+
+        // Monitor the session, if the browser disconnects, notify user to reconnect
+        self.tasks.push(cx.spawn({
+            let proxy = proxy.clone();
+            let executor = cx.background_executor().clone();
+            async move |this, cx| {
+                // Wait for the signer to be confirmed (timeout is 30s)
+                executor.timer(Duration::from_secs(30)).await;
+
+                loop {
+                    executor.timer(Duration::from_secs(5)).await;
+                    if !proxy.is_session_active() {
+                        _ = this.update(cx, |this, cx| {
+                            // Only notify if this proxy is still the active signer
+                            if this.current_user.is_some() {
+                                this.signer.swap_inner(Keys::generate());
+                                this.current_user = None;
+                                cx.emit(StateEvent::NoSigner);
+                                cx.notify();
+                            }
+                        });
+                        break;
+                    }
+                }
+
+                Ok(())
+            }
+        }));
     }
 
     /// Get the public key of a NIP-05 address
