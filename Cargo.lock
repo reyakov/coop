@@ -282,7 +282,7 @@ dependencies = [
 
 [[package]]
 name = "assets"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -544,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "auto_update"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "gpui",
  "gpui-updater",
@@ -1065,7 +1065,7 @@ dependencies = [
 
 [[package]]
 name = "chat"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "common",
@@ -1087,7 +1087,7 @@ dependencies = [
 
 [[package]]
 name = "chat_ui"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chat",
@@ -1271,7 +1271,7 @@ dependencies = [
 
 [[package]]
 name = "common"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
@@ -1399,7 +1399,7 @@ dependencies = [
 
 [[package]]
 name = "coop"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "assets",
  "auto_update",
@@ -1425,7 +1425,7 @@ dependencies = [
 
 [[package]]
 name = "coop_web"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "assets",
  "chat",
@@ -1769,7 +1769,7 @@ dependencies = [
 
 [[package]]
 name = "device"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "common",
@@ -5000,7 +5000,7 @@ dependencies = [
 
 [[package]]
 name = "person"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "common",
@@ -6466,7 +6466,7 @@ dependencies = [
 
 [[package]]
 name = "settings"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "common",
@@ -6744,7 +6744,7 @@ dependencies = [
 
 [[package]]
 name = "state"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "browser-signer-proxy",
@@ -7095,7 +7095,7 @@ dependencies = [
 
 [[package]]
 name = "theme"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "gpui",
@@ -7644,7 +7644,7 @@ dependencies = [
 
 [[package]]
 name = "ui"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "common",
@@ -9114,7 +9114,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "workspace"
-version = "1.0.0-beta5"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "auto_update",

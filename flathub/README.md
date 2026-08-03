@@ -55,8 +55,8 @@ flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo
 
 Ensure you have:
 - [ ] Committed all changes
-- [ ] Tagged the release: `git tag -a v1.0.0-beta2 -m "Release v1.0.0-beta2"`
-- [ ] Pushed the tag: `git push origin v1.0.0-beta2`
+- [ ] Tagged the release: `git tag -a v1.0.0 -m "Release v1.0.0"`
+- [ ] Pushed the tag: `git push origin v1.0.0`
 - [ ] Run `./script/prepare-flathub.sh` to regenerate files
 
 ### 2. Fork and Submit
@@ -101,8 +101,8 @@ git push origin su.reya.coop
 To release a new version:
 
 1. Update version in workspace `Cargo.toml`
-2. Tag the new release: `git tag -a v1.0.0-beta3 -m "Release v1.0.0-beta3"`
-3. Push the tag: `git push origin v1.0.0-beta3`
+2. Tag the new release: `git tag -a v1.0.0 -m "Release v1.0.0"`
+3. Push the tag: `git push origin v1.0.0`
 4. Run `./script/prepare-flathub.sh` to regenerate
 5. Clone the flathub repo: `git clone https://github.com/flathub/su.reya.coop.git`
 6. Update the manifest with new commit/tag and hashes
