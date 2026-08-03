@@ -1,0 +1,51 @@
+[package]
+name = "coop"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "coop"
+path = "src/main.rs"
+
+[package.metadata.packager]
+name = "Coop"
+product-name = "Coop"
+description = "Chat Freely, Stay Private on Nostr"
+identifier = "su.reya.coop"
+category = "SocialNetworking"
+version = "1.0.0-beta5"
+out-dir = "../dist"
+before-packaging-command = "cargo build --release"
+resources = ["Cargo.toml", "src"]
+icons = [
+    "resources/32x32.png",
+    "resources/128x128.png",
+    "resources/128x128@2x.png",
+    "resources/icon.icns",
+    "resources/icon.ico",
+]
+
+[dependencies]
+assets = { path = "../crates/assets" }
+workspace = { path = "../crates/workspace" }
+ui = { path = "../crates/ui" }
+theme = { path = "../crates/theme" }
+common = { path = "../crates/common" }
+state = { path = "../crates/state" }
+device = { path = "../crates/device" }
+chat = { path = "../crates/chat" }
+settings = { path = "../crates/settings" }
+auto_update = { path = "../crates/auto_update" }
+person = { path = "../crates/person" }
+
+gpui.workspace = true
+gpui_platform.workspace = true
+gpui_linux.workspace = true
+gpui_windows.workspace = true
+gpui_macos.workspace = true
+reqwest_client.workspace = true
+
+log.workspace = true
+tracing-subscriber.workspace = true
+nostr-sdk.workspace = true
