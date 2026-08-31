@@ -8929,7 +8929,6 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "auto_update",
- "browser-signer-proxy",
  "chat",
  "chat_ui",
  "common",

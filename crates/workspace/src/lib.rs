@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use ::settings::AppSettings;
 use anyhow::Error;
+#[cfg(not(target_arch = "wasm32"))]
 use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry};
 use common::{CoopImageCache, download_dir};
@@ -379,6 +380,7 @@ impl Workspace {
             Command::ImportEncryption => {
                 self.import_encryption(window, cx);
             }
+            #[cfg(not(target_arch = "wasm32"))]
             Command::Update => {
                 let auto_updater = AutoUpdater::global(cx);
                 auto_updater.update(cx, |this, cx| {
@@ -387,6 +389,9 @@ impl Workspace {
                     });
                 });
             }
+            // Auto-update is a desktop-only feature; no-op in the browser.
+            #[cfg(target_arch = "wasm32")]
+            Command::Update => {}
         }
     }
 
@@ -563,7 +568,8 @@ impl Workspace {
                             let avatar = avatar.clone();
                             let name = name.clone();
 
-                            this.min_w(px(256.))
+                            let menu = this
+                                .min_w(px(256.))
                                 .item(PopupMenuItem::element(move |_window, cx| {
                                     h_flex()
                                         .gap_1p5()
@@ -593,24 +599,27 @@ impl Workspace {
                                     IconName::Sun,
                                     Box::new(Command::ToggleTheme),
                                 )
-                                .separator()
-                                .menu_with_icon(
-                                    "Check for Updates",
-                                    IconName::Device,
-                                    Box::new(Command::Update),
-                                )
-                                .menu_with_icon(
-                                    "Settings",
-                                    IconName::Settings,
-                                    Box::new(Command::ShowSettings),
-                                )
+                                .separator();
+
+                            // Auto-update is a desktop-only feature; there is no updater in the browser.
+                            #[cfg(not(target_arch = "wasm32"))]
+                            let menu = menu.menu_with_icon(
+                                "Check for Updates",
+                                IconName::Device,
+                                Box::new(Command::Update),
+                            );
+
+                            menu.menu_with_icon(
+                                "Settings",
+                                IconName::Settings,
+                                Box::new(Command::ShowSettings),
+                            )
                         }),
                 )
             })
     }
 
     fn titlebar_right(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let updater = AutoUpdater::global(cx);
         let chat = ChatRegistry::global(cx);
         let nip4e_enabled = AppSettings::get_nip4e(cx);
         let nostr = NostrRegistry::global(cx);
@@ -622,15 +631,23 @@ impl Workspace {
         let persons = PersonRegistry::global(cx);
         let profile = persons.read(cx).get(&public_key, cx);
         let announcement = profile.announcement();
-        let updater_idle = updater.read(cx).idle(cx);
 
-        h_flex()
+        let titlebar = h_flex()
             .when(!cx.theme().platform.is_mac(), |this| this.pr_2())
-            .gap_2()
-            .when(!updater_idle, |this| {
+            .gap_2();
+
+        // Auto-update is a desktop-only feature; there is no updater in the browser.
+        #[cfg(not(target_arch = "wasm32"))]
+        let titlebar = {
+            let updater = AutoUpdater::global(cx);
+            let updater_idle = updater.read(cx).idle(cx);
+            titlebar.when(!updater_idle, |this| {
                 let status = updater.read(cx).status(cx);
                 this.child(div().text_xs().italic().child(status))
             })
+        };
+
+        titlebar
             .when(nip4e_enabled, |this| {
                 this.child(
                     Button::new("key")

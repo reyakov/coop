@@ -14,15 +14,16 @@ chat = { path = "../chat" }
 chat_ui = { path = "../chat_ui" }
 settings = { path = "../settings" }
 person = { path = "../person" }
-auto_update = { path = "../auto_update" }
 
 gpui.workspace = true
 nostr-sdk.workspace = true
 instant.workspace = true
 nostr-connect.workspace = true
-browser-signer-proxy = { path = "../browser-signer-proxy" }
 
 anyhow.workspace = true
 serde.workspace = true
 log.workspace = true
 smallvec.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+auto_update = { path = "../auto_update" }

@@ -172,6 +172,11 @@ impl ImportIdentity {
         });
     }
 
+    // The "Connect via Web Extension" button is hidden on wasm (`is_wasm`),
+    // so this stub is never invoked in the browser.
+    #[cfg(target_arch = "wasm32")]
+    fn proxy(&mut self, _cx: &mut Context<Self>) {}
+
     fn set_loading(&mut self, status: bool, cx: &mut Context<Self>) {
         self.loading = status;
         cx.notify();
@@ -266,7 +271,7 @@ impl Render for ImportIdentity {
                         this.login(window, cx);
                     })),
             )
-            .child(divider(cx))
+            .when(cfg!(target_arch = "wasm32"), |this| this.child(divider(cx)))
             .when(!is_wasm, |this| {
                 this.child(
                     Button::new("proxy")

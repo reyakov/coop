@@ -3,8 +3,10 @@ use std::collections::HashMap;
 use anyhow::{Error, anyhow};
 #[cfg(not(target_arch = "wasm32"))]
 use browser_signer_proxy::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
 use common::config_dir;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Task, Window};
+#[cfg(not(target_arch = "wasm32"))]
 use gpui_tokio::Tokio;
 use instant::Duration;
 use nostr_connect::prelude::*;

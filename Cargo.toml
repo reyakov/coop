@@ -43,7 +43,6 @@ smallvec = "1.14.0"
 smol = "2"
 webbrowser = "1.0.4"
 tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
-errno = { version = "0.3.14", default-features = false }
 instant = "0.1"
 
 [patch.crates-io]
