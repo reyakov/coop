@@ -1,4 +1,8 @@
+use std::borrow::Cow;
+use std::cell::RefCell;
+
 use gpui::*;
+use theme::{Theme, ThemeMode};
 use ui::Root;
 use universal_time::{Instant, MonotonicClock, SystemTime, WallClock, define_time_provider};
 use wasm_bindgen::prelude::*;
@@ -19,8 +23,44 @@ impl MonotonicClock for CustomTimeProvider {
 
 define_time_provider!(CustomTimeProvider);
 
+thread_local! {
+    static APPLICATION: RefCell<Option<ApplicationHandle>> = const { RefCell::new(None) };
+}
+
+/// Applies a theme mode and restores the bundled web fonts.
+///
+/// `Theme::change` reapplies the theme config, which can carry its own font
+/// family; host system fonts are unavailable in wasm, so the bundled Inter
+/// fonts are put back afterwards.
+fn apply_theme(mode: ThemeMode, cx: &mut App) {
+    Theme::change(mode, None, cx);
+    Theme::global_mut(cx).font_family = "Inter".into();
+}
+
+/// Switches the app between light and dark after it is running.
+///
+/// The embedding page calls this to keep the app in sync with its own
+/// appearance.
+#[cfg(target_family = "wasm")]
 #[wasm_bindgen]
-pub fn run() -> Result<(), JsValue> {
+pub fn set_theme(dark: bool) {
+    let mode = if dark {
+        ThemeMode::Dark
+    } else {
+        ThemeMode::Light
+    };
+    APPLICATION.with(|application| {
+        if let Some(handle) = application.borrow().as_ref() {
+            handle.update(|cx| {
+                apply_theme(mode, cx);
+                cx.refresh_windows();
+            });
+        }
+    });
+}
+
+#[wasm_bindgen]
+pub async fn run() -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
 
     // Initialize logging to browser console
@@ -37,16 +77,61 @@ pub fn run() -> Result<(), JsValue> {
 
     #[cfg(target_family = "wasm")]
     let app = {
-        let app = gpui_platform::single_threaded_web();
+        // Assets are not embedded in the WASM bundle; they are served from
+        // the `/assets/...` URL prefix (see `web/www/vite.config.js`) and
+        // downloaded by the `assets` crate.
+        let assets = assets::Assets::new("");
 
-        // Temporary fix: intentionally leak the `Rc<AppCell>` to keep the application alive
-        struct WasmApplication(std::rc::Rc<AppCell>);
-        let wasm_app = unsafe { std::mem::transmute::<Application, WasmApplication>(app) };
-        std::mem::forget(wasm_app.0.clone());
-        unsafe { std::mem::transmute::<WasmApplication, Application>(wasm_app) }
+        // Download every icon and brand asset before the first frame: brand
+        // images are loaded through GPUI's image cache, which does not retry
+        // failed loads, and pre-caching the icons lets them render
+        // immediately instead of waiting for a repaint.
+        assets.preload().await;
+
+        gpui_platform::single_threaded_web().with_assets(assets)
     };
 
-    app.run(|cx| {
+    let launch = move |cx: &mut App| {
+        // Load the embedded Inter font stack for WASM, where host system
+        // fonts are unavailable. Inter is the app's UI font on Linux; the
+        // wasm build reuses it so the web app matches the desktop look.
+        let inter_regular =
+            Cow::Borrowed(include_bytes!("../../assets/fonts/Inter/Inter-Regular.ttf").as_slice());
+        let inter_italic =
+            Cow::Borrowed(include_bytes!("../../assets/fonts/Inter/Inter-Italic.ttf").as_slice());
+        let inter_medium =
+            Cow::Borrowed(include_bytes!("../../assets/fonts/Inter/Inter-Medium.ttf").as_slice());
+        let inter_medium_italic = Cow::Borrowed(
+            include_bytes!("../../assets/fonts/Inter/Inter-MediumItalic.ttf").as_slice(),
+        );
+        let inter_semibold =
+            Cow::Borrowed(include_bytes!("../../assets/fonts/Inter/Inter-SemiBold.ttf").as_slice());
+        let inter_semibold_italic = Cow::Borrowed(
+            include_bytes!("../../assets/fonts/Inter/Inter-SemiBoldItalic.ttf").as_slice(),
+        );
+        let inter_bold =
+            Cow::Borrowed(include_bytes!("../../assets/fonts/Inter/Inter-Bold.ttf").as_slice());
+        let inter_bold_italic = Cow::Borrowed(
+            include_bytes!("../../assets/fonts/Inter/Inter-BoldItalic.ttf").as_slice(),
+        );
+
+        cx.text_system()
+            .add_fonts(vec![
+                inter_regular,
+                inter_italic,
+                inter_medium,
+                inter_medium_italic,
+                inter_semibold,
+                inter_semibold_italic,
+                inter_bold,
+                inter_bold_italic,
+            ])
+            .expect("Failed to load fonts");
+
+        // Apply the system appearance before the first frame, so the app
+        // never flashes the default light theme.
+        apply_theme(cx.window_appearance().into(), cx);
+
         // Open the root window
         cx.open_window(WindowOptions::default(), |window, cx| {
             // Initialize components
@@ -78,7 +163,15 @@ pub fn run() -> Result<(), JsValue> {
         .expect("Failed to open window. Please restart the application.");
 
         cx.activate(true);
+    };
+
+    #[cfg(target_family = "wasm")]
+    APPLICATION.with(|application| {
+        *application.borrow_mut() = Some(app.run_embedded(launch));
     });
+
+    #[cfg(not(target_family = "wasm"))]
+    app.run(launch);
 
     Ok(())
 }

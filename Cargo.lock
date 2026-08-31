@@ -276,9 +276,13 @@ name = "assets"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "futures",
  "gpui",
  "log",
+ "reqwest",
  "rust-embed",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -1450,6 +1454,7 @@ dependencies = [
  "ui",
  "universal-time 0.3.1 (git+https://github.com/shadowylab/universal-time)",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "workspace",
 ]
 

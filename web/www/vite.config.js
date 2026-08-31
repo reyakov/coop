@@ -13,13 +13,17 @@ export default defineConfig({
           src: path.resolve(__dirname, "../../../assets/icons"),
           dest: "assets",
         },
+        {
+          src: path.resolve(__dirname, "../../../assets/brand"),
+          dest: "assets",
+        },
       ],
     }),
     {
       name: "serve-assets",
       configureServer(server) {
         server.middlewares.use(
-          "/coop/assets",
+          "/assets",
           (req, res, next) => {
             const assetsPath = path.resolve(__dirname, "../../../assets");
             const filePath = path.join(
