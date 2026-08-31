@@ -10,11 +10,11 @@ export default defineConfig({
     viteStaticCopy({
       targets: [
         {
-          src: path.resolve(__dirname, "../../../assets/icons"),
+          src: path.resolve(__dirname, "../../assets/icons"),
           dest: "assets",
         },
         {
-          src: path.resolve(__dirname, "../../../assets/brand"),
+          src: path.resolve(__dirname, "../../assets/brand"),
           dest: "assets",
         },
       ],
@@ -25,7 +25,7 @@ export default defineConfig({
         server.middlewares.use(
           "/assets",
           (req, res, next) => {
-            const assetsPath = path.resolve(__dirname, "../../../assets");
+            const assetsPath = path.resolve(__dirname, "../../assets");
             const filePath = path.join(
               assetsPath,
               req.url.replace("/assets", ""),

@@ -1445,6 +1445,7 @@ dependencies = [
  "gpui_platform",
  "gpui_web",
  "instant",
+ "js-sys",
  "log",
  "person",
  "settings",
@@ -1455,6 +1456,7 @@ dependencies = [
  "universal-time 0.3.1 (git+https://github.com/shadowylab/universal-time)",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
  "workspace",
 ]
 
@@ -4982,6 +4984,7 @@ dependencies = [
  "anyhow",
  "common",
  "flume 0.11.1",
+ "futures",
  "gpui",
  "instant",
  "log",

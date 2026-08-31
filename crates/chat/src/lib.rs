@@ -290,33 +290,37 @@ impl ChatRegistry {
 
         self.signal_consumer = Some(cx.spawn(async move |this, cx| {
             while let Ok(message) = rx.recv_async().await {
-                match message {
-                    Signal::Message(message) => {
-                        this.update(cx, |this, cx| {
-                            this.new_message(message, cx);
-                        })?;
+                this.update(cx, |this, cx| {
+                    // Drain the whole queue in a single update so a burst of
+                    // events (e.g. history sync after login) collapses into
+                    // one repaint instead of one per message (important on
+                    // wasm, where everything runs on the main thread).
+                    let mut batch = vec![message];
+                    while let Ok(extra) = rx.try_recv() {
+                        batch.push(extra);
                     }
-                    Signal::InboxReady => {
-                        this.update(cx, |this, cx| {
-                            this.get_messages(cx);
-                        })?;
-                    }
-                    Signal::Eose => {
-                        this.update(cx, |this, _cx| {
-                            this.tracking.store(false, Ordering::Release);
-                        })?;
 
-                        this.update(cx, |this, cx| {
-                            this.get_rooms(cx);
-                        })?;
+                    for message in batch {
+                        match message {
+                            Signal::Message(message) => {
+                                this.new_message(message, cx);
+                            }
+                            Signal::InboxReady => {
+                                this.get_messages(cx);
+                            }
+                            Signal::Eose => {
+                                this.tracking.store(false, Ordering::Release);
+                                this.get_rooms(cx);
+                            }
+                            Signal::Error(failed) => {
+                                let _ = trash.update(cx, |this, cx| {
+                                    this.insert(failed);
+                                    cx.notify();
+                                });
+                            }
+                        };
                     }
-                    Signal::Error(failed) => {
-                        trash.update(cx, |this, cx| {
-                            this.insert(failed);
-                            cx.notify();
-                        })?;
-                    }
-                };
+                })?;
             }
 
             Ok(())

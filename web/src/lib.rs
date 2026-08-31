@@ -11,13 +11,21 @@ struct CustomTimeProvider;
 
 impl WallClock for CustomTimeProvider {
     fn system_time(&self) -> SystemTime {
-        SystemTime::from_unix_duration(instant::Duration::from_secs(0))
+        // Browser wall clock: milliseconds since the Unix epoch.
+        let millis = js_sys::Date::now();
+        SystemTime::from_unix_duration(instant::Duration::from_millis(millis as u64))
     }
 }
 
 impl MonotonicClock for CustomTimeProvider {
     fn instant(&self) -> Instant {
-        Instant::from_ticks(instant::Duration::from_secs(0))
+        // `performance.now()` is monotonic; fall back to the wall clock if
+        // it's unavailable.
+        let millis = web_sys::window()
+            .and_then(|window| window.performance())
+            .map(|performance| performance.now())
+            .unwrap_or_else(js_sys::Date::now);
+        Instant::from_ticks(instant::Duration::from_millis(millis as u64))
     }
 }
 

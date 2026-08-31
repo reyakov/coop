@@ -3,7 +3,8 @@ use std::sync::RwLock;
 
 use anyhow::{Error, anyhow};
 use common::EventExt;
-use gpui::{App, AppContext, Context, Entity, Global, Task, Window};
+use futures::FutureExt;
+use gpui::{App, AppContext, BackgroundExecutor, Context, Entity, Global, Task, Window};
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
@@ -72,24 +73,36 @@ impl PersonRegistry {
         }));
 
         let client3 = client.clone();
+        let executor = cx.background_executor().clone();
         tasks.push(cx.background_spawn(async move {
-            Self::handle_requests(&client3, &metadata_rx).await;
+            Self::handle_requests(&client3, &metadata_rx, &executor).await;
         }));
 
         tasks.push(cx.spawn(async move |this, cx| {
             while let Ok(event) = rx.recv_async().await {
                 this.update(cx, |this, cx| {
-                    match event {
-                        Dispatch::Person(person) => {
-                            this.insert(person, cx);
-                        }
-                        Dispatch::Announcement(event) => {
-                            this.set_announcement(&event, cx);
-                        }
-                        Dispatch::Relays(event) => {
-                            this.set_messaging_relays(&event, cx);
-                        }
-                    };
+                    // Drain the whole queue in a single update so a burst of
+                    // events collapses into one repaint instead of one per
+                    // event (important on wasm, where everything runs on the
+                    // main thread).
+                    let mut dispatch = vec![event];
+                    while let Ok(extra) = rx.try_recv() {
+                        dispatch.push(extra);
+                    }
+
+                    for event in dispatch {
+                        match event {
+                            Dispatch::Person(person) => {
+                                this.insert(person, cx);
+                            }
+                            Dispatch::Announcement(event) => {
+                                this.set_announcement(&event, cx);
+                            }
+                            Dispatch::Relays(event) => {
+                                this.set_messaging_relays(&event, cx);
+                            }
+                        };
+                    }
                 })
                 .ok();
             }
@@ -156,30 +169,43 @@ impl PersonRegistry {
     }
 
     /// Handle request for metadata
-    async fn handle_requests(client: &Client, rx: &flume::Receiver<PublicKey>) {
+    ///
+    /// Requests are collected into batches and flushed when the batch is
+    /// full or the timeout expires.
+    ///
+    /// Note: `flume::Selector::wait_timeout` is intentionally not used here:
+    /// it relies on `std::time::Instant` and `thread::park_timeout`, which are
+    /// unavailable on `wasm32-unknown-unknown` (the former panics, the latter
+    /// is a no-op that would turn the wait into a busy loop on the main
+    /// thread).
+    async fn handle_requests(
+        client: &Client,
+        rx: &flume::Receiver<PublicKey>,
+        executor: &BackgroundExecutor,
+    ) {
         let mut batch: HashSet<PublicKey> = HashSet::new();
 
         loop {
-            match flume::Selector::new()
-                .recv(rx, |result| result.ok())
-                .wait_timeout(Duration::from_secs(TIMEOUT))
+            // Wait for the next request, or the batch timeout.
+            futures::select! {
+                result = rx.recv_async() => match result {
+                    Ok(public_key) => {
+                        batch.insert(public_key);
+                        // Keep collecting until the batch is full
+                        if batch.len() < 20 {
+                            continue;
+                        }
+                    }
+                    Err(_) => return,
+                },
+                _ = executor.timer(Duration::from_secs(TIMEOUT)).fuse() => {}
+            }
+
+            // Flush the batch
+            if !batch.is_empty()
+                && let Err(e) = get_metadata(client, std::mem::take(&mut batch)).await
             {
-                Ok(Some(public_key)) => {
-                    batch.insert(public_key);
-                    // Process the batch if it's full
-                    if batch.len() >= 20
-                        && let Err(e) = get_metadata(client, std::mem::take(&mut batch)).await
-                    {
-                        log::warn!("Failed to get metadata batch: {e}");
-                    }
-                }
-                _ => {
-                    if !batch.is_empty()
-                        && let Err(e) = get_metadata(client, std::mem::take(&mut batch)).await
-                    {
-                        log::warn!("Failed to get metadata batch: {e}");
-                    }
-                }
+                log::warn!("Failed to get metadata batch: {e}");
             }
         }
     }

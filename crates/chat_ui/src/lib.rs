@@ -242,29 +242,40 @@ impl ChatPanel {
             while let Ok(status) = rx.recv_async().await {
                 {
                     let mut map = reports.write().unwrap();
-                    let status_id = match &*status {
-                        SendStatus::Ok { id, .. } => *id,
-                        SendStatus::Failed { id, .. } => *id,
-                    };
 
-                    // Find the matching report and update it (exit early on first match)
-                    'outer: for reports_list in map.values_mut() {
-                        for report in reports_list.iter_mut() {
-                            let Some(output) = report.output.as_mut() else {
-                                continue;
-                            };
-                            if *output.id() != status_id {
-                                continue;
-                            }
-                            match &*status {
-                                SendStatus::Ok { relay, .. } => {
-                                    output.success.insert(relay.clone(), EventSendStatus::Sent);
+                    // Drain the whole queue in a single update so bursts of
+                    // send statuses collapse into one repaint (important on
+                    // wasm, where everything runs on the main thread).
+                    let mut statuses = vec![status];
+                    while let Ok(extra) = rx.try_recv() {
+                        statuses.push(extra);
+                    }
+
+                    for status in statuses {
+                        let status_id = match &*status {
+                            SendStatus::Ok { id, .. } => *id,
+                            SendStatus::Failed { id, .. } => *id,
+                        };
+
+                        // Find the matching report and update it (exit early on first match)
+                        'outer: for reports_list in map.values_mut() {
+                            for report in reports_list.iter_mut() {
+                                let Some(output) = report.output.as_mut() else {
+                                    continue;
+                                };
+                                if *output.id() != status_id {
+                                    continue;
                                 }
-                                SendStatus::Failed { relay, message, .. } => {
-                                    output.failed.insert(relay.clone(), message.clone());
+                                match &*status {
+                                    SendStatus::Ok { relay, .. } => {
+                                        output.success.insert(relay.clone(), EventSendStatus::Sent);
+                                    }
+                                    SendStatus::Failed { relay, message, .. } => {
+                                        output.failed.insert(relay.clone(), message.clone());
+                                    }
                                 }
+                                break 'outer;
                             }
-                            break 'outer;
                         }
                     }
                 }
