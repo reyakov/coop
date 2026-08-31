@@ -365,7 +365,8 @@ impl ChatRegistry {
                 .query(filter)
                 .await
                 .unwrap_or_default()
-                .first_owned()
+                .into_iter()
+                .next()
                 .is_some();
 
             if !found {
@@ -397,7 +398,8 @@ impl ChatRegistry {
                     .database()
                     .query(filter)
                     .await?
-                    .first_owned()
+                    .into_iter()
+                    .next()
                     .ok_or(anyhow::anyhow!("No inbox relays found"))?;
 
                 let relays: Vec<RelayUrl> = nip17::extract_relay_list(&event).collect();
@@ -656,15 +658,26 @@ impl ChatRegistry {
 
         cx.background_spawn(async move {
             let public_key = signer.get_public_key_async().await?;
-            let contacts = client
+
+            // Query the latest contact list (previously `NostrDatabaseExt::contacts_public_keys`)
+            let filter = Filter::new()
+                .author(public_key)
+                .kind(Kind::ContactList)
+                .limit(1);
+
+            let contacts: HashSet<PublicKey> = client
                 .database()
-                .contacts_public_keys(public_key)
+                .query(filter)
                 .await
+                .unwrap_or_default()
+                .into_iter()
+                .next()
+                .map(|event| event.tags.public_keys().collect())
                 .unwrap_or_default();
 
             let filter = Filter::new()
                 .kind(Kind::ApplicationSpecificData)
-                .custom_tag(SingleLetterTag::lowercase(Alphabet::K), "14");
+                .custom_tag(SingleLetterTag::LOWERCASE_K, "14");
 
             let events = client.database().query(filter).await?;
             let mut grouped: HashMap<u64, Vec<UnsignedEvent>> = HashMap::new();
@@ -827,7 +840,7 @@ async fn set_rumor(client: &Client, id: EventId, rumor: &UnsignedEvent) -> Resul
 async fn get_rumor(client: &Client, gift_wrap: EventId) -> Result<UnsignedEvent, Error> {
     let filter = Filter::new().identifier(gift_wrap).limit(1);
 
-    if let Some(event) = client.database().query(filter).await?.first_owned() {
+    if let Some(event) = client.database().query(filter).await?.into_iter().next() {
         UnsignedEvent::from_json(event.content).map_err(|e| anyhow!(e))
     } else {
         Err(anyhow!("Event is not cached yet."))

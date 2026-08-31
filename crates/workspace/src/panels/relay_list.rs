@@ -111,7 +111,7 @@ impl RelayListPanel {
                     .author(public_key)
                     .limit(1);
 
-                if let Some(event) = client.database().query(filter).await?.first_owned() {
+                if let Some(event) = client.database().query(filter).await?.into_iter().next() {
                     Ok(nip65::extract_relay_list(&event).collect())
                 } else {
                     Err(anyhow!("Not found."))

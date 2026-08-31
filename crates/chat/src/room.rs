@@ -403,7 +403,7 @@ impl Room {
         cx.background_spawn(async move {
             let filter = Filter::new()
                 .kind(Kind::ApplicationSpecificData)
-                .custom_tag(SingleLetterTag::lowercase(Alphabet::R), room_id);
+                .custom_tag(SingleLetterTag::LOWERCASE_R, room_id);
 
             let messages = client
                 .database()
@@ -461,13 +461,10 @@ impl Room {
         // Add all receiver tags (no intermediate allocation)
         for public_key in self.members.iter().filter(|pk| *pk != &sender) {
             let member = persons.read(cx).get(public_key, cx);
-            tags.push(
-                Nip01Tag::PublicKey {
-                    public_key: member.public_key(),
-                    relay_hint: member.messaging_relay_hint(),
-                }
-                .to_tag(),
-            );
+            tags.push(Tag::from(Nip01Tag::PublicKey {
+                public_key: member.public_key(),
+                relay_hint: member.messaging_relay_hint(),
+            }));
         }
 
         // Construct a direct message rumor event

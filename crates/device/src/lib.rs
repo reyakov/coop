@@ -4,13 +4,13 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use instant::Duration;
 
 use anyhow::{Context as AnyhowContext, Error, anyhow};
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, Global, IntoElement, ParentElement,
     SharedString, Styled, Subscription, Task, Window, div, relative,
 };
+use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use settings::AppSettings;
@@ -414,7 +414,7 @@ impl DeviceRegistry {
                 .pubkey(app_pubkey)
                 .limit(1);
 
-            match client.database().query(filter).await?.first_owned() {
+            match client.database().query(filter).await?.into_iter().next() {
                 // Found an approval event
                 Some(event) => Ok(Some(event)),
                 // No approval event found, construct a request event

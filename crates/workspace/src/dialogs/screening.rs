@@ -84,8 +84,20 @@ impl Screening {
 
         let task: Task<Result<bool, Error>> = cx.background_spawn(async move {
             // Check if user is in contact list
-            let contacts = client.database().contacts_public_keys(current_user).await;
-            let followed = contacts.unwrap_or_default().contains(&public_key);
+            let filter = Filter::new()
+                .author(current_user)
+                .kind(Kind::ContactList)
+                .limit(1);
+
+            let followed = client
+                .database()
+                .query(filter)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .next()
+                .map(|event| event.tags.public_keys().any(|k| k == public_key))
+                .unwrap_or(false);
 
             Ok(followed)
         });
@@ -228,11 +240,10 @@ impl Screening {
         let public_key = self.public_key;
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
-            let tag = Nip56Tag::PublicKey {
+            let tag = Tag::from(Nip56Tag::PublicKey {
                 public_key,
                 report: Report::Impersonation,
-            }
-            .to_tag();
+            });
 
             let event = EventBuilder::new(Kind::Reporting, "")
                 .tag(tag)

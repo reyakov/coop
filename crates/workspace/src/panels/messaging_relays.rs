@@ -93,7 +93,7 @@ impl MessagingRelayPanel {
                 .author(public_key)
                 .limit(1);
 
-            if let Some(event) = client.database().query(filter).await?.first_owned() {
+            if let Some(event) = client.database().query(filter).await?.into_iter().next() {
                 Ok(nip17::extract_relay_list(&event).collect())
             } else {
                 Err(anyhow!("Not found."))
@@ -177,7 +177,7 @@ impl MessagingRelayPanel {
         let tags: Vec<Tag> = self
             .relays
             .iter()
-            .map(|relay| Nip17Tag::Relay(relay.to_owned()).to_tag())
+            .map(|relay| Tag::from(Nip17Tag::Relay(relay.to_owned())))
             .collect();
 
         // Set updating state

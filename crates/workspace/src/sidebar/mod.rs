@@ -158,7 +158,20 @@ impl Sidebar {
         };
 
         let task: Task<Result<HashSet<PublicKey>, Error>> = cx.background_spawn(async move {
-            let contacts = client.database().contacts_public_keys(public_key).await?;
+            let filter = Filter::new()
+                .author(public_key)
+                .kind(Kind::ContactList)
+                .limit(1);
+
+            let contacts: HashSet<PublicKey> = client
+                .database()
+                .query(filter)
+                .await?
+                .into_iter()
+                .next()
+                .map(|event| event.tags.public_keys().collect())
+                .unwrap_or_default();
+
             Ok(contacts)
         });
 
