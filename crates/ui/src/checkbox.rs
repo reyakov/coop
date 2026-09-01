@@ -1,16 +1,16 @@
 use std::rc::Rc;
-use instant::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, px, relative, rems, svg, Animation, AnimationExt, AnyElement, App, Div, ElementId,
-    InteractiveElement, IntoElement, ParentElement, RenderOnce, SharedString,
-    StatefulInteractiveElement, StyleRefinement, Styled, Window,
+    Animation, AnimationExt, AnyElement, App, Div, ElementId, InteractiveElement, IntoElement,
+    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
+    Window, div, px, relative, rems, svg,
 };
+use instant::Duration;
 use theme::ActiveTheme;
 
 use crate::icon::IconNamed;
-use crate::{v_flex, Disableable, IconName, Selectable, Sizable, Size, StyledExt as _};
+use crate::{Disableable, IconName, Selectable, Sizable, Size, StyledExt as _, v_flex};
 
 /// A Checkbox element.
 #[allow(clippy::type_complexity)]
@@ -172,10 +172,16 @@ pub(crate) fn checkbox_check_icon(
             if !disabled && checked != *toggle_state.read(cx) {
                 let duration = Duration::from_secs_f64(0.25);
                 cx.spawn({
-                    let toggle_state = toggle_state.clone();
+                    let toggle_state = toggle_state.downgrade();
                     async move |cx| {
                         cx.background_executor().timer(duration).await;
-                        toggle_state.update(cx, |this, _| *this = checked);
+                        // `update_in` (rather than `update`) routes through a
+                        // try-borrow: on wasm a task poll that lands while
+                        // the app context is borrowed can't panic and kill
+                        // this task.
+                        toggle_state
+                            .update_in(cx, |this, _window, _| *this = checked)
+                            .ok();
                     }
                 })
                 .detach();

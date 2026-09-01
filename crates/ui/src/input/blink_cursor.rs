@@ -1,6 +1,5 @@
-use instant::Duration;
-
 use gpui::{Context, Pixels, Task, px};
+use instant::Duration;
 
 static INTERVAL: Duration = Duration::from_millis(500);
 static PAUSE_DELAY: Duration = Duration::from_millis(300);
@@ -63,9 +62,11 @@ impl BlinkCursor {
         let epoch = self.next_epoch();
         self._task = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(INTERVAL).await;
-            if let Some(this) = this.upgrade() {
-                this.update(cx, |this, cx| this.blink(epoch, cx));
-            }
+            // `update_in` (rather than `update`) routes through a try-borrow:
+            // on wasm a task poll that lands while the app context is
+            // borrowed can't panic and kill this recurring task.
+            this.update_in(cx, |this, _window, cx| this.blink(epoch, cx))
+                .ok();
         });
     }
 
@@ -85,12 +86,11 @@ impl BlinkCursor {
         self._task = cx.spawn(async move |this, cx| {
             cx.background_executor().timer(PAUSE_DELAY).await;
 
-            if let Some(this) = this.upgrade() {
-                this.update(cx, |this, cx| {
-                    this.paused = false;
-                    this.blink(epoch, cx);
-                });
-            }
+            this.update_in(cx, |this, _window, cx| {
+                this.paused = false;
+                this.blink(epoch, cx);
+            })
+            .ok();
         });
     }
 }

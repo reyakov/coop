@@ -279,7 +279,7 @@ impl ChatPanel {
                         }
                     }
                 }
-                this.update(cx, |_, cx| cx.notify()).ok();
+                this.update_in(cx, |_, _window, cx| cx.notify()).ok();
             }
             Ok(())
         }));
@@ -336,8 +336,10 @@ impl ChatPanel {
         self.tasks.push(cx.spawn(async move |this, cx| {
             let events = get_messages.await?;
 
-            // Update message list
-            this.update(cx, |this, cx| {
+            // Update message list. `update_in` (rather than `update`) routes
+            // through a try-borrow: on wasm a task poll that lands while the
+            // app context is borrowed can't panic and kill this task.
+            this.update_in(cx, |this, _window, cx| {
                 this.insert_messages(&events, cx);
             })?;
 
@@ -479,7 +481,10 @@ impl ChatPanel {
             let mut sent_ids = sent_ids.lock().await;
             sent_ids.extend(outputs.iter().filter_map(|output| output.gift_wrap_id));
 
-            this.update(cx, |this, cx| {
+            // `update_in` (rather than `update`) routes through a try-borrow:
+            // on wasm a poll that lands while the app context is borrowed
+            // can't panic and kill this task.
+            this.update_in(cx, |this, _window, cx| {
                 this.insert_reports(id, outputs, cx);
             })?;
 
@@ -650,7 +655,7 @@ impl ChatPanel {
         });
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, _window, cx| {
                 this.set_uploading(true, cx);
             })?;
 

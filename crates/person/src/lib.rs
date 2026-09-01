@@ -80,7 +80,11 @@ impl PersonRegistry {
 
         tasks.push(cx.spawn(async move |this, cx| {
             while let Ok(event) = rx.recv_async().await {
-                this.update(cx, |this, cx| {
+                // `update_in` (rather than `update`) routes through a
+                // try-borrow: on wasm a task poll that lands while the app
+                // context is borrowed can't panic and kill this consumer
+                // (which would stall the whole metadata pipeline).
+                this.update_in(cx, |this, _window, cx| {
                     // Drain the whole queue in a single update so a burst of
                     // events collapses into one repaint instead of one per
                     // event (important on wasm, where everything runs on the
@@ -231,7 +235,7 @@ impl PersonRegistry {
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             if let Ok(persons) = task.await {
-                this.update(cx, |this, cx| {
+                this.update_in(cx, |this, _window, cx| {
                     this.bulk_insert(persons, cx);
                 })
                 .ok();

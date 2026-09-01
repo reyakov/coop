@@ -181,7 +181,7 @@ impl NostrRegistry {
         let task = cx.spawn(async move |this, cx| {
             match new_signer.get_public_key_async().await {
                 Ok(public_key) => {
-                    this.update(cx, |this, cx| {
+                    this.update_in(cx, |this, _window, cx| {
                         this.signer.swap_inner(new_signer);
                         this.current_user = Some(public_key);
                         cx.emit(StateEvent::SignerChanged);
@@ -189,7 +189,7 @@ impl NostrRegistry {
                     })?;
                 }
                 Err(e) => {
-                    this.update(cx, |_this, cx| {
+                    this.update_in(cx, |_this, _window, cx| {
                         cx.emit(StateEvent::error(e.to_string()));
                     })?;
                 }
@@ -226,7 +226,7 @@ impl NostrRegistry {
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             if let Err(e) = task.await {
-                this.update(cx, |_this, cx| {
+                this.update_in(cx, |_this, _window, cx| {
                     cx.emit(StateEvent::error(e.to_string()));
                 })?;
             }
@@ -248,7 +248,7 @@ impl NostrRegistry {
                         let secret_key = SecretKey::parse(&content)?;
                         let keys = Keys::new(secret_key);
 
-                        this.update(cx, |this, cx| {
+                        this.update_in(cx, |this, _window, cx| {
                             this.set_signer(keys, cx);
                             cx.notify();
                         })?;
@@ -263,19 +263,19 @@ impl NostrRegistry {
                         // Handle auth url with the default browser
                         signer.auth_url_handler(CoopAuthUrlHandler);
 
-                        this.update(cx, |this, cx| {
+                        this.update_in(cx, |this, _window, cx| {
                             this.set_signer(signer, cx);
                             cx.notify();
                         })?;
                     } else if content == "proxy" {
                         #[cfg(not(target_arch = "wasm32"))]
-                        this.update(cx, |this, cx| {
+                        this.update_in(cx, |this, _window, cx| {
                             this.connect_proxy(cx);
                         })?;
                     }
                 }
                 _ => {
-                    this.update(cx, |_, cx| {
+                    this.update_in(cx, |_, _window, cx| {
                         cx.emit(StateEvent::NoSigner);
                     })?;
                 }
@@ -352,7 +352,7 @@ impl NostrRegistry {
             let proxy = proxy.clone();
             async move |this, cx| {
                 while let Ok(url) = rx.recv_async().await {
-                    this.update(cx, |this, cx| {
+                    this.update_in(cx, |this, _window, cx| {
                         let save = cx.write_credentials(USER_KEYRING, "proxy", b"proxy");
                         cx.background_spawn(async move { save.await.ok() }).detach();
                         cx.open_url(&url);
@@ -374,7 +374,7 @@ impl NostrRegistry {
                 loop {
                     executor.timer(Duration::from_secs(5)).await;
                     if !proxy.is_session_active() {
-                        _ = this.update(cx, |this, cx| {
+                        _ = this.update_in(cx, |this, _window, cx| {
                             // Only notify if this proxy is still the active signer
                             if this.current_user.is_some() {
                                 this.signer.swap_inner(Keys::generate());

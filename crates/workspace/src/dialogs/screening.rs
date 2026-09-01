@@ -105,7 +105,7 @@ impl Screening {
         self.tasks.push(cx.spawn(async move |this, cx| {
             let result = task.await.unwrap_or(false);
 
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, _window, cx| {
                 this.followed = result;
                 cx.notify();
             })
@@ -139,7 +139,7 @@ impl Screening {
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
                 Ok(contacts) => {
-                    this.update(cx, |this, cx| {
+                    this.update_in(cx, |this, _window, cx| {
                         this.mutual_contacts = contacts;
                         cx.notify();
                     })
@@ -185,7 +185,7 @@ impl Screening {
         self.tasks.push(cx.spawn(async move |this, cx| {
             let result = task.await;
 
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, _window, cx| {
                 this.last_active = result;
                 cx.notify();
             })
@@ -208,7 +208,7 @@ impl Screening {
         self.tasks.push(cx.spawn(async move |this, cx| {
             let result = task.await.unwrap_or(false);
 
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, _window, cx| {
                 this.verified = result;
                 cx.notify();
             })

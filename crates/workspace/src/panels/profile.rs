@@ -167,7 +167,7 @@ impl ProfilePanel {
         });
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, _window, cx| {
                 this.set_uploading(true, cx);
             })?;
 

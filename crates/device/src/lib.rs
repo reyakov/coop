@@ -184,7 +184,7 @@ impl DeviceRegistry {
                     }
                     // New response event from the master device
                     Kind::Custom(4455) => {
-                        this.update(cx, |this, cx| {
+                        this.update_in(cx, |this, _window, cx| {
                             this.extract_encryption(event, cx);
                         })?;
                     }
@@ -272,7 +272,7 @@ impl DeviceRegistry {
                 return Ok(());
             }
 
-            this.update(cx, |_this, cx| {
+            this.update_in(cx, |_this, _window, cx| {
                 cx.emit(DeviceEvent::NotSet);
             })?;
 
@@ -287,13 +287,13 @@ impl DeviceRegistry {
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
                 Ok(keys) => {
-                    this.update(cx, |this, cx| {
+                    this.update_in(cx, |this, _window, cx| {
                         this.set_signer(keys, cx);
                         this.wait_for_request(cx);
                     })?;
                 }
                 Err(e) => {
-                    this.update(cx, |_this, cx| {
+                    this.update_in(cx, |_this, _window, cx| {
                         cx.emit(DeviceEvent::error(e.to_string()));
                     })?;
                 }
@@ -358,12 +358,12 @@ impl DeviceRegistry {
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             if let Ok(keys) = task.await {
-                this.update(cx, |this, cx| {
+                this.update_in(cx, |this, _window, cx| {
                     this.set_signer(keys, cx);
                     this.wait_for_request(cx);
                 })?;
             } else {
-                this.update(cx, |this, cx| {
+                this.update_in(cx, |this, _window, cx| {
                     this.request(cx);
                 })?;
             }
@@ -439,17 +439,17 @@ impl DeviceRegistry {
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
                 Ok(Some(event)) => {
-                    this.update(cx, |this, cx| {
+                    this.update_in(cx, |this, _window, cx| {
                         this.extract_encryption(event, cx);
                     })?;
                 }
                 Ok(None) => {
-                    this.update(cx, |this, cx| {
+                    this.update_in(cx, |this, _window, cx| {
                         this.wait_for_approval(cx);
                     })?;
                 }
                 Err(e) => {
-                    this.update(cx, |_this, cx| {
+                    this.update_in(cx, |_this, _window, cx| {
                         cx.emit(DeviceEvent::error(e.to_string()));
                     })?;
                 }
@@ -508,12 +508,12 @@ impl DeviceRegistry {
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
                 Ok(keys) => {
-                    this.update(cx, |this, cx| {
+                    this.update_in(cx, |this, _window, cx| {
                         this.set_signer(keys, cx);
                     })?;
                 }
                 Err(e) => {
-                    this.update(cx, |_this, cx| {
+                    this.update_in(cx, |_this, _window, cx| {
                         cx.emit(DeviceEvent::error(e.to_string()));
                     })?;
                 }

@@ -178,7 +178,10 @@ impl Sidebar {
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             match task.await {
                 Ok(contacts) => {
-                    this.update(cx, |this, cx| {
+                    // `update_in` (rather than `update`) routes through a
+                    // try-borrow: on wasm a poll that lands while the app
+                    // context is borrowed can't panic and kill this task.
+                    this.update_in(cx, |this, _window, cx| {
                         this.set_contact_list(contacts, cx);
                     })?;
                 }

@@ -233,7 +233,7 @@ impl ChatRegistry {
                         if event.kind == Kind::InboxRelays {
                             let current_user = signer.get_public_key_async().await?;
                             if event.pubkey == current_user {
-                                tx.send_async(Signal::InboxReady).await?;
+                                tx.send_async(Signal::InboxReady).await.ok();
                             }
                         }
 
@@ -262,24 +262,24 @@ impl ChatRegistry {
 
                                 if rumor.tags.is_empty() {
                                     let signal = Signal::error(&event, "Recipient is missing");
-                                    tx.send_async(signal).await?;
+                                    tx.send_async(signal).await.ok();
                                 }
 
                                 // Emit message for both new and backlog events
                                 let signal = Signal::message(event.id, rumor);
-                                tx.send_async(signal).await?;
+                                tx.send_async(signal).await.ok();
                             }
                             Err(e) => {
                                 let reason = format!("Failed to extract rumor: {e}");
                                 let signal = Signal::error(event.as_ref(), reason);
-                                tx.send_async(signal).await?;
+                                tx.send_async(signal).await.ok();
                             }
                         }
                     }
                     RelayMessage::EndOfStoredEvents(id)
                         if (id.as_ref() == &sub_id1 || id.as_ref() == &sub_id2) =>
                     {
-                        tx.send_async(Signal::Eose).await?;
+                        tx.send_async(Signal::Eose).await.ok();
                     }
                     _ => {}
                 }
@@ -290,7 +290,11 @@ impl ChatRegistry {
 
         self.signal_consumer = Some(cx.spawn(async move |this, cx| {
             while let Ok(message) = rx.recv_async().await {
-                this.update(cx, |this, cx| {
+                // `update_in` (rather than `update`) routes through a
+                // try-borrow: on wasm a task poll that lands while the app
+                // context is borrowed can't panic and kill this consumer
+                // (which would stall all message delivery).
+                this.update_in(cx, |this, _window, cx| {
                     // Drain the whole queue in a single update so a burst of
                     // events (e.g. history sync after login) collapses into
                     // one repaint instead of one per message (important on
@@ -374,7 +378,7 @@ impl ChatRegistry {
                 .is_some();
 
             if !found {
-                this.update(cx, |_this, cx| {
+                this.update_in(cx, |_this, _window, cx| {
                     cx.emit(ChatEvent::InboxRelayNotFound);
                 })?;
             }
@@ -425,7 +429,7 @@ impl ChatRegistry {
             });
 
             if let Err(e) = task.await {
-                this.update(cx, |_this, cx| {
+                this.update_in(cx, |_this, _window, cx| {
                     cx.emit(ChatEvent::Error(e.to_string()));
                 })?;
             }
@@ -434,6 +438,7 @@ impl ChatRegistry {
         }));
     }
 
+    /// Get all messages for the provided signer
     /// Reload the chat registry, fetching messages and contact list from relays.
     pub fn reload(&mut self, cx: &mut Context<Self>) {
         self.reset(cx);
@@ -638,13 +643,13 @@ impl ChatRegistry {
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
                 Ok(rooms) => {
-                    this.update(cx, |this, cx| {
+                    this.update_in(cx, |this, _window, cx| {
                         this.extend_rooms(rooms, cx);
                         this.sort(cx);
                     })?;
                 }
                 Err(e) => {
-                    this.update(cx, |_, cx| {
+                    this.update_in(cx, |_, _window, cx| {
                         cx.emit(ChatEvent::Error(e.to_string()));
                     })?;
                 }

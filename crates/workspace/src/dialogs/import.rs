@@ -129,7 +129,7 @@ impl ImportIdentity {
                     })?;
                 }
                 Err(e) => {
-                    this.update(cx, |this, cx| {
+                    this.update_in(cx, |this, _window, cx| {
                         this.set_error(e.to_string(), cx);
                     })?;
                 }
@@ -198,7 +198,7 @@ impl ImportIdentity {
         self.tasks.push(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(3)).await;
 
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, _window, cx| {
                 this.error.update(cx, |this, cx| {
                     *this = None;
                     cx.notify();
@@ -271,7 +271,7 @@ impl Render for ImportIdentity {
                         this.login(window, cx);
                     })),
             )
-            .when(cfg!(target_arch = "wasm32"), |this| this.child(divider(cx)))
+            .child(divider(cx))
             .when(!is_wasm, |this| {
                 this.child(
                     Button::new("proxy")

@@ -108,8 +108,10 @@ impl ContactListPanel {
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             let public_keys = task.await?;
 
-            // Update state
-            this.update(cx, |this, cx| {
+            // Update state. `update_in` (rather than `update`) routes through
+            // a try-borrow, so on wasm a poll that happens to land while the
+            // app context is borrowed can't panic and kill this task.
+            this.update_in(cx, |this, _window, cx| {
                 this.contacts.extend(public_keys);
                 cx.notify();
             })?;
@@ -148,8 +150,11 @@ impl ContactListPanel {
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(2)).await;
 
-            // Clear the error message after a delay
-            this.update(cx, |this, cx| {
+            // Clear the error message after a delay. `update_in` (rather than
+            // `update`) routes through a try-borrow, so on wasm a poll that
+            // happens to land while the app context is borrowed can't panic
+            // and kill this task.
+            this.update_in(cx, |this, _window, cx| {
                 this.error = None;
                 cx.notify();
             })?;

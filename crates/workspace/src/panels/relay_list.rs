@@ -121,8 +121,10 @@ impl RelayListPanel {
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             let relays = task.await?;
 
-            // Update state
-            this.update(cx, |this, cx| {
+            // Update state. `update_in` (rather than `update`) routes through
+            // a try-borrow: on wasm a poll that lands while the app context
+            // is borrowed can't panic and kill this task.
+            this.update_in(cx, |this, _window, cx| {
                 this.relays.extend(relays);
                 cx.notify();
             })?;
@@ -167,8 +169,11 @@ impl RelayListPanel {
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(2)).await;
 
-            // Clear the error message after a delay
-            this.update(cx, |this, cx| {
+            // Clear the error message after a delay. `update_in` (rather than
+            // `update`) routes through a try-borrow: on wasm a poll that
+            // lands while the app context is borrowed can't panic and kill
+            // this task.
+            this.update_in(cx, |this, _window, cx| {
                 this.error = None;
                 cx.notify();
             })?;

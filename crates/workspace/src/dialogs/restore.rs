@@ -83,7 +83,7 @@ impl RestoreEncryption {
         self.tasks.push(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(Duration::from_secs(3)).await;
 
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, _window, cx| {
                 this.error.update(cx, |this, cx| {
                     *this = None;
                     cx.notify();

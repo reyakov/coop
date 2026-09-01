@@ -97,7 +97,7 @@ impl BackupPanel {
             cx.background_executor().timer(Duration::from_secs(2)).await;
 
             // Clear the error message after a delay
-            this.update(cx, |this, cx| {
+            this.update_in(cx, |this, _window, cx| {
                 this.set_copied(false, cx);
             })?;
 
