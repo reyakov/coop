@@ -31,6 +31,30 @@ impl MonotonicClock for CustomTimeProvider {
 
 define_time_provider!(CustomTimeProvider);
 
+/// Returns the preferred WebGPU/WebGL backend, selected with
+/// `?backend=webgpu` / `?backend=webgl` in the page URL.
+#[cfg(target_family = "wasm")]
+fn requested_backend() -> gpui_platform::WebBackendPreference {
+    let search = web_sys::window()
+        .and_then(|window| window.location().search().ok())
+        .unwrap_or_default();
+    if search
+        .trim_start_matches('?')
+        .split('&')
+        .any(|parameter| parameter == "backend=webgpu")
+    {
+        gpui_platform::WebBackendPreference::WebGpu
+    } else if search
+        .trim_start_matches('?')
+        .split('&')
+        .any(|parameter| parameter == "backend=webgl")
+    {
+        gpui_platform::WebBackendPreference::WebGl
+    } else {
+        gpui_platform::WebBackendPreference::Auto
+    }
+}
+
 thread_local! {
     static APPLICATION: RefCell<Option<ApplicationHandle>> = const { RefCell::new(None) };
 }
@@ -96,7 +120,10 @@ pub async fn run() -> Result<(), JsValue> {
         // immediately instead of waiting for a repaint.
         assets.preload().await;
 
-        gpui_platform::single_threaded_web().with_assets(assets)
+        // Multithreaded web: background work (image decoding, network
+        // fetches, CPU-heavy tasks) runs on real worker threads instead of
+        // the main thread, so the UI stays responsive.
+        gpui_platform::application_with_web_backend(requested_backend()).with_assets(assets)
     };
 
     let launch = move |cx: &mut App| {

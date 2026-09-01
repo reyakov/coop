@@ -36,10 +36,13 @@ if [[ "$(uname)" == "Darwin" ]]; then
 fi
 
 # Step 1: Build WASM
+#
+# Target features and link args (atomics, shared memory, TLS exports) come
+# from `web/.cargo/config.toml`, which also enables `-Z build-std` so std is
+# rebuilt with atomics support.
 echo -e "${GREEN}Step 1: Building WASM...${NC}"
 cd "$PROJECT_ROOT"
 export CARGO_TARGET_DIR="$PROJECT_ROOT/target"
-RUSTFLAGS='-C target-feature=+bulk-memory -C link-arg=--max-memory=4294967296' \
 cargo build --target wasm32-unknown-unknown $RELEASE_FLAG
 
 # Determine the build directory

@@ -105,20 +105,6 @@ impl Person {
 
     /// Get profile avatar
     pub fn avatar(&self) -> SharedString {
-        // On web, the browser blocks cross-origin image fetches unless the
-        // picture host sends CORS headers, so remote avatars can never load
-        // there. Each doomed fetch still triggers a full-window repaint when
-        // it fails, which is very costly on wasm's single main thread when a
-        // list renders many avatars at once. Fall back to the bundled avatar
-        // for remote pictures on web.
-        #[cfg(target_arch = "wasm32")]
-        if let Some(picture) = self.metadata.picture.as_ref()
-            && !picture.is_empty()
-            && url::Url::parse(picture).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
-        {
-            return "brand/avatar.png".into();
-        }
-
         self.metadata
             .picture
             .as_ref()
