@@ -69,8 +69,6 @@ pub fn set_theme(dark: bool) {
 
 #[wasm_bindgen]
 pub async fn run() -> Result<(), JsValue> {
-    console_error_panic_hook::set_once();
-
     // Initialize logging to browser console
     console_log::init_with_level(log::Level::Info).expect("Failed to initialize logger");
 
@@ -79,6 +77,26 @@ pub async fn run() -> Result<(), JsValue> {
 
     #[cfg(target_family = "wasm")]
     gpui_platform::web_init();
+
+    // Install the panic hook AFTER `web_init` (which sets the default
+    // `console_error_panic_hook`), so ours wins. It prints the entire
+    // JS/wasm stack as a single string: `console_error_panic_hook`'s default
+    // output is an `Error` object whose stack is collapsed in the console,
+    // and on wasm the frames below the panic machinery name the task that
+    // panicked (debug builds keep symbol names) — essential for diagnosing
+    // `RefCell already borrowed`.
+    #[cfg(target_family = "wasm")]
+    std::panic::set_hook(Box::new(|info| {
+        // Capture the JS stack (which includes the wasm frames with symbol
+        // names in debug builds) without constructing DOM objects.
+        let stack = js_sys::Reflect::get(&js_sys::Error::new(""), &"stack".into())
+            .ok()
+            .and_then(|v| v.as_string())
+            .unwrap_or_default();
+        web_sys::console::error_1(
+            &format!("{info}\n\n==== full stack ====\n{stack}\n=====================").into(),
+        );
+    }));
 
     #[cfg(not(target_family = "wasm"))]
     let app = gpui_platform::application();
