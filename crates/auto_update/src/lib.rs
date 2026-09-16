@@ -1,22 +1,30 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use gpui::{App, AppContext, Context, Entity, Global, SharedString, Subscription, Window};
-use gpui_updater::{EngineConfig, GitHubSource, UpdateStatus, Updater, Version};
-use instant::{Duration, Instant};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+use gpui::{App, AppContext, Context, Entity, Global, SharedString, Task, Window};
+use gpui_updater_core::{EngineConfig, Release, UpdateEngine, UpdateStatus, Verification, Version};
+use instant::Duration;
+
+use crate::source::{AssetFilter, GiteaSource, asset_filter_for};
+
+mod source;
+
+pub use gpui_updater_core::UpdateStatus as AutoUpdateStatus;
+
+const GITEA_API_BASE: &str = "https://git.reya.info/api/v1";
+const GITEA_REPO_OWNER: &str = "reya";
+const GITEA_REPO_NAME: &str = "coop";
+
+/// Delay before the automatic check that runs on startup.
+const AUTO_CHECK_DELAY: Duration = Duration::from_secs(120);
+/// How long a failure stays visible before the status reverts to "Up to date".
+const ERROR_DISPLAY_DURATION: Duration = Duration::from_secs(5);
 
 const COOP_UPDATE_EXPLANATION: &str = "COOP_UPDATE_EXPLANATION";
 const COOP_BUNDLE_TYPE: &str = "COOP_BUNDLE_TYPE";
 
-fn get_github_repo_owner() -> String {
-    std::env::var("COOP_GITHUB_REPO_OWNER").unwrap_or_else(|_| "reyakov".to_string())
-}
-
-fn get_github_repo_name() -> String {
-    std::env::var("COOP_GITHUB_REPO_NAME").unwrap_or_else(|_| "coop".to_string())
-}
-
-/// Whether updates are managed by an external distribution channel
-/// (Flatpak/Snap), in which case the in-app updater must not run.
 fn uses_managed_updates() -> bool {
     // The Flatpak runtime exports `FLATPAK_ID` inside the sandbox.
     std::env::var("FLATPAK_ID").is_ok()
@@ -27,50 +35,55 @@ fn uses_managed_updates() -> bool {
 }
 
 /// Initialize the auto-update system.
-///
-/// Skips initialization when updates are handled by an external distribution
-/// channel (Flatpak/Snap). Otherwise creates the global [`AutoUpdater`]
-/// entity and schedules a check for updates after a 2-minute delay.
 pub fn init(window: &mut Window, cx: &mut App) {
     if uses_managed_updates() {
         log::info!(
-            "Skipping auto-update initialization: App is installed via a managed distribution channel (Flatpak/Snap)"
+            "Skipping auto-update initialization: updates are managed by the installed distribution channel (Flatpak/Snap)"
         );
         return;
     }
 
-    AutoUpdater::set_global(cx.new(|cx| AutoUpdater::new(window, cx)), cx);
+    let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+
+    let Some(filter) = asset_filter_for(os, arch) else {
+        log::info!(
+            "Skipping auto-update initialization: no installable release artifact is published for {os}/{arch}"
+        );
+        return;
+    };
+
+    let Ok(version) = Version::parse(env!("CARGO_PKG_VERSION")) else {
+        log::error!(
+            "Skipping auto-update initialization: crate version {:?} is not valid semver",
+            env!("CARGO_PKG_VERSION")
+        );
+        return;
+    };
+
+    AutoUpdater::set_global(
+        cx.new(|cx| AutoUpdater::new(window, version, filter, cx)),
+        cx,
+    );
 }
 
 struct GlobalAutoUpdater(Entity<AutoUpdater>);
 
 impl Global for GlobalAutoUpdater {}
 
-/// Observable auto-update status — re-exported from [`gpui_updater::UpdateStatus`].
-pub use gpui_updater::UpdateStatus as AutoUpdateStatus;
-
-/// The global auto-updater entity.
-///
-/// Wraps [`gpui_updater::Updater`] with Coop-specific configuration
-/// (GitHub repo, Flatpak detection, delayed auto-check).
-///
-/// Retrieve the global instance via [`AutoUpdater::global`].
 pub struct AutoUpdater {
-    /// The underlying gpui-updater entity that does the heavy lifting.
-    pub updater: Entity<Updater>,
+    /// The blocking engine, driven on the background executor.
+    engine: Arc<UpdateEngine<GiteaSource>>,
+    status: UpdateStatus,
+    /// The newer release found by the last successful check, if any.
+    available: Option<Release>,
     /// Currently running app version.
     pub version: Version,
-    /// Keeps the observer subscription alive.
-    _subscription: Subscription,
-    /// When the last error was recorded, so we can reset to idle after 5s.
-    error_time: Option<Instant>,
+    /// The in-flight check or download, if any.
+    task: Option<Task<()>>,
 }
 
 impl AutoUpdater {
     /// Whether auto-update is available for this installation.
-    ///
-    /// Returns `false` on managed distribution channels (Flatpak/Snap), where
-    /// updates are handled by the channel and no global updater is created.
     pub fn is_available(cx: &App) -> bool {
         cx.try_global::<GlobalAutoUpdater>().is_some()
     }
@@ -82,12 +95,6 @@ impl AutoUpdater {
     }
 
     /// Retrieve the global auto updater instance.
-    ///
-    /// # Panics
-    ///
-    /// Panics when auto-update is not available for this installation. Prefer
-    /// [`AutoUpdater::try_global`] when the installation type is not known at
-    /// compile time (e.g. Flatpak/Snap).
     pub fn global(cx: &App) -> Entity<Self> {
         cx.global::<GlobalAutoUpdater>().0.clone()
     }
@@ -96,92 +103,49 @@ impl AutoUpdater {
         cx.set_global(GlobalAutoUpdater(state));
     }
 
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+    fn new(
+        window: &mut Window,
+        version: Version,
+        filter: AssetFilter,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let source = GiteaSource::new(GITEA_API_BASE, GITEA_REPO_OWNER, GITEA_REPO_NAME, filter);
+        let config = EngineConfig::new(version.clone()).verification(Verification::Checksum);
+        let engine = Arc::new(UpdateEngine::new(source, config));
 
-        let repo_owner = get_github_repo_owner();
-        let repo_name = get_github_repo_name();
-
-        let source =
-            GitHubSource::new(&repo_owner, &repo_name).asset_contains(match std::env::consts::OS {
-                "macos" => "macos",
-                "linux" => "linux",
-                _ => "",
-            });
-
-        let updater: Entity<Updater> =
-            cx.new(|cx| Updater::new(source, EngineConfig::new(version.clone()), cx));
-
-        // When an update becomes available, automatically download and install it.
-        let subscription = cx.observe(&updater, |this: &mut AutoUpdater, _updater, cx| {
-            let status = this.updater.read(cx).status().clone();
-
-            if matches!(status, UpdateStatus::Available(_)) {
-                this.updater.update(cx, |updater, cx| {
-                    updater.download_and_install(cx);
-                });
-            }
-
-            if matches!(status, UpdateStatus::Errored(_)) {
-                this.error_time = Some(Instant::now());
-                cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(Duration::from_secs(5)).await;
-                    this.update(cx, |_this, cx| cx.notify()).ok();
-                })
-                .detach();
-            } else {
-                this.error_time = None;
-            }
-
-            cx.notify();
-        });
-
-        // Schedule an auto-check after a 2-minute delay (deferred to run at the
-        // end of the current frame so the window is fully set up).
+        // Schedule an auto-check after a 2-minute delay
         cx.defer_in(window, |_this, _window, cx| {
-            let duration = Duration::from_secs(120);
             cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(duration).await;
-                this.update(cx, |this, cx| {
-                    this.updater.update(cx, |updater, cx| {
-                        updater.check(cx);
-                    });
-                })
-                .ok();
+                cx.background_executor().timer(AUTO_CHECK_DELAY).await;
+                this.update(cx, |this, cx| this.check(cx)).ok();
             })
             .detach();
         });
 
         Self {
-            updater,
+            engine,
+            status: UpdateStatus::Idle,
+            available: None,
             version,
-            _subscription: subscription,
-            error_time: None,
+            task: None,
         }
     }
 
-    pub fn idle(&self, cx: &App) -> bool {
-        let status = self.updater.read(cx).status();
-        if status == &UpdateStatus::Idle {
-            return true;
-        }
-        if matches!(status, UpdateStatus::Errored(_))
-            && self
-                .error_time
-                .is_some_and(|t| t.elapsed() >= Duration::from_secs(5))
-        {
-            return true;
-        }
-        false
+    /// Whether nothing is happening, so the UI can hide the status line.
+    pub fn idle(&self) -> bool {
+        matches!(self.status, UpdateStatus::Idle)
     }
 
-    pub fn status(&self, cx: &App) -> SharedString {
-        let status = self.updater.read(cx).status();
+    /// Whether a verified update is installed and waiting for a restart.
+    pub fn staged(&self) -> bool {
+        matches!(self.status, UpdateStatus::Staged(_))
+    }
 
-        match status {
-            UpdateStatus::Idle => "Up to date".into(),
+    /// A short, human-readable description of the current status.
+    pub fn status(&self) -> SharedString {
+        match &self.status {
+            UpdateStatus::Idle | UpdateStatus::UpToDate => "Up to date".into(),
             UpdateStatus::Checking => "Checking for updates…".into(),
-            UpdateStatus::UpToDate => "Up to date".into(),
             UpdateStatus::Available(version) => format!("Version {version} available").into(),
             UpdateStatus::Downloading { downloaded, total } => {
                 let total_mb = total.map(|t| t as f64 / 1_048_576.0);
@@ -195,16 +159,168 @@ impl AutoUpdater {
             UpdateStatus::Staged(version) => {
                 format!("Version {version} ready — restart to apply").into()
             }
-            UpdateStatus::Errored(msg) => {
-                if self
-                    .error_time
-                    .is_some_and(|t| t.elapsed() >= Duration::from_secs(5))
-                {
-                    "Up to date".into()
-                } else {
-                    format!("Update failed: {msg}").into()
-                }
-            }
+            UpdateStatus::Errored(message) => format!("Update failed: {message}").into(),
         }
+    }
+
+    /// Check the release host for a newer version, then download and install it.
+    pub fn check(&mut self, cx: &mut Context<Self>) {
+        if self.status.is_busy() {
+            return;
+        }
+        self.set_status(UpdateStatus::Checking, cx);
+
+        let engine = self.engine.clone();
+
+        self.task = Some(cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { engine.check() })
+                .await;
+
+            this.update(cx, |this, cx| {
+                this.task = None;
+                match result {
+                    Ok(Some(release)) => {
+                        log::info!("Update {} is available", release.version);
+                        let version = release.version.clone();
+                        this.available = Some(release);
+                        this.set_status(UpdateStatus::Available(version), cx);
+                        this.download_and_install(cx);
+                    }
+                    Ok(None) => this.set_status(UpdateStatus::UpToDate, cx),
+                    Err(error) => {
+                        log::warn!("Update check failed: {error}");
+                        this.set_status(UpdateStatus::Errored(error.to_string()), cx);
+                    }
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// Download the available update, verify it, and swap it into place.
+    fn download_and_install(&mut self, cx: &mut Context<Self>) {
+        if self.status.is_busy() {
+            return;
+        }
+        let Some(release) = self.available.clone() else {
+            return;
+        };
+
+        let engine = self.engine.clone();
+        self.set_status(
+            UpdateStatus::Downloading {
+                downloaded: 0,
+                total: None,
+            },
+            cx,
+        );
+
+        self.task = Some(cx.spawn(async move |this, cx| {
+            let downloaded = Arc::new(AtomicU64::new(0));
+            let total = Arc::new(AtomicU64::new(0)); // 0 = unknown
+            let done = Arc::new(AtomicBool::new(false));
+
+            let download_task = {
+                let (engine, release) = (engine.clone(), release.clone());
+                let (downloaded, total, done) = (downloaded.clone(), total.clone(), done.clone());
+                cx.background_executor().spawn(async move {
+                    let result = engine.download(&release, |got, expected| {
+                        downloaded.store(got, Ordering::Relaxed);
+                        total.store(expected.unwrap_or(0), Ordering::Relaxed);
+                    });
+                    done.store(true, Ordering::Relaxed);
+                    result
+                })
+            };
+
+            loop {
+                let got = downloaded.load(Ordering::Relaxed);
+                let total = total.load(Ordering::Relaxed);
+                this.update(cx, |this, cx| {
+                    this.set_status(
+                        UpdateStatus::Downloading {
+                            downloaded: got,
+                            total: (total != 0).then_some(total),
+                        },
+                        cx,
+                    );
+                })
+                .ok();
+                if done.load(Ordering::Relaxed) {
+                    break;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(120))
+                    .await;
+            }
+
+            let artifact = match download_task.await {
+                Ok(artifact) => artifact,
+                Err(error) => {
+                    log::warn!("Update download failed: {error}");
+                    this.update(cx, |this, cx| {
+                        this.task = None;
+                        this.set_status(UpdateStatus::Errored(error.to_string()), cx);
+                    })
+                    .ok();
+                    return;
+                }
+            };
+
+            let _ = this.update(cx, |this, cx| this.set_status(UpdateStatus::Installing, cx));
+
+            let installed = {
+                let engine = engine.clone();
+                cx.background_executor()
+                    .spawn(async move { engine.install(&artifact) })
+                    .await
+            };
+
+            this.update(cx, |this, cx| {
+                this.task = None;
+                match installed {
+                    Ok(installed) => {
+                        if let Some(path) = installed.restart_path {
+                            cx.set_restart_path(path);
+                        }
+                        let version = release.version.clone();
+                        this.set_status(UpdateStatus::Staged(version), cx);
+                    }
+                    Err(error) => {
+                        this.set_status(UpdateStatus::Errored(error.to_string()), cx);
+                    }
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// Relaunch into the staged update.
+    pub fn restart(&mut self, cx: &mut Context<Self>) {
+        if !self.staged() {
+            log::warn!("Ignoring restart request: no update is staged");
+            return;
+        }
+        cx.restart();
+    }
+
+    fn set_status(&mut self, status: UpdateStatus, cx: &mut Context<Self>) {
+        let errored = matches!(status, UpdateStatus::Errored(_));
+        self.status = status;
+
+        if errored {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(ERROR_DISPLAY_DURATION).await;
+                this.update(cx, |this, cx| {
+                    this.set_status(UpdateStatus::Idle, cx);
+                })
+                .ok();
+            })
+            .detach();
+        }
+
+        cx.notify();
     }
 }

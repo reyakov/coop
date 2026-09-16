@@ -152,6 +152,18 @@ jobs:
           echo "Artifacts structure:"
           find artifacts -type f -exec ls -la {} \;
 
+      - name: Generate SHA256SUMS
+        run: |
+          # One `<sha256>  <path>` line per artifact. The in-app updater reads
+          # this to verify a download before installing it, so it must be
+          # published alongside every release. Written outside the directory
+          # being hashed so the checksums file never includes itself.
+          find artifacts -type f ! -name SHA256SUMS -print0 \
+            | sort -z \
+            | xargs -0 sha256sum > SHA256SUMS.raw
+          mv SHA256SUMS.raw artifacts/SHA256SUMS
+          cat artifacts/SHA256SUMS
+
       - name: Create draft release
         id: create_release
         uses: akkuman/gitea-release-action@v1

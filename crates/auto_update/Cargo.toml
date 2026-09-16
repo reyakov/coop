@@ -8,5 +8,8 @@ publish.workspace = true
 gpui.workspace = true
 instant.workspace = true
 log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+ureq.workspace = true
 
-gpui-updater = { git = "https://github.com/AprilNEA/gpui-updater", tag = "v0.0.6", features = ["gpui"] }
+gpui-updater-core = { git = "https://github.com/AprilNEA/gpui-updater" }

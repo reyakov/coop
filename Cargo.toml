@@ -4,7 +4,7 @@ members = ["crates/*", "desktop", "web"]
 default-members = ["desktop"]
 
 [workspace.package]
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 publish = false
 
@@ -50,6 +50,7 @@ webbrowser = "1.0.4"
 tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
 errno = { version = "0.3.14", default-features = false }
 instant = "0.1"
+ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier", "json"] }
 
 [patch.crates-io]
 # Use stacker's psm version which may have better WASM support

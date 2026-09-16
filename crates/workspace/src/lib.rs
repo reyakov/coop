@@ -375,14 +375,8 @@ impl Workspace {
                 self.import_encryption(window, cx);
             }
             Command::Update => {
-                // No-op on managed distribution channels (Flatpak/Snap) where
-                // the in-app updater is never initialized.
                 if let Some(auto_updater) = AutoUpdater::try_global(cx) {
-                    auto_updater.update(cx, |this, cx| {
-                        this.updater.update(cx, |updater, cx| {
-                            updater.check(cx);
-                        });
-                    });
+                    auto_updater.update(cx, |this, cx| this.check(cx));
                 }
             }
         }
@@ -611,6 +605,7 @@ impl Workspace {
     }
 
     fn titlebar_right(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+        let auto_updater = AutoUpdater::try_global(cx);
         let chat = ChatRegistry::global(cx);
         let nip4e_enabled = AppSettings::get_nip4e(cx);
         let nostr = NostrRegistry::global(cx);
@@ -623,19 +618,34 @@ impl Workspace {
         let profile = persons.read(cx).get(&public_key, cx);
         let announcement = profile.announcement();
 
-        // Update status is only shown when auto-update is available. On
-        // managed distribution channels (Flatpak/Snap) no updater exists, so
-        // nothing is rendered.
-        let updater_status = AutoUpdater::try_global(cx).and_then(|updater| {
+        let updater_status = auto_updater.as_ref().and_then(|updater| {
             let updater = updater.read(cx);
-            (!updater.idle(cx)).then(|| updater.status(cx))
+            (!updater.idle()).then(|| updater.status())
         });
+
+        let staged_update = auto_updater
+            .as_ref()
+            .is_some_and(|updater| updater.read(cx).staged());
 
         h_flex()
             .when(!cx.theme().platform.is_mac(), |this| this.pr_2())
             .gap_2()
             .when_some(updater_status, |this, status| {
                 this.child(div().text_xs().italic().child(status))
+            })
+            .when(staged_update, |this| {
+                this.child(
+                    Button::new("restart-to-update")
+                        .label("Restart to Update")
+                        .tooltip("Quit and relaunch into the installed update")
+                        .small()
+                        .ghost()
+                        .on_click(cx.listener(|_this, _event, _window, cx| {
+                            if let Some(auto_updater) = AutoUpdater::try_global(cx) {
+                                auto_updater.update(cx, |this, cx| this.restart(cx));
+                            }
+                        })),
+                )
             })
             .when(nip4e_enabled, |this| {
                 this.child(
