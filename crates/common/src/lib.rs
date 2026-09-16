@@ -1,4 +1,3 @@
-pub use caching::*;
 pub use debounced_delay::*;
 pub use display::*;
 pub use event::*;
@@ -7,7 +6,6 @@ pub use parser::*;
 pub use paths::*;
 pub use range::*;
 
-mod caching;
 mod debounced_delay;
 mod display;
 mod event;

@@ -3,19 +3,19 @@ use std::ops::Range;
 
 use anyhow::Error;
 use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
-use common::{DebouncedDelay, TimestampExt, coop_cache};
+use common::{DebouncedDelay, TimestampExt};
 use entry::RoomEntry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, SharedString, Styled, Subscription, Task, UniformListScrollHandle,
-    Window, div, uniform_list,
+    Window, div, retain_all, uniform_list,
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use smallvec::{SmallVec, smallvec};
-use state::{FIND_DELAY, IMAGE_CACHE_SIZE, NostrRegistry};
+use state::{FIND_DELAY, NostrRegistry};
 use theme::{ActiveTheme, SIDEBAR_WIDTH};
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
@@ -521,7 +521,7 @@ impl Render for Sidebar {
         };
 
         v_flex()
-            .image_cache(coop_cache("sidebar", IMAGE_CACHE_SIZE))
+            .image_cache(retain_all("sidebar"))
             .size_full()
             .gap_2()
             .child(

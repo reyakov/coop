@@ -5,7 +5,7 @@ use std::sync::{Arc, LazyLock, RwLock};
 pub use actions::*;
 use anyhow::Error;
 use chat::{ChatRegistry, Message, Room, RoomEvent, SendReport, SendStatus};
-use common::{TimestampExt, coop_cache};
+use common::TimestampExt;
 use futures::lock::Mutex;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -13,8 +13,8 @@ use gpui::{
     Focusable, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, MouseButton,
     ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, SharedUri,
     StatefulInteractiveElement, Styled, StyledImage, Subscription, SystemNotification,
-    SystemNotificationAction, Task, WeakEntity, Window, div, img, list, px, red, relative, svg,
-    white,
+    SystemNotificationAction, Task, WeakEntity, Window, div, img, list, px, red, relative,
+    retain_all, svg, white,
 };
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
@@ -2024,7 +2024,7 @@ impl Render for ChatPanel {
         let pending_attachments = !self.encrypted_attachments.read(cx).is_empty();
 
         v_flex()
-            .image_cache(coop_cache(self.id.clone(), 100))
+            .image_cache(retain_all(self.id.clone()))
             .on_action(cx.listener(Self::on_command))
             .size_full()
             .when(*self.subject_bar.read(cx), |this| {

@@ -4,18 +4,18 @@ use ::settings::AppSettings;
 use anyhow::Error;
 use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry};
-use common::{CoopImageCache, download_dir};
+use common::download_dir;
 use device::{DeviceEvent, DeviceRegistry};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, Styled, Subscription, Task, Window, div, image_cache, px,
+    Render, SharedString, Styled, Subscription, Task, Window, div, px,
 };
 use nostr_sdk::prelude::*;
 use person::{PersonRegistry, shorten_pubkey};
 use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
-use state::{IMAGE_CACHE_SIZE, NostrRegistry, StateEvent};
+use state::{NostrRegistry, StateEvent};
 use theme::{ActiveTheme, SIDEBAR_WIDTH, Theme, ThemeRegistry};
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
@@ -64,9 +64,6 @@ pub struct Workspace {
     /// App's Dock Area
     dock: Entity<DockArea>,
 
-    /// App's Image Cache
-    image_cache: Entity<CoopImageCache>,
-
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
 
@@ -82,7 +79,6 @@ impl Workspace {
 
         let sidebar = cx.new(|cx| Sidebar::new(window, cx));
         let dock = cx.new(|cx| DockArea::new(window, cx));
-        let image_cache = CoopImageCache::new(IMAGE_CACHE_SIZE, cx);
 
         let mut subscriptions = smallvec![];
 
@@ -233,7 +229,6 @@ impl Workspace {
         Self {
             sidebar,
             dock,
-            image_cache,
             tasks: vec![],
             _subscriptions: subscriptions,
         }
@@ -778,31 +773,26 @@ impl Render for Workspace {
             .relative()
             .size_full()
             .child(
-                image_cache(self.image_cache.clone())
-                    .relative()
+                v_flex()
                     .size_full()
+                    // Title Bar
                     .child(
-                        v_flex()
+                        TitleBar::new()
+                            .child(self.titlebar_left(cx))
+                            .child(self.titlebar_right(cx)),
+                    )
+                    // Main
+                    .child(
+                        h_flex()
                             .size_full()
-                            // Title Bar
                             .child(
-                                TitleBar::new()
-                                    .child(self.titlebar_left(cx))
-                                    .child(self.titlebar_right(cx)),
+                                div()
+                                    .flex_shrink_0()
+                                    .h_full()
+                                    .w(SIDEBAR_WIDTH)
+                                    .child(self.sidebar.clone()),
                             )
-                            // Main
-                            .child(
-                                h_flex()
-                                    .size_full()
-                                    .child(
-                                        div()
-                                            .flex_shrink_0()
-                                            .h_full()
-                                            .w(SIDEBAR_WIDTH)
-                                            .child(self.sidebar.clone()),
-                                    )
-                                    .child(self.dock.clone()),
-                            ),
+                            .child(self.dock.clone()),
                     ),
             )
             // Notifications

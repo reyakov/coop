@@ -4,7 +4,7 @@ use anyhow::Error;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task,
-    Window, div,
+    Window, div, retain_all,
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
@@ -321,6 +321,7 @@ impl Render for ProfilePanel {
         let shorten_pkey = SharedString::from(shorten_pubkey(self.public_key, 8));
 
         v_flex()
+            .image_cache(retain_all("profile-panel"))
             .p_3()
             .gap_3()
             .w_full()

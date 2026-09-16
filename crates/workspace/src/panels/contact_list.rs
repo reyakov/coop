@@ -5,7 +5,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    Task, TextAlign, Window, div, rems,
+    Task, TextAlign, Window, div, rems, retain_all,
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
@@ -297,6 +297,7 @@ impl Focusable for ContactListPanel {
 impl Render for ContactListPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
+            .image_cache(retain_all("contact-list-panel"))
             .p_3()
             .gap_3()
             .w_full()
