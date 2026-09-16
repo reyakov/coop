@@ -1158,7 +1158,7 @@ impl ChatPanel {
                 .rendered_texts_by_id
                 .entry(message.id)
                 .or_insert_with(|| {
-                    RenderedText::new(&message.content, &message.mentions, &persons, cx)
+                    RenderedText::new(&message.content, &message.mentions, &persons, true, cx)
                 })
                 .element(ix.into(), window, cx);
 
@@ -2021,6 +2021,7 @@ impl Render for ChatPanel {
         const WARNING: &str = "Attachments added while typing are uploaded without encryption";
 
         let is_typing = !self.input.read(cx).value().trim().is_empty();
+        let pending_attachments = !self.encrypted_attachments.read(cx).is_empty();
 
         v_flex()
             .image_cache(coop_cache(self.id.clone(), 100))
@@ -2083,7 +2084,7 @@ impl Render for ChatPanel {
                     .children(self.render_attachment_list(window, cx))
                     .children(self.render_pending_file_list(window, cx))
                     .children(self.render_reply_list(window, cx))
-                    .when(is_typing, |this| {
+                    .when(is_typing && pending_attachments, |this| {
                         this.child(
                             div()
                                 .px_1()

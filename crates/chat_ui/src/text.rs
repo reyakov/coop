@@ -1,17 +1,19 @@
 use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use chat::Mention;
-use common::RangeExt;
 use gpui::{
     AnyElement, App, ElementId, Entity, FontStyle, FontWeight, HighlightStyle, InteractiveText,
     IntoElement, SharedString, StrikethroughStyle, StyledText, UnderlineStyle, Window,
 };
 use person::PersonRegistry;
+use regex::Regex;
 use theme::ActiveTheme;
 
+/// Matches `http://` and `https://` URLs. Only these are treated as clickable links.
+static WEB_URL: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^https?://").unwrap());
+
 #[allow(clippy::enum_variant_names)]
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Highlight {
     Code,
@@ -39,25 +41,61 @@ impl RenderedText {
         content: &str,
         mentions: &[Mention],
         persons: &Entity<PersonRegistry>,
+        markdown: bool,
         cx: &App,
+    ) -> Self {
+        Self::render(content, mentions, markdown, |mention| {
+            format!("@{}", persons.read(cx).get(&mention.public_key, cx).name())
+        })
+    }
+
+    fn render(
+        content: &str,
+        mentions: &[Mention],
+        markdown: bool,
+        resolve_mention: impl Fn(&Mention) -> String,
     ) -> Self {
         let mut text = String::new();
         let mut highlights = Vec::new();
         let mut link_ranges = Vec::new();
         let mut link_urls = Vec::new();
 
-        render_plain_text_mut(
+        render_text_mut(
             content,
             mentions,
             &mut text,
             &mut highlights,
             &mut link_ranges,
             &mut link_urls,
-            persons,
-            cx,
+            markdown,
+            resolve_mention,
         );
 
-        text.truncate(text.trim_end().len());
+        // Trim trailing whitespace and adjust highlight and link ranges.
+        let trimmed_len = text.trim_end().len();
+
+        // Retain highlights and link ranges that are within the trimmed text.
+        if trimmed_len < text.len() {
+            highlights.retain_mut(|(range, _)| {
+                range.end = range.end.min(trimmed_len);
+                range.start < range.end
+            });
+
+            let mut ix = 0;
+
+            while ix < link_ranges.len() {
+                let range = &mut link_ranges[ix];
+                range.end = range.end.min(trimmed_len);
+                if range.start < range.end {
+                    ix += 1;
+                } else {
+                    link_ranges.remove(ix);
+                    link_urls.remove(ix);
+                }
+            }
+
+            text.truncate(trimmed_len);
+        }
 
         RenderedText {
             text: SharedString::from(text),
@@ -70,55 +108,71 @@ impl RenderedText {
     pub fn element(&self, id: ElementId, window: &Window, cx: &App) -> AnyElement {
         let code_background = cx.theme().elevated_surface_background;
         let color = cx.theme().text_accent;
+        let code_font = if cfg!(target_os = "macos") {
+            "Menlo"
+        } else if cfg!(target_os = "windows") {
+            "Consolas"
+        } else {
+            "monospace"
+        };
 
         InteractiveText::new(
             id,
-            StyledText::new(self.text.clone()).with_default_highlights(
-                &window.text_style(),
-                self.highlights.iter().map(|(range, highlight)| {
-                    (
-                        range.clone(),
-                        match highlight {
-                            Highlight::Code => HighlightStyle {
-                                background_color: Some(code_background),
-                                ..Default::default()
-                            },
-                            Highlight::InlineCode(link) => {
-                                if *link {
-                                    HighlightStyle {
-                                        background_color: Some(code_background),
-                                        underline: Some(UnderlineStyle {
-                                            thickness: 1.0.into(),
+            StyledText::new(self.text.clone())
+                .with_default_highlights(
+                    &window.text_style(),
+                    self.highlights.iter().map(|(range, highlight)| {
+                        (
+                            range.clone(),
+                            match highlight {
+                                Highlight::Code => HighlightStyle {
+                                    background_color: Some(code_background),
+                                    ..Default::default()
+                                },
+                                Highlight::InlineCode(link) => {
+                                    if *link {
+                                        HighlightStyle {
+                                            background_color: Some(code_background),
+                                            underline: Some(UnderlineStyle {
+                                                thickness: 1.0.into(),
+                                                ..Default::default()
+                                            }),
                                             ..Default::default()
-                                        }),
-                                        ..Default::default()
-                                    }
-                                } else {
-                                    HighlightStyle {
-                                        background_color: Some(code_background),
-                                        ..Default::default()
+                                        }
+                                    } else {
+                                        HighlightStyle {
+                                            background_color: Some(code_background),
+                                            ..Default::default()
+                                        }
                                     }
                                 }
-                            }
-                            Highlight::Mention => HighlightStyle {
-                                color: Some(color),
-                                underline: Some(UnderlineStyle {
-                                    thickness: 1.0.into(),
+                                Highlight::Mention => HighlightStyle {
+                                    color: Some(color),
+                                    underline: Some(UnderlineStyle {
+                                        thickness: 1.0.into(),
+                                        ..Default::default()
+                                    }),
                                     ..Default::default()
-                                }),
-                                ..Default::default()
+                                },
+                                Highlight::Highlight(highlight) => *highlight,
                             },
-                            Highlight::Highlight(highlight) => *highlight,
-                        },
-                    )
-                }),
-            ),
+                        )
+                    }),
+                )
+                .with_font_family_overrides(self.highlights.iter().filter_map(
+                    |(range, highlight)| match highlight {
+                        Highlight::Code | Highlight::InlineCode(_) => {
+                            Some((range.clone(), code_font.into()))
+                        }
+                        _ => None,
+                    },
+                )),
         )
         .on_click(self.link_ranges.clone(), {
             let link_urls = self.link_urls.clone();
             move |ix, _, cx| {
                 let url = &link_urls[ix];
-                if url.starts_with("http") {
+                if WEB_URL.is_match(url) {
                     cx.open_url(url);
                 }
             }
@@ -128,15 +182,15 @@ impl RenderedText {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn render_plain_text_mut(
+fn render_text_mut(
     block: &str,
     mut mentions: &[Mention],
     text: &mut String,
     highlights: &mut Vec<(Range<usize>, Highlight)>,
     link_ranges: &mut Vec<Range<usize>>,
     link_urls: &mut Vec<String>,
-    persons: &Entity<PersonRegistry>,
-    cx: &App,
+    markdown: bool,
+    resolve_mention: impl Fn(&Mention) -> String,
 ) {
     use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
@@ -145,34 +199,58 @@ fn render_plain_text_mut(
     let mut strikethrough_depth = 0;
     let mut link_url = None;
     let mut list_stack = Vec::new();
+    let mut code_block = false;
 
-    let mut options = Options::all();
-    options.remove(pulldown_cmark::Options::ENABLE_DEFINITION_LIST);
+    // Only enable the extensions that make sense for chat messages. Notably this leaves
+    // out smart punctuation, tables, math and footnotes: they rewrite or swallow text.
+    let events: Box<dyn Iterator<Item = (Event<'_>, Range<usize>)> + '_> = if markdown {
+        Box::new(Parser::new_ext(block, Options::ENABLE_STRIKETHROUGH).into_offset_iter())
+    } else {
+        Box::new(std::iter::once((Event::Text(block.into()), 0..block.len())))
+    };
 
-    for (event, source_range) in Parser::new_ext(block, options).into_offset_iter() {
+    for (event, source_range) in events {
         let prev_len = text.len();
 
         match event {
             Event::Text(t) => {
-                // Process text with mention replacements
+                if code_block {
+                    text.push_str(t.as_ref());
+                    highlights.push((prev_len..text.len(), Highlight::Code));
+                    continue;
+                }
+
                 let t_str = t.as_ref();
                 let mut last_processed = 0;
 
                 while let Some(mention) = mentions.first() {
-                    if !source_range.contains_inclusive(&mention.range) {
+                    if mention.range.start >= source_range.end {
                         break;
                     }
 
-                    // Calculate positions within the current text
-                    let mention_start_in_text = mention.range.start - source_range.start;
-                    let mention_end_in_text = mention.range.end - source_range.start;
+                    mentions = &mentions[1..];
+                    if mention.range.start < source_range.start
+                        || mention.range.end > source_range.end
+                    {
+                        continue;
+                    }
+
+                    let Some(token) = block.get(mention.range.clone()) else {
+                        continue;
+                    };
+
+                    let Some(offset) = t_str[last_processed..].find(token) else {
+                        continue;
+                    };
+
+                    let mention_start_in_text = last_processed + offset;
+                    let mention_end_in_text = mention_start_in_text + token.len();
 
                     // Add text before this mention
                     if mention_start_in_text > last_processed {
                         let before_mention = &t_str[last_processed..mention_start_in_text];
                         process_text_segment(
                             before_mention,
-                            prev_len + last_processed,
                             bold_depth,
                             italic_depth,
                             strikethrough_depth,
@@ -185,9 +263,7 @@ fn render_plain_text_mut(
                     }
 
                     // Process the mention replacement
-                    let profile = persons.read(cx).get(&mention.public_key, cx);
-                    let replacement_text = format!("@{}", profile.name());
-
+                    let replacement_text = resolve_mention(mention);
                     let replacement_start = text.len();
                     text.push_str(&replacement_text);
                     let replacement_end = text.len();
@@ -195,7 +271,6 @@ fn render_plain_text_mut(
                     highlights.push((replacement_start..replacement_end, Highlight::Mention));
 
                     last_processed = mention_end_in_text;
-                    mentions = &mentions[1..];
                 }
 
                 // Add any remaining text after the last mention
@@ -203,7 +278,6 @@ fn render_plain_text_mut(
                     let remaining_text = &t_str[last_processed..];
                     process_text_segment(
                         remaining_text,
-                        prev_len + last_processed,
                         bold_depth,
                         italic_depth,
                         strikethrough_depth,
@@ -234,11 +308,14 @@ fn render_plain_text_mut(
                 }
                 Tag::CodeBlock(_kind) => {
                     new_paragraph(text, &mut list_stack);
+                    code_block = true;
                 }
                 Tag::Emphasis => italic_depth += 1,
                 Tag::Strong => bold_depth += 1,
                 Tag::Strikethrough => strikethrough_depth += 1,
-                Tag::Link { dest_url, .. } => link_url = Some(dest_url.to_string()),
+                Tag::Link { dest_url, .. } => {
+                    link_url = WEB_URL.is_match(&dest_url).then(|| dest_url.to_string());
+                }
                 Tag::List(number) => {
                     list_stack.push((number, false));
                 }
@@ -264,6 +341,7 @@ fn render_plain_text_mut(
                 _ => {}
             },
             Event::End(tag) => match tag {
+                TagEnd::CodeBlock => code_block = false,
                 TagEnd::Heading(_) => bold_depth -= 1,
                 TagEnd::Emphasis => italic_depth -= 1,
                 TagEnd::Strong => bold_depth -= 1,
@@ -272,6 +350,11 @@ fn render_plain_text_mut(
                 TagEnd::List(_) => drop(list_stack.pop()),
                 _ => {}
             },
+            Event::Html(t) | Event::InlineHtml(t) => text.push_str(t.as_ref()),
+            Event::Rule => {
+                new_paragraph(text, &mut list_stack);
+                text.push_str("────────\n");
+            }
             Event::HardBreak => text.push('\n'),
             Event::SoftBreak => text.push('\n'),
             _ => {}
@@ -282,7 +365,6 @@ fn render_plain_text_mut(
 #[allow(clippy::too_many_arguments)]
 fn process_text_segment(
     segment: &str,
-    segment_start: usize,
     bold_depth: i32,
     italic_depth: i32,
     strikethrough_depth: i32,
@@ -307,7 +389,8 @@ fn process_text_segment(
         });
     }
 
-    // Add the text
+    // Ranges always refer to the rendered text, including replaced mentions.
+    let segment_start = text.len();
     text.push_str(segment);
     let text_end = text.len();
 
@@ -330,7 +413,10 @@ fn process_text_segment(
         finder.kinds(&[linkify::LinkKind::Url]);
         let mut last_link_pos = 0;
 
-        for link in finder.links(segment) {
+        for link in finder
+            .links(segment)
+            .filter(|link| WEB_URL.is_match(link.as_str()))
+        {
             let start = link.start();
             let end = link.end();
 
@@ -375,6 +461,7 @@ fn process_text_segment(
 
 fn new_paragraph(text: &mut String, list_stack: &mut [(Option<u64>, bool)]) {
     let mut is_subsequent_paragraph_of_list = false;
+
     if let Some((_, has_content)) = list_stack.last_mut() {
         if *has_content {
             is_subsequent_paragraph_of_list = true;
@@ -390,9 +477,11 @@ fn new_paragraph(text: &mut String, list_stack: &mut [(Option<u64>, bool)]) {
         }
         text.push('\n');
     }
+
     for _ in 0..list_stack.len().saturating_sub(1) {
         text.push_str("  ");
     }
+
     if is_subsequent_paragraph_of_list {
         text.push_str("  ");
     }
