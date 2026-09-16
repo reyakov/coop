@@ -12,6 +12,9 @@ pub fn init(window: &mut Window, cx: &mut App) {
     AppSettings::set_global(cx.new(|cx| AppSettings::new(window, cx)), cx)
 }
 
+const DEFAULT_FILE_SERVER: &str = "https://nostr.download/";
+const LEGACY_FILE_SERVER: &str = "blossom.band";
+
 macro_rules! setting_accessors {
     ($(pub $field:ident: $type:ty),* $(,)?) => {
         impl AppSettings {
@@ -138,7 +141,7 @@ impl Default for Settings {
             screening: true,
             nip4e: false,
             trusted_relays: vec![],
-            file_server: Url::parse("https://blossom.band/").unwrap(),
+            file_server: Url::parse(DEFAULT_FILE_SERVER).unwrap(),
         }
     }
 }
@@ -217,7 +220,12 @@ impl AppSettings {
         });
 
         cx.spawn_in(window, async move |this, cx| {
-            let settings = task.await.unwrap_or(Settings::default());
+            let mut settings = task.await.unwrap_or(Settings::default());
+
+            // Move settings still pointed at the old default file server over to the new one
+            if settings.file_server.host_str() == Some(LEGACY_FILE_SERVER) {
+                settings.file_server = Url::parse(DEFAULT_FILE_SERVER).unwrap();
+            }
 
             // Update settings
             this.update_in(cx, |this, window, cx| {

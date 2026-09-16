@@ -27,6 +27,11 @@ nostr-connect = { git = "https://github.com/rust-nostr/nostr" }
 nostr-sdk = { git = "https://github.com/rust-nostr/nostr" }
 nostr = { git = "https://github.com/rust-nostr/nostr", features = [ "nip59", "nip49", "nip44" ] }
 
+# Crypto (NIP-17 encrypted file messages)
+aes-gcm = "0.10"
+sha2 = "0.10"
+data-encoding = "2"
+
 # Others
 anyhow = "1.0.44"
 chrono = { version = "0.4.38", features = ["wasmbind"] }

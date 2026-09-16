@@ -4,6 +4,9 @@ use std::ops::Range;
 use common::{EventExt, NostrParser, extract_and_remove_media_urls};
 use gpui::{SharedString, SharedUri};
 use nostr_sdk::prelude::*;
+use state::FileAttachment;
+
+pub const KIND_FILE_MESSAGE: Kind = Kind::Custom(15);
 
 /// Rendered message.
 #[derive(Debug, Clone)]
@@ -21,61 +24,90 @@ pub struct Message {
     pub mentions: Vec<Mention>,
     /// List of event of the message this message is a reply to
     pub replies_to: Vec<EventId>,
+    /// Encrypted file attachment
+    pub file: Option<FileAttachment>,
 }
 
 impl From<&Event> for Message {
     fn from(val: &Event) -> Self {
-        let mentions = extract_mentions(&val.content);
-        let replies_to = extract_reply_ids(&val.tags);
-        let (media, string) = extract_and_remove_media_urls(&val.content);
-
-        Self {
-            id: val.id,
-            author: val.pubkey,
-            content: string,
-            media,
-            created_at: val.created_at,
-            mentions,
-            replies_to,
-        }
+        from_parts(
+            val.id,
+            val.pubkey,
+            val.created_at,
+            val.kind,
+            &val.content,
+            &val.tags,
+        )
     }
 }
 
 impl From<&UnsignedEvent> for Message {
     fn from(val: &UnsignedEvent) -> Self {
-        let mentions = extract_mentions(&val.content);
-        let replies_to = extract_reply_ids(&val.tags);
-        let (media, string) = extract_and_remove_media_urls(&val.content);
-
-        Self {
+        from_parts(
             // Event ID must be known
-            id: val.id.unwrap(),
-            author: val.pubkey,
-            content: string,
-            media,
-            created_at: val.created_at,
-            mentions,
-            replies_to,
-        }
+            val.id.unwrap(),
+            val.pubkey,
+            val.created_at,
+            val.kind,
+            &val.content,
+            &val.tags,
+        )
     }
 }
 
 impl From<&NewMessage> for Message {
     fn from(val: &NewMessage) -> Self {
-        let mentions = extract_mentions(&val.rumor.content);
-        let replies_to = extract_reply_ids(&val.rumor.tags);
-        let (media, string) = extract_and_remove_media_urls(&val.rumor.content);
-
-        Self {
+        from_parts(
             // Event ID must be known
-            id: val.rumor.id.unwrap(),
-            author: val.rumor.pubkey,
-            content: string,
-            media,
-            created_at: val.rumor.created_at,
-            mentions,
-            replies_to,
-        }
+            val.rumor.id.unwrap(),
+            val.rumor.pubkey,
+            val.rumor.created_at,
+            val.rumor.kind,
+            &val.rumor.content,
+            &val.rumor.tags,
+        )
+    }
+}
+
+fn from_parts(
+    id: EventId,
+    author: PublicKey,
+    created_at: Timestamp,
+    kind: Kind,
+    content: &str,
+    tags: &Tags,
+) -> Message {
+    let file = if kind == KIND_FILE_MESSAGE {
+        FileAttachment::from_tags(content, tags)
+    } else {
+        None
+    };
+    let has_file = file.is_some();
+
+    let replies_to = extract_reply_ids(tags);
+
+    // For file messages `.content` is the encrypted blob URL, not text or media
+    let mentions = if has_file {
+        Vec::new()
+    } else {
+        extract_mentions(content)
+    };
+
+    let (media, content) = if has_file {
+        (Vec::new(), String::new())
+    } else {
+        extract_and_remove_media_urls(content)
+    };
+
+    Message {
+        id,
+        author,
+        content,
+        media,
+        created_at,
+        mentions,
+        replies_to,
+        file,
     }
 }
 
@@ -102,6 +134,17 @@ impl PartialOrd for Message {
 impl Hash for Message {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
+    }
+}
+
+impl Message {
+    /// Single-line representation for reply previews, notifications and copy.
+    pub fn preview(&self) -> SharedString {
+        if let Some(file) = &self.file {
+            return format!("[File] {}", file.display_name()).into();
+        }
+
+        self.content.clone().into()
     }
 }
 

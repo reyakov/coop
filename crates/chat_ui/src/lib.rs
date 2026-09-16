@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, RwLock};
 
 pub use actions::*;
-use anyhow::{Context as AnyhowContext, Error};
+use anyhow::Error;
 use chat::{ChatRegistry, Message, Room, RoomEvent, SendReport, SendStatus};
 use common::{TimestampExt, coop_cache};
 use futures::lock::Mutex;
@@ -21,7 +22,9 @@ use person::{Person, PersonRegistry};
 use regex::Regex;
 use settings::{AppSettings, SignerKind};
 use smallvec::{SmallVec, smallvec};
-use state::{NostrRegistry, upload};
+use state::{
+    FileAttachment, NostrRegistry, download_and_decrypt_to_file, upload, upload_encrypted,
+};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
@@ -30,11 +33,13 @@ use ui::input::{Input, InputEvent, InputState};
 use ui::menu::DropdownMenu;
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
+use ui::tooltip::Tooltip;
 use ui::{
     Disableable, Icon, IconName, InteractiveElementExt, Sizable, StyledExt, WindowExtension,
     h_flex, v_flex,
 };
 
+use crate::file::*;
 use crate::text::RenderedText;
 
 const REACTION_EMOJIS: &[&str] = &["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
@@ -46,6 +51,7 @@ static EMOJI_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[\p{Emoji}\u{200D}\u{FE0F}\u{20E3}]+$").unwrap());
 
 mod actions;
+mod file;
 mod text;
 
 pub fn init(room: WeakEntity<Room>, window: &mut Window, cx: &mut App) -> Entity<ChatPanel> {
@@ -96,6 +102,12 @@ pub struct ChatPanel {
     /// Media Attachment
     attachments: Entity<Vec<Url>>,
 
+    /// Uploaded, encrypted file attachments which are not sent yet
+    encrypted_attachments: Entity<Vec<PendingFile>>,
+
+    /// Decrypted attachments of file messages, by message id
+    decrypted_files: HashMap<EventId, DecryptedFile>,
+
     /// Upload state
     uploading: bool,
 
@@ -110,6 +122,7 @@ impl ChatPanel {
     pub fn new(room: WeakEntity<Room>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Define attachments and replies_to entities
         let attachments = cx.new(|_| vec![]);
+        let encrypted_attachments = cx.new(|_| vec![]);
         let replies_to = cx.new(|_| HashSet::new());
         let reports_by_id = Arc::new(RwLock::new(BTreeMap::new()));
 
@@ -185,6 +198,8 @@ impl ChatPanel {
             subject_bar,
             replies_to,
             attachments,
+            encrypted_attachments,
+            decrypted_files: HashMap::new(),
             rendered_texts_by_id: BTreeMap::new(),
             reports_by_id,
             sent_ids: Arc::new(Mutex::new(Vec::new())),
@@ -370,21 +385,32 @@ impl ChatPanel {
     }
 
     fn send_text_message(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        // Get the message which includes all attachments
+        // Get the message which includes all plain attachments
         let content = self.get_input_value(cx);
 
         // Get the replies to this message
         let replies: Vec<EventId> = self.replies_to.read(cx).iter().copied().collect();
 
-        // Return if message is empty
-        if content.trim().is_empty() {
+        // Uploaded files are sent as encrypted file messages
+        let files: Vec<FileAttachment> = self
+            .encrypted_attachments
+            .read(cx)
+            .iter()
+            .map(|pending| pending.file.clone())
+            .collect();
+
+        // Return if there is nothing to send
+        if content.trim().is_empty() && files.is_empty() {
             window.push_notification("Cannot send an empty message", cx);
             return;
         }
 
         // If replying to exactly one message with only a valid emoji,
         // send as a reaction instead of a text message
-        if replies.len() == 1 && EMOJI_RE.is_match(&content) && self.attachments.read(cx).is_empty()
+        if replies.len() == 1
+            && EMOJI_RE.is_match(&content)
+            && self.attachments.read(cx).is_empty()
+            && files.is_empty()
         {
             for reply in &replies {
                 self.send_reaction(&content, reply, window, cx);
@@ -393,7 +419,15 @@ impl ChatPanel {
             return;
         }
 
-        self.send_message(&content, replies, false, window, cx);
+        // Send the text part, including the plain attachment urls
+        if !content.trim().is_empty() {
+            self.send_message(&content, replies.clone(), false, window, cx);
+        }
+
+        // Send every file as its own encrypted file message
+        for file in files {
+            self.send_file(file, replies.clone(), window, cx);
+        }
     }
 
     fn send_reaction(
@@ -426,29 +460,59 @@ impl ChatPanel {
             return;
         }
 
-        let room = self.room.clone();
-        let content = value.to_string();
-        let sent_ids = self.sent_ids.clone();
-
         // Upgrade room and create rumor + send task in a single read lock
-        let Some(room_entity) = room.upgrade() else {
+        let Some(room) = self.room.upgrade() else {
             return;
         };
 
-        // Create rumor and send task
-        let (rumor, send_task) = match room_entity.read_with(cx, |room, cx| {
-            let rumor = room.rumor(content.clone(), replies.clone(), reaction, cx)?;
+        let outcome = room.read_with(cx, |room, cx| {
+            let rumor = room.rumor(value, replies, reaction, cx)?;
             let send_task = room.send(rumor.clone(), cx)?;
+
             Some((rumor, send_task))
-        }) {
-            Some(pair) => pair,
-            None => {
-                window.push_notification("Failed to create message", cx);
-                return;
-            }
+        });
+
+        match outcome {
+            Some((rumor, send_task)) => self.dispatch(rumor, send_task, window, cx),
+            None => window.push_notification("Failed to create message", cx),
+        }
+    }
+
+    /// Send an encrypted file message (NIP-17 kind 15) to all members of the chat
+    fn send_file(
+        &mut self,
+        file: FileAttachment,
+        replies: Vec<EventId>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(room) = self.room.upgrade() else {
+            return;
         };
 
+        let outcome = room.read_with(cx, |room, cx| {
+            let rumor = room.file_rumor(file, replies, cx)?;
+            let send_task = room.send(rumor.clone(), cx)?;
+
+            Some((rumor, send_task))
+        });
+
+        match outcome {
+            Some((rumor, send_task)) => self.dispatch(rumor, send_task, window, cx),
+            None => window.push_notification("Failed to create message", cx),
+        }
+    }
+
+    /// Insert a rumor optimistically and track the send reports of its gift wraps
+    fn dispatch(
+        &mut self,
+        rumor: UnsignedEvent,
+        send_task: Task<Vec<SendReport>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let id = rumor.id.expect("rumor must have an id");
+        let sent_ids = self.sent_ids.clone();
 
         // Insert optimistic message and clear input
         if rumor.kind != Kind::Reaction {
@@ -484,6 +548,10 @@ impl ChatPanel {
             this.set_value("", window, cx);
         });
         self.attachments.update(cx, |this, cx| {
+            this.clear();
+            cx.notify();
+        });
+        self.encrypted_attachments.update(cx, |this, cx| {
             this.clear();
             cx.notify();
         });
@@ -604,7 +672,7 @@ impl ChatPanel {
         let Some(message) = self.message(id) else {
             return;
         };
-        let content = message.content.to_string();
+        let content = message.preview().to_string();
         let item = ClipboardItem::new_string(content);
 
         cx.write_to_clipboard(item);
@@ -630,6 +698,9 @@ impl ChatPanel {
         // Get the user's configured blossom server
         let server = AppSettings::get_file_server(cx);
 
+        // Encrypt attachments which are not part of a message being written
+        let encrypted = self.input.read(cx).value().trim().is_empty();
+
         // Ask user for file upload
         let path = cx.prompt_for_paths(PathPromptOptions {
             files: true,
@@ -639,34 +710,93 @@ impl ChatPanel {
         });
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            this.update(cx, |this, cx| {
-                this.set_uploading(true, cx);
+            // Selecting no file means the prompt was cancelled
+            let Some(path) = path.await??.and_then(|mut paths| paths.pop()) else {
+                return Ok(());
+            };
+
+            this.update_in(cx, |this, window, cx| {
+                this.upload_file(server, path, encrypted, window, cx);
             })?;
 
-            let mut paths = path.await??.context("Not found")?;
-            let path = paths.pop().context("No path")?;
+            Ok(())
+        }));
+    }
 
-            // Upload via blossom client
-            match upload(server, path, cx).await {
-                Ok(url) => {
-                    this.update_in(cx, |this, _window, cx| {
-                        this.add_attachment(url, cx);
-                        this.set_uploading(false, cx);
-                    })?;
-                }
-                Err(e) => {
-                    this.update_in(cx, |this, window, cx| {
-                        this.set_uploading(false, cx);
+    /// Upload a file, encrypted when the attachment is the whole message
+    fn upload_file(
+        &mut self,
+        server: Url,
+        path: PathBuf,
+        encrypted: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.set_uploading(true, cx);
+
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            let result = if encrypted {
+                upload_encrypted(server.clone(), path.clone(), cx)
+                    .await
+                    .map(|file| Uploaded::File(file, path.clone()))
+            } else {
+                upload(server.clone(), path.clone(), cx)
+                    .await
+                    .map(Uploaded::Url)
+            };
+
+            this.update_in(cx, |this, window, cx| {
+                this.set_uploading(false, cx);
+
+                match result {
+                    Ok(Uploaded::Url(url)) => this.add_attachment(url, cx),
+                    Ok(Uploaded::File(file, path)) => this.add_pending_file(file, path, cx),
+                    Err(e) if encrypted => {
+                        this.report_encrypted_upload_error(server, path, e, window, cx)
+                    }
+                    Err(e) => {
                         window.push_notification(
                             Notification::error(e.to_string()).autohide(false),
                             cx,
                         );
-                    })?;
+                    }
                 }
-            }
+            })?;
 
             Ok(())
         }));
+    }
+
+    /// Report a failed encrypted upload, offering to retry it without encryption
+    fn report_encrypted_upload_error(
+        &mut self,
+        server: Url,
+        path: PathBuf,
+        error: Error,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let view = cx.entity().downgrade();
+
+        window.push_notification(
+            Notification::error(error.to_string())
+                .title("Encrypted upload failed")
+                .action(move |_this, _window, _cx| {
+                    let view = view.clone();
+                    let server = server.clone();
+                    let path = path.clone();
+
+                    Button::new("retry-without-encryption")
+                        .label("Upload without encryption")
+                        .on_click(move |_ev, window, cx| {
+                            view.update(cx, |this, cx| {
+                                this.upload_file(server.clone(), path.clone(), false, window, cx);
+                            })
+                            .ok();
+                        })
+                }),
+            cx,
+        );
     }
 
     fn set_uploading(&mut self, uploading: bool, cx: &mut Context<Self>) {
@@ -688,6 +818,88 @@ impl ChatPanel {
                 cx.notify();
             }
         });
+    }
+
+    fn add_pending_file(&mut self, file: FileAttachment, path: PathBuf, cx: &mut Context<Self>) {
+        self.encrypted_attachments.update(cx, |this, cx| {
+            this.push(PendingFile { file, path });
+            cx.notify();
+        });
+    }
+
+    fn remove_pending_file(&mut self, url: &Url, cx: &mut Context<Self>) {
+        self.encrypted_attachments.update(cx, |this, cx| {
+            if let Some(ix) = this.iter().position(|pending| &pending.file.url == url) {
+                this.remove(ix);
+                cx.notify();
+            }
+        });
+    }
+
+    /// Download and decrypt the attachment of a file message for preview
+    fn load_file(&mut self, id: EventId, file: FileAttachment, cx: &mut Context<Self>) {
+        self.decrypted_files.insert(id, DecryptedFile::Loading);
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let result = download_and_decrypt_to_file(&file, cx).await;
+
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(path) => {
+                        this.decrypted_files.insert(id, DecryptedFile::Ready(path));
+                    }
+                    Err(e) => {
+                        this.decrypted_files
+                            .insert(id, DecryptedFile::Failed(e.to_string().into()));
+                    }
+                }
+
+                cx.notify();
+            })?;
+
+            Ok(())
+        }));
+    }
+
+    /// Decrypt the attachment of a file message and open it with the OS
+    fn open_file(
+        &mut self,
+        id: EventId,
+        file: FileAttachment,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.decrypted_files.get(&id) {
+            Some(DecryptedFile::Ready(path)) => {
+                cx.open_url(&file_url(path));
+                return;
+            }
+            Some(DecryptedFile::Loading) => return,
+            _ => {}
+        };
+
+        self.decrypted_files.insert(id, DecryptedFile::Loading);
+
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            let result = download_and_decrypt_to_file(&file, cx).await;
+
+            this.update_in(cx, |this, _window, cx| {
+                match result {
+                    Ok(path) => {
+                        cx.open_url(&file_url(&path));
+                        this.decrypted_files.insert(id, DecryptedFile::Ready(path));
+                    }
+                    Err(e) => {
+                        this.decrypted_files
+                            .insert(id, DecryptedFile::Failed(e.to_string().into()));
+                    }
+                }
+
+                cx.notify();
+            })?;
+
+            Ok(())
+        }));
     }
 
     fn profile(&self, public_key: &PublicKey, cx: &App) -> Person {
@@ -929,6 +1141,16 @@ impl ChatPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        let file = self.messages.get(ix).and_then(|message| {
+            let file = message.file.clone()?;
+            (!self.decrypted_files.contains_key(&message.id) && file.is_image())
+                .then_some((message.id, file))
+        });
+
+        if let Some((id, file)) = file {
+            self.load_file(id, file, cx);
+        }
+
         if let Some(message) = self.messages.get(ix) {
             let persons = PersonRegistry::global(cx);
             let show_author = self.is_group_start(ix);
@@ -1016,8 +1238,11 @@ impl ChatPanel {
                             .when(has_replies, |this| {
                                 this.children(self.render_message_replies(replies, cx))
                             })
-                            .child(rendered_text)
+                            .when(message.file.is_none(), |this| this.child(rendered_text))
                             .child(self.render_media(&message.media, cx))
+                            .when_some(message.file.as_ref(), |this, file| {
+                                this.child(self.render_message_file(&id, file, cx))
+                            })
                             .when(has_reactions, |this| {
                                 this.child(self.render_reactions(&id, cx))
                             }),
@@ -1123,7 +1348,7 @@ impl ChatPanel {
                             .w_full()
                             .text_ellipsis()
                             .line_clamp(1)
-                            .child(SharedString::from(&message.content)),
+                            .child(message.preview()),
                     )
                     .hover(|this| this.bg(cx.theme().elevated_surface_background))
                     .on_click({
@@ -1427,7 +1652,7 @@ impl ChatPanel {
                     .size_16()
                     .when(cx.theme().shadow, |this| this.shadow_lg())
                     .rounded(cx.theme().radius)
-                    .object_fit(ObjectFit::ScaleDown),
+                    .object_fit(ObjectFit::Cover),
             )
             .child(
                 div()
@@ -1459,6 +1684,159 @@ impl ChatPanel {
 
         for url in self.attachments.read(cx).iter() {
             items.push(self.render_attachment(url, cx));
+        }
+
+        items
+    }
+
+    /// Render the encrypted file attachment of a message
+    fn render_message_file(
+        &self,
+        id: &EventId,
+        file: &FileAttachment,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let state = self.decrypted_files.get(id);
+
+        if let Some(path) = state
+            .and_then(|state| match state {
+                DecryptedFile::Ready(path) => Some(path),
+                _ => None,
+            })
+            .filter(|_| file.is_image())
+        {
+            return div()
+                .child(
+                    img(path.clone())
+                        .border_1()
+                        .border_color(cx.theme().border_variant)
+                        .h(px(250.))
+                        .object_fit(ObjectFit::Cover)
+                        .rounded(cx.theme().radius),
+                )
+                .into_any_element();
+        }
+
+        let label = match state {
+            Some(DecryptedFile::Loading) => SharedString::from("Decrypting..."),
+            Some(DecryptedFile::Failed(error)) => error.clone(),
+            Some(DecryptedFile::Ready(_)) => SharedString::from("Click to open"),
+            None => SharedString::from("Click to decrypt"),
+        };
+
+        self.render_file_chip(id, file, label, cx)
+    }
+
+    /// Render an encrypted file as a chip which decrypts and opens it on click
+    fn render_file_chip(
+        &self,
+        id: &EventId,
+        file: &FileAttachment,
+        label: SharedString,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        h_flex()
+            .id(SharedString::from(format!("file-{id}")))
+            .self_start()
+            .items_start()
+            .min_w_0()
+            .gap_2()
+            .p_2()
+            .border_1()
+            .border_color(cx.theme().border_variant)
+            .rounded(cx.theme().radius)
+            .child(Icon::new(IconName::Lock).text_color(cx.theme().icon_accent))
+            .child(
+                v_flex()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .text_sm()
+                    .child(div().line_height(relative(1.2)).child(file.display_name()))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().text_placeholder)
+                            .child(label),
+                    ),
+            )
+            .on_click({
+                let file = file.clone();
+                let id = *id;
+
+                cx.listener(move |this, _, window, cx| {
+                    this.open_file(id, file.clone(), window, cx);
+                })
+            })
+            .into_any_element()
+    }
+
+    /// Render an uploaded, encrypted file which is not sent yet
+    fn render_pending_file(&self, pending: &PendingFile, cx: &Context<Self>) -> impl IntoElement {
+        let file = &pending.file;
+        let label = file.display_name();
+
+        div()
+            .id(SharedString::from(file.url.to_string()))
+            .relative()
+            .w_16()
+            .tooltip(move |window, cx| Tooltip::new(label.clone(), window, cx).into())
+            .map(|this| {
+                if file.is_image() {
+                    this.child(
+                        img(pending.path.clone())
+                            .size_16()
+                            .when(cx.theme().shadow, |this| this.shadow_sm())
+                            .rounded(cx.theme().radius)
+                            .object_fit(ObjectFit::Cover),
+                    )
+                } else {
+                    this.child(
+                        div()
+                            .size_16()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(cx.theme().radius)
+                            .border_1()
+                            .border_color(cx.theme().border_variant)
+                            .bg(cx.theme().surface_background)
+                            .text_xs()
+                            .text_center()
+                            .child("Preview not available"),
+                    )
+                }
+            })
+            .child(
+                v_flex()
+                    .absolute()
+                    .top_neg_1()
+                    .right_neg_1()
+                    .size_4()
+                    .items_center()
+                    .justify_center()
+                    .rounded_full()
+                    .border_1()
+                    .border_color(cx.theme().border_variant)
+                    .bg(gpui::green())
+                    .child(Icon::new(IconName::Lock).size_2().text_color(gpui::white())),
+            )
+            .on_click({
+                let url = file.url.clone();
+                cx.listener(move |this, _, _, cx| {
+                    this.remove_pending_file(&url, cx);
+                })
+            })
+    }
+
+    fn render_pending_file_list(
+        &self,
+        _window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoIterator<Item = impl IntoElement> {
+        let mut items = vec![];
+
+        for pending in self.encrypted_attachments.read(cx).iter() {
+            items.push(self.render_pending_file(pending, cx));
         }
 
         items
@@ -1512,7 +1890,7 @@ impl ChatPanel {
                         .text_sm()
                         .text_ellipsis()
                         .line_clamp(1)
-                        .child(SharedString::from(&text.content)),
+                        .child(text.preview()),
                 )
         } else {
             div()
@@ -1640,6 +2018,10 @@ impl Focusable for ChatPanel {
 
 impl Render for ChatPanel {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        const WARNING: &str = "Attachments added while typing are uploaded without encryption";
+
+        let is_typing = !self.input.read(cx).value().trim().is_empty();
+
         v_flex()
             .image_cache(coop_cache(self.id.clone(), 100))
             .on_action(cx.listener(Self::on_command))
@@ -1673,10 +2055,8 @@ impl Render for ChatPanel {
                     .map(|this| {
                         if self.messages.is_empty() {
                             this.child(
-                                div()
+                                h_flex()
                                     .size_full()
-                                    .flex()
-                                    .items_center()
                                     .justify_end()
                                     .child(self.render_announcement(cx)),
                             )
@@ -1701,7 +2081,17 @@ impl Render for ChatPanel {
                     .w_full()
                     .gap_1p5()
                     .children(self.render_attachment_list(window, cx))
+                    .children(self.render_pending_file_list(window, cx))
                     .children(self.render_reply_list(window, cx))
+                    .when(is_typing, |this| {
+                        this.child(
+                            div()
+                                .px_1()
+                                .text_xs()
+                                .text_color(cx.theme().text_warning)
+                                .child(WARNING),
+                        )
+                    })
                     .child(
                         h_flex()
                             .items_end()

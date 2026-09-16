@@ -24,6 +24,10 @@ serde_json.workspace = true
 
 mime_guess = "2.0.4"
 
+aes-gcm.workspace = true
+sha2.workspace = true
+data-encoding.workspace = true
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 nostr-memory.workspace = true
 

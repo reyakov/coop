@@ -17,12 +17,14 @@ use nostr_sdk::prelude::*;
 
 mod blossom;
 mod constants;
+mod file;
 mod nip05;
 mod nip4e;
 mod signer;
 
 pub use blossom::*;
 pub use constants::*;
+pub use file::*;
 pub use nip4e::*;
 pub use nip05::*;
 pub use signer::{CoopAuthUrlHandler, UniversalSigner};

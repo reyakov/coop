@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use anyhow::{Context as AnyhowContext, Error};
+use anyhow::Error;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, IntoElement, ParentElement, PathPromptOptions, Render, SharedString, Styled, Task,
@@ -167,12 +167,14 @@ impl ProfilePanel {
         });
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            // Selecting no file means the prompt was cancelled
+            let Some(path) = path.await??.and_then(|mut paths| paths.pop()) else {
+                return Ok(());
+            };
+
             this.update(cx, |this, cx| {
                 this.set_uploading(true, cx);
             })?;
-
-            let mut paths = path.await??.context("Not found")?;
-            let path = paths.pop().context("No path")?;
 
             // Upload via blossom client
             match upload(server, path, cx).await {

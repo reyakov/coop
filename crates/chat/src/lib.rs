@@ -21,6 +21,7 @@ mod room;
 
 pub use message::*;
 pub use room::*;
+pub use state::FileAttachment;
 
 /// A static keypair used only for signing locally-cached rumor events.
 static LOCAL_KEYS: LazyLock<Keys> = LazyLock::new(Keys::generate);
@@ -629,7 +630,7 @@ impl ChatRegistry {
 
     /// Load all rooms from the database.
     pub fn get_rooms(&mut self, cx: &mut Context<Self>) {
-        let task = self.get_rooms_task(cx);
+        let task = self.query_chat_rooms(cx);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             match task.await {
@@ -650,8 +651,8 @@ impl ChatRegistry {
         }));
     }
 
-    /// Create a task to load rooms from the database
-    fn get_rooms_task(&self, cx: &App) -> Task<Result<HashSet<Room>, Error>> {
+    /// Query the chat rooms from the database
+    fn query_chat_rooms(&self, cx: &App) -> Task<Result<HashSet<Room>, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
@@ -677,7 +678,7 @@ impl ChatRegistry {
 
             let filter = Filter::new()
                 .kind(Kind::ApplicationSpecificData)
-                .custom_tag(SingleLetterTag::LOWERCASE_K, "14");
+                .custom_tags(SingleLetterTag::LOWERCASE_K, ["7", "14", "15"]);
 
             let events = client.database().query(filter).await?;
             let mut grouped: HashMap<u64, Vec<UnsignedEvent>> = HashMap::new();
@@ -719,8 +720,8 @@ impl ChatRegistry {
 
     /// Parse a nostr event into a message and push it to the belonging room
     ///
-    /// If the room doesn't exist, it will be created.
-    /// Updates room ordering based on the most recent messages.
+    /// - If the room doesn't exist, it will be created.
+    /// - Updates room ordering based on the most recent messages.
     pub fn new_message(&mut self, message: NewMessage, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
 
@@ -823,7 +824,7 @@ async fn set_rumor(client: &Client, id: EventId, rumor: &UnsignedEvent) -> Resul
         Tag::identifier(id),
         Tag::public_key(rumor.pubkey),
         Tag::custom("r", [room_id]),
-        Tag::custom("k", ["14"]),
+        Tag::custom("k", [rumor.kind.to_string()]),
     ];
 
     let event = EventBuilder::new(Kind::ApplicationSpecificData, rumor.as_json())

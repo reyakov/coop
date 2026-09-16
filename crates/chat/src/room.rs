@@ -12,7 +12,7 @@ use person::{Person, PersonRegistry};
 use settings::{RoomConfig, SignerKind};
 use state::{NostrRegistry, TIMEOUT, UniversalSigner};
 
-use crate::NewMessage;
+use crate::{FileAttachment, KIND_FILE_MESSAGE, NewMessage};
 
 const NO_DEKEY: &str = "User hasn't set up a decoupled encryption key yet.";
 const USER_NO_DEKEY: &str = "You haven't set up a decoupled encryption key or it's not available.";
@@ -439,11 +439,51 @@ impl Room {
         let content: String = content.into();
         let replies: Vec<EventId> = replies.into_iter().collect();
 
-        let persons = PersonRegistry::global(cx);
+        // Get current user's public key
         let nostr = NostrRegistry::global(cx);
+        let sender = nostr.read(cx).current_user()?;
+
+        // Construct a direct message rumor event
+        // WARNING: never sign and send this event to relays
+        let mut event = EventBuilder::new(kind, content)
+            .tags(self.conversation_tags(&replies, sender, cx))
+            .finalize_unsigned(sender);
+
+        // Ensure that the ID is set
+        event.ensure_id();
+
+        Some(event)
+    }
+
+    // Construct a rumor event for an encrypted file message (NIP-17 kind 15)
+    pub fn file_rumor<I>(&self, file: FileAttachment, replies: I, cx: &App) -> Option<UnsignedEvent>
+    where
+        I: IntoIterator<Item = EventId>,
+    {
+        let replies: Vec<EventId> = replies.into_iter().collect();
 
         // Get current user's public key
+        let nostr = NostrRegistry::global(cx);
         let sender = nostr.read(cx).current_user()?;
+
+        let mut tags = self.conversation_tags(&replies, sender, cx);
+        tags.extend(file.tags());
+
+        // Construct a file message rumor event
+        // WARNING: never sign and send this event to relays
+        let mut event = EventBuilder::new(KIND_FILE_MESSAGE, file.url.to_string())
+            .tags(tags)
+            .finalize_unsigned(sender);
+
+        // Ensure that the ID is set
+        event.ensure_id();
+
+        Some(event)
+    }
+
+    // Build the `subject` + reply `e` tags + receiver `p` tags (excluding `sender`)
+    fn conversation_tags(&self, replies: &[EventId], sender: PublicKey, cx: &App) -> Vec<Tag> {
+        let persons = PersonRegistry::global(cx);
 
         // Construct event's tags
         let mut tags = vec![];
@@ -454,8 +494,8 @@ impl Room {
         }
 
         // Add all reply tags
-        for id in replies.into_iter() {
-            tags.push(Tag::event(id))
+        for id in replies {
+            tags.push(Tag::event(*id))
         }
 
         // Add all receiver tags (no intermediate allocation)
@@ -467,16 +507,7 @@ impl Room {
             }));
         }
 
-        // Construct a direct message rumor event
-        // WARNING: never sign and send this event to relays
-        let mut event = EventBuilder::new(kind, content)
-            .tags(tags)
-            .finalize_unsigned(sender);
-
-        // Ensure that the ID is set
-        event.ensure_id();
-
-        Some(event)
+        tags
     }
 
     /// Select the appropriate signer based on signer kind and available keys.
@@ -609,7 +640,7 @@ async fn send_gift_wrap(
     rumor: &UnsignedEvent,
     config: &SignerKind,
 ) -> Result<SendReport, Error> {
-    let k_tag = Tag::custom("k", vec!["14"]);
+    let k_tag = Tag::custom("k", [rumor.kind.to_string()]);
     let mut extra_tags = vec![k_tag];
 
     // Determine the receiver public key based on the config
