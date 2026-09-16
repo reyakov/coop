@@ -14,10 +14,10 @@ description: |
 grade: stable
 confinement: classic
 compression: lzo
-website: https://reya.su/coop
-source-code: https://github.com/lumehq/coop
-issues: https://github.com/lumehq/coop/issues
-contact: https://reya.su
+website: https://reya.info/coop
+source-code: https://git.reya.info/reya/coop
+issues: https://github.com/reyakov/coop/issues
+contact: https://coopchat.xyz
 
 parts:
   coop:

@@ -64,7 +64,7 @@ impl Default for ThemeFamily {
             id: "coop".into(),
             name: "Coop Default Theme".into(),
             author: "Coop".into(),
-            url: "https://github.com/lumehq/coop".into(),
+            url: "https://github.com/reyakov/coop".into(),
             light: ThemeColors::light(),
             dark: ThemeColors::dark(),
         }
@@ -186,7 +186,7 @@ mod tests {
             "id": "test-theme",
             "name": "Test Theme",
             "author": "Coop",
-            "url": "https://github.com/lumehq/coop",
+            "url": "https://github.com/reyakov/coop",
             "light": {
                 "background": "#ffffff",
                 "surface_background": "#fafafa",

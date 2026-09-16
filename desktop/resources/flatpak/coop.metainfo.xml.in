@@ -35,13 +35,13 @@
         <content_attribute id="social-audio">intense</content_attribute>
     </content_rating>
 
-    <url type="homepage">https://reya.su/coop</url>
-    <url type="bugtracker">https://github.com/lumehq/coop/issues</url>
-    <url type="faq">https://github.com/lumehq/coop</url>
-    <url type="help">https://github.com/lumehq/coop/issues</url>
-    <url type="contact">https://reya.su/</url>
-    <url type="vcs-browser">https://github.com/lumehq/coop</url>
-    <url type="contribute">https://github.com/lumehq/coop/blob/main/CONTRIBUTING.md</url>
+    <url type="homepage">https://coopchat.xyz</url>
+    <url type="bugtracker">https://github.com/reyakov/coop/issues</url>
+    <url type="faq">https://github.com/reyakov/coop</url>
+    <url type="help">https://github.com/reyakov/coop/issues</url>
+    <url type="contact">reyakov@proton.me</url>
+    <url type="vcs-browser">https://github.com/reykov/coop</url>
+    <url type="contribute">https://github.com/reyakov/coop/blob/main/CONTRIBUTING.md</url>
 
     <supports>
         <internet>yes</internet>
