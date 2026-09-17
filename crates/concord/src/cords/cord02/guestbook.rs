@@ -6,12 +6,12 @@ use anyhow::Result;
 use data_encoding::HEXLOWER;
 use nostr_sdk::prelude::*;
 
-use crate::edition::{
-    AuthorityCitation, TAG_CITATION, canonical_decimal, citation_from, citation_tag,
-};
-use crate::stream::{
+use crate::cord01::{
     KIND_WRAP, OpenedStream, SealForm, StreamError, build_rumor_ms, build_seal, open_wrap,
     wrap_seal,
+};
+use crate::cord04::{
+    AuthorityCitation, TAG_CITATION, canonical_decimal, citation_from, citation_tag,
 };
 use crate::{GroupKey, decode_hex_32};
 
@@ -532,8 +532,8 @@ fn pubkey(hex: &str, name: &'static str) -> Result<PublicKey, GuestbookError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cord01::build_rumor_secs;
     use crate::derive::guestbook_group_key;
-    use crate::stream::build_rumor_secs;
     use crate::{CommunityId, Epoch};
 
     const ROOT: [u8; 32] = [0x5au8; 32];

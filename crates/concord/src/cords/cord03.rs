@@ -5,15 +5,15 @@ use std::fmt;
 use anyhow::Result;
 use nostr_sdk::prelude::*;
 
-use crate::derive::channel_group_key;
-use crate::edition::{
-    AuthorityCitation, TAG_CITATION, canonical_decimal, citation_from, citation_tag,
-};
-use crate::stream::{
+use crate::cord01::{
     KIND_WRAP, KIND_WRAP_EPHEMERAL, OpenedStream, SealForm, StreamError, build_rumor_ms,
     build_seal, channel_binding_tags, check_channel_binding, open_wrap, resolve_ms_strict,
     wrap_seal,
 };
+use crate::cord04::{
+    AuthorityCitation, TAG_CITATION, canonical_decimal, citation_from, citation_tag,
+};
+use crate::derive::channel_group_key;
 use crate::{ChannelId, Epoch, GroupKey, decode_hex_32};
 
 pub const KIND_MESSAGE: u16 = 9;

@@ -13,20 +13,29 @@ folded independently by every client.
 
 ## Modules
 
+Files follow the CORD documents. The frozen derivations of Appendix A and the id
+vocabulary are shared substrate — every document calls them — so they live outside
+`cords` in `utils::derive` (re-exported as `derive`) and `types`.
+
 | Module | Owns |
 | --- | --- |
+| `cord01` | Private Streams: the seal/wrap envelope and the NIP-44 helpers |
+| `cord02` | Communities: identity, epochs, metadata, the Control Plane fold and writer |
+| `cord02::guestbook` | Joins, leaves, kicks, snapshots, the member list |
+| `cord02::list` | The Community List (a member's own memberships, across devices) |
+| `cord03` | Channels: Channel metadata and the Chat Plane |
+| `cord04` | Roles: chained editions, parse/hash/fold, the roster, permissions, the banlist |
+| `cord04::pins` | Pin Lists, and the key disclosure a keyless reader verifies |
+| `cord05` | Invite bundles, links, the Direct Invite, the Invite List |
+| `cord06` | Key rotations, refounding, compaction, dissolution |
 | `derive` | Every frozen HKDF derivation and coordinate |
-| `stream` | The CORD-01 envelope: seal, wrap, open, and the NIP-44 helpers |
-| `edition` | Chained, versioned editions: parse, hash, fold, floors |
-| `roles` | Permissions, roles, grants, the banlist, the authority fixpoint |
-| `control` | The Control Plane: genesis, the fold, the writer, metadata |
-| `chat` | The Chat Plane: message/reaction/edit/delete builders and the fold |
-| `guestbook` | Joins, leaves, kicks, snapshots, the member list |
-| `invite` | Invite bundles, links, the Direct Invite, the Invite List |
-| `list` | The Community List (a member's own memberships, across devices) |
-| `rekey` | Key rotations, refounding, compaction, dissolution |
-| `pins` | Pin Lists, and the key disclosure a keyless reader verifies |
 | `store` | Local rumor cache, the community state document, relay paging |
+
+`CommunityId`, `ChannelId`, `RoleId`, `Epoch` and `Extra` (crate-internal) come from
+the private `types` module and are re-exported at the crate root.
+
+CORD-07 (audio/video) is unimplemented. CORD-08's timer has no file of its own: it
+lives in the metadata it reads (`cord02`) and the fold it filters (`cord03`).
 
 Read `CommunityId` as "this community", `ChannelId` as "this channel", `Epoch` as
 "which key generation". Nothing else in the API needs internal state.
@@ -34,11 +43,11 @@ Read `CommunityId` as "this community", `ChannelId` as "this channel", `Epoch` a
 ## Creating a community
 
 ```rust
-use concord::control::{self, CommunityMetadata};
+use concord::cord02::{self, CommunityMetadata};
 use concord::store::{self, CommunityState, save_state};
 
 let metadata = CommunityMetadata { name: "Room".into(), ..Default::default() };
-let minted = control::genesis(&owner_keys, &metadata, now_secs)?;
+let minted = cord02::genesis(&owner_keys, &metadata, now_secs)?;
 
 // minted.identity    — community_id, owner, owner_salt (verify() recomputes it)
 // minted.wraps       — the two owner-signed genesis editions, already sealed
@@ -53,14 +62,14 @@ join:
 
 ```rust
 use concord::derive::{control_group_key, control_signer_group_key};
-use concord::edition::ParsedEdition;
+use concord::cord04::ParsedEdition;
 
 let read = control_group_key(&minted.community_root, &minted.identity.community_id, Epoch(0))?;
 let signer = control_signer_group_key(&minted.control_root, &minted.identity.community_id, Epoch(0))?;
 let editions: Vec<ParsedEdition> = minted
     .wraps
     .iter()
-    .map(|wrap| control::open_edition(wrap, &read, &signer.pk(), true))
+    .map(|wrap| cord02::open_edition(wrap, &read, &signer.pk(), true))
     .collect::<Result<_, _>>()?;
 
 let mut state = CommunityState::from_genesis(&minted, &editions, added_at_ms)?;
@@ -75,12 +84,12 @@ client explicitly — coop's client is a gossip client with no background refres
 An invite link resolves to a bundle:
 
 ```rust
-use concord::invite::{self, BundleState, invite_bundle_key};
+use concord::cord05::{self, BundleState, invite_bundle_key};
 
-let link = invite::parse_link(url)?;      // link_signer, token, bootstrap_relays, naddr
+let link = cord05::parse_link(url)?;      // link_signer, token, bootstrap_relays, naddr
 
 // The crate does no I/O: fetch the naddr from the fragment's relays, then:
-let invite = match invite::parse_bundle_event(&event, &link.link_signer, &invite_bundle_key(&link.token))? {
+let invite = match cord05::parse_bundle_event(&event, &link.link_signer, &invite_bundle_key(&link.token))? {
     BundleState::Live(invite) => invite,      // validate() already ran
     BundleState::Revoked => return Ok(None),  // a tombstone at the coordinate
 };
@@ -89,7 +98,7 @@ let invite = match invite::parse_bundle_event(&event, &link.link_signer, &invite
 A Direct Invite arrives as a NIP-59 gift wrap addressed to the member:
 
 ```rust
-let (inviter, invite) = invite::unwrap_direct_invite(&wrap, &my_keys)?;
+let (inviter, invite) = cord05::unwrap_direct_invite(&wrap, &my_keys)?;
 ```
 
 Either way the invite carries `community_id`, `owner`, `owner_salt`,
@@ -101,26 +110,26 @@ Then publish a join so the member list sees the member before any backfill:
 
 ```rust
 use concord::derive::guestbook_group_key;
-use concord::guestbook;
+use concord::cord02::guestbook;
 
 let guestbook = guestbook_group_key(&invite.community_root, &invite.community_id, invite.root_epoch)?;
-let rumor = guestbook::build_join(my_pk, Some((creator_npub, label)), now_ms);
-let (wrap, _) = guestbook::seal_rumor(&rumor, &guestbook, &my_keys)?;
+let rumor = cord02::guestbook::build_join(my_pk, Some((creator_npub, label)), now_ms);
+let (wrap, _) = cord02::guestbook::seal_rumor(&rumor, &guestbook, &my_keys)?;
 client.send_event(&wrap).to(&relays).await?;
 ```
 
 ## Reading the Control Plane
 
 ```rust
-use concord::control::{self, ControlFold};
+use concord::cord02::{self, ControlFold};
 
 let editions: Vec<ParsedEdition> = wraps
     .iter()
-    .filter_map(|wrap| control::open_edition(wrap, &read, &control_pk, true).ok())
+    .filter_map(|wrap| cord02::open_edition(wrap, &read, &control_pk, true).ok())
     .collect();
 
 let control: ControlFold =
-    control::fold_control(&owner, &community_id, &editions, &state.floors(), &state.banned);
+    cord02::fold_control(&owner, &community_id, &editions, &state.floors(), &state.banned);
 state.apply_fold(&control);
 ```
 
@@ -145,12 +154,12 @@ fold; they are its memory.
 ## Sending a message
 
 ```rust
-use concord::chat::{self, build_message};
+use concord::cord03::{self, build_message};
 use concord::derive::channel_group_key;
 
 let plane = channel_group_key(&community_root, &channel, epoch)?;   // public channel
 let rumor = build_message(my_pk, &channel, epoch, text, None, at_ms, timer);
-let (wrap, wrap_key) = chat::seal_rumor(&rumor, &plane, &my_keys, false)?;
+let (wrap, wrap_key) = cord03::seal_rumor(&rumor, &plane, &my_keys, false)?;
 client.send_event(&wrap).to(&relays).await?;
 ```
 
@@ -171,7 +180,7 @@ about an existing `EventId` rather than a mutation.
 ## Reading a channel
 
 ```rust
-use concord::chat::{self, fold, plane_keys};
+use concord::cord03::{self, fold, plane_keys};
 
 let planes = plane_keys(&held, &channel)?;            // &[(Epoch, secret)]
 let mut rumors = Vec::new();
@@ -180,7 +189,7 @@ for wrap in &wraps {
     let Some((epoch, group)) = planes.iter().find(|(_, group)| group.pk() == wrap.pubkey) else {
         continue;
     };
-    let Ok((opened, rumor)) = chat::open(wrap, group, &channel, *epoch) else {
+    let Ok((opened, rumor)) = cord03::open(wrap, group, &channel, *epoch) else {
         continue;
     };
     store::cache_rumor(database, &channel, &opened).await?;
@@ -217,11 +226,11 @@ as an inline row only when its author passes
 ## Membership
 
 ```rust
-let states = guestbook::coalesce(&rumors, now_ms, Some(&refounder_pk), |actor, target, citation| {
+let states = cord02::guestbook::coalesce(&rumors, now_ms, Some(&refounder_pk), |actor, target, citation| {
     citation_ok(&owner, &community_id, actor, citation, &control.roles.floors)
         && control.roles.can_act_on_member(actor, &owner, target, Permissions::KICK)
 });
-let members = guestbook::complete_memberlist(&states, &observed, &granted, &control.banned, &BTreeMap::new());
+let members = cord02::guestbook::complete_memberlist(&states, &observed, &granted, &control.banned, &BTreeMap::new());
 ```
 
 - `observed` is npub → ms for every author this client has seen publish anything
@@ -254,52 +263,52 @@ and pass the head from the current fold, so the chain cannot silently fork.
 Wrappers: `set_community_metadata`, `set_channel_metadata`, `set_role`,
 `set_grant`, `set_banlist`, `set_registry`, `set_pin_list`, plus raw `publish`.
 A ban is a `set_banlist` followed by a base rekey; a kick is a `set_grant` with an
-empty `role_ids` followed by `guestbook::build_kick`.
+empty `role_ids` followed by `cord02::guestbook::build_kick`.
 
 ## Pins
 
 ```rust
-use concord::pins;
+use concord::cord04::pins;
 
-let entry = pins::build_entry(&opened_message, &plane, &channel)?;
+let entry = cord04::pins::build_entry(&opened_message, &plane, &channel)?;
 let head_content = control.pin_content(&community_id, &channel).unwrap_or("");
-let read = pins::read_list(head_content, |epoch| channel_group_key(&root, &channel, epoch).ok());
-let content = pins::publishable(&read, channel_is_private, &plane, epoch)?;
+let read = cord04::pins::read_list(head_content, |epoch| channel_group_key(&root, &channel, epoch).ok());
+let content = cord04::pins::publishable(&read, channel_is_private, &plane, epoch)?;
 let (wrap, _) = writer.set_pin_list(
     &my_keys, &community_id, &channel, &content, head, citation, now_secs)?;
 ```
 
 Reading is verification: `read_list` decodes either content form (public, or
 sealed under the channel key at the named epoch), and
-`pins::verify_entry(entry, &channel)` returns a `VerifiedPin` with the proven
+`cord04::pins::verify_entry(entry, &channel)` returns a `VerifiedPin` with the proven
 author, words and time — no history and no old keys needed. `read.sealed` means
 the list is sealed under an epoch this client never held: show it as unavailable,
-and never write from it (`publishable` refuses). `pins::killed_by(&pin, &delete)`
+and never write from it (`publishable` refuses). `cord04::pins::killed_by(&pin, &delete)`
 answers whether a folded kind-5 erases an entry.
 
 ## Invites
 
 ```rust
 use concord::derive::{invite_bundle_key, TOKEN_LEN};
-use concord::invite::{self, InviteEntry, InviteTombstone};
+use concord::cord05::{self, InviteEntry, InviteTombstone};
 
 let token: [u8; TOKEN_LEN] = /* 16 bytes from any CSPRNG */;
 let bundle_key = invite_bundle_key(&token);
 let link_signer = Keys::generate();
-let bundle = invite::build_bundle_event(&link_signer, &invite, &bundle_key)?;
-let url = invite::build_invite_url(BASE, &link_signer.public_key(), &token, &relays)?;
+let bundle = cord05::build_bundle_event(&link_signer, &invite, &bundle_key)?;
+let url = cord05::build_invite_url(BASE, &link_signer.public_key(), &token, &relays)?;
 ```
 
 A link is a coordinate plus a fragment: the naddr fetches the bundle, the token
 unlocks it, and the fragment names the relays to fetch from.
-`invite::stock_relays()` is what a fragment with no relays of its own means.
+`cord05::stock_relays()` is what a fragment with no relays of its own means.
 
 The `link_signer` secret is what lets the creator refresh or retire the link, so
 keep it against the token in the member's own Invite List — a local document
 encrypted to self, exactly like the Community List:
 
 ```rust
-let mut list = invite::parse_invite_list(&my_keys, &event)?;
+let mut list = cord05::parse_invite_list(&my_keys, &event)?;
 list.entries.push(InviteEntry {
     token: HEXLOWER.encode(&token),
     signer_sk: link_signer.secret_key().to_secret_hex(),
@@ -310,7 +319,7 @@ list.entries.push(InviteEntry {
     expires_at: None,
     extra: Default::default(),
 });
-let event = invite::build_invite_list(&my_keys, &list)?;      // kind 13303
+let event = cord05::build_invite_list(&my_keys, &list)?;      // kind 13303
 
 // Retiring is a tombstone, never a deletion: it beats a stale copy terminally.
 list.tombstones.push(InviteTombstone {
@@ -331,10 +340,10 @@ seals one blob per remaining member:
 
 ```rust
 use concord::derive::epoch_key_commitment;
-use concord::rekey::{self, RekeyScope};
+use concord::cord06::{self, RekeyScope};
 
 let scope = RekeyScope::Channel(channel_id);                    // or RekeyScope::Base
-let plan = rekey::plan_refounding(Epoch(epoch + 1))?;
+let plan = cord06::plan_refounding(Epoch(epoch + 1))?;
 
 // A base rotation delivers the new control-plane keys beside the root; a channel
 // rotation delivers only that channel's fresh key.
@@ -350,12 +359,12 @@ let (control_pk, control_root) = match scope {
 let blobs = members
     .iter()
     .map(|member| {
-        rekey::build_blob(&my_keys, member, scope, plan.epoch, &new_key, control_pk.as_ref(), control_root)
+        cord06::build_blob(&my_keys, member, scope, plan.epoch, &new_key, control_pk.as_ref(), control_root)
     })
     .collect::<Result<Vec<_>, _>>()?;
 
-let rekey_group = rekey::rekey_group(scope, &community_root, &community_id, plan.epoch)?;
-let wraps = rekey::build_rekey_chunks(
+let rekey_group = cord06::rekey_group(scope, &community_root, &community_id, plan.epoch)?;
+let wraps = cord06::build_rekey_chunks(
     &my_keys,
     &rekey_group,
     scope,
@@ -369,7 +378,7 @@ let wraps = rekey::build_rekey_chunks(
 )?;
 ```
 
-On the receiving side, `rekey::parse_rekey_chunk(&opened)` per wrap, then
+On the receiving side, `cord06::parse_rekey_chunk(&opened)` per wrap, then
 `collect_rotations(&chunks)`, then `am_i_removed(&rotation, &me)` — which is
 `None` until every chunk is held, because an incomplete set is never a removal. A
 member finds their delivery with `find_my_blobs` / `open_blob`, and adopts the key
@@ -379,11 +388,11 @@ matches the key they already hold. Two concurrent rotations settle on `fork_winn
 Dissolution is owner-only and terminal:
 
 ```rust
-let rumor = rekey::dissolved_tombstone_rumor(owner_pk, &community_id, now_secs);
-let wrap = rekey::seal_dissolved(&rumor, &community_id, &my_keys, now_secs)?;
+let rumor = cord06::dissolved_tombstone_rumor(owner_pk, &community_id, now_secs);
+let wrap = cord06::seal_dissolved(&rumor, &community_id, &my_keys, now_secs)?;
 
 // A receiver seals the community read-only on sight.
-if rekey::verify_dissolved(&wrap, &identity) {
+if cord06::verify_dissolved(&wrap, &identity) {
     state.dissolved = true;
 }
 ```
@@ -393,15 +402,15 @@ if rekey::verify_dissolved(&wrap, &identity) {
 A member's own memberships, synced across their devices:
 
 ```rust
-use concord::list;
+use concord::cord02::list;
 
-let material = list::join_material(&invite, staff.then_some(&control_root));
-let mut mine = list::parse_list_event(&my_keys, &event)?;
-mine = list::merge(mine, list::CommunityList {
-    entries: vec![list::CommunityListEntry { community_id, seed: material.clone(), current: material, added_at: now_ms, extra: Default::default() }],
+let material = cord02::list::join_material(&invite, staff.then_some(&control_root));
+let mut mine = cord02::list::parse_list_event(&my_keys, &event)?;
+mine = cord02::list::merge(mine, cord02::list::CommunityList {
+    entries: vec![cord02::list::CommunityListEntry { community_id, seed: material.clone(), current: material, added_at: now_ms, extra: Default::default() }],
     ..Default::default()
 });
-let event = list::build_list_event(&my_keys, &mine)?;      // kind 13302, NIP-44 to self
+let event = cord02::list::build_list_event(&my_keys, &mine)?;      // kind 13302, NIP-44 to self
 ```
 
 `is_live(&id)` answers joined-versus-left: a tombstone is terminal until a
@@ -430,7 +439,7 @@ impl ConcordRegistry {
 }
 ```
 
-Call it after `chat::init` in `desktop/src/main.rs` and `web/src/lib.rs`, and
+Call it after `cord03::init` in `desktop/src/main.rs` and `web/src/lib.rs`, and
 subscribe to `NostrRegistry` for `SignerChanged` so the communities reset with
 the account.
 
@@ -458,7 +467,7 @@ self.ingress = Some(cx.background_spawn(async move {
         let Some(plane) = planes.iter().find(|plane| plane.group.pk() == wrap.pubkey) else {
             continue;
         };
-        let (opened, rumor) = chat::open(wrap, &plane.group, &plane.channel, plane.epoch)?;
+        let (opened, rumor) = cord03::open(wrap, &plane.group, &plane.channel, plane.epoch)?;
         store::cache_rumor(database.as_ref(), &plane.channel, &opened).await?;
         signal_tx.send_async(Signal::Chat { channel: plane.channel, rumor }).await?;
     }

@@ -10,11 +10,11 @@ use nostr::nips::nip59::{GiftWrapBuilder, UnwrappedGift};
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::control::{ImageRef, MAX_RELAYS};
+use crate::cord01::{self, NIP44_MAX_PLAINTEXT, StreamError};
+use crate::cord02::list::{canonical, union};
+use crate::cord02::{ImageRef, MAX_RELAYS};
+use crate::cord04::{TAG_SUBKIND, vsk};
 use crate::derive::{TOKEN_LEN, verify_community_id};
-use crate::edition::{TAG_SUBKIND, vsk};
-use crate::list::{canonical, union};
-use crate::stream::{self, NIP44_MAX_PLAINTEXT, StreamError};
 use crate::{ChannelId, CommunityId, Epoch, Extra, decode_hex_32};
 
 pub const KIND_BUNDLE: u16 = 33301;
@@ -594,7 +594,7 @@ pub fn build_invite_list(keys: &Keys, list: &InviteList) -> Result<Event, Invite
     list.fits()?;
 
     let json = serde_json::to_string(list).map_err(json_error)?;
-    let content = stream::seal_to_self(keys, json.as_bytes())?;
+    let content = cord01::seal_to_self(keys, json.as_bytes())?;
 
     EventBuilder::new(Kind::Custom(KIND_INVITE_LIST), content)
         .finalize(keys)
@@ -606,7 +606,7 @@ pub fn parse_invite_list(keys: &Keys, event: &Event) -> Result<InviteList, Invit
         return Err(InviteError::Kind(event.kind.as_u16()));
     }
 
-    let json = stream::open_to_self(keys, &event.content)?;
+    let json = cord01::open_to_self(keys, &event.content)?;
 
     serde_json::from_slice(&json).map_err(json_error)
 }
@@ -626,14 +626,14 @@ fn merge_entry(held: &InviteEntry, incoming: &InviteEntry) -> InviteEntry {
 }
 
 fn seal_bundle(bundle_key: &[u8; 32], json: &str) -> Result<String, InviteError> {
-    Ok(stream::seal_bytes(
+    Ok(cord01::seal_bytes(
         &ConversationKey::new(*bundle_key),
         json.as_bytes(),
     )?)
 }
 
 fn open_bundle(bundle_key: &[u8; 32], content: &str) -> Result<String, InviteError> {
-    let plaintext = stream::open_bytes(&ConversationKey::new(*bundle_key), content)?;
+    let plaintext = cord01::open_bytes(&ConversationKey::new(*bundle_key), content)?;
 
     String::from_utf8(plaintext).map_err(|_| InviteError::BadFragment("bundle is not utf8"))
 }
@@ -941,7 +941,7 @@ mod tests {
         assert!(unwrap_direct_invite(&wrap, &stranger).is_err());
 
         // ...and a wrap that opens to some other kind is not an invite.
-        let rumor = EventBuilder::new(Kind::Custom(crate::chat::KIND_MESSAGE), "hello")
+        let rumor = EventBuilder::new(Kind::Custom(crate::cord03::KIND_MESSAGE), "hello")
             .finalize_unsigned(recipient.public_key());
         let wrap = GiftWrapBuilder::new(recipient.public_key(), rumor)
             .finalize(&recipient)

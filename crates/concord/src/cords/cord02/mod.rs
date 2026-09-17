@@ -1,22 +1,25 @@
+pub mod guestbook;
+pub mod list;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, bail};
 use nostr_sdk::prelude::{Event, Keys, PublicKey, Timestamp, UnsignedEvent};
 use serde::{Deserialize, Serialize};
 
+use crate::cord01::{KIND_WRAP, SealForm, build_seal, open_wrap_at, wrap_seal_with};
+use crate::cord04::roles::{
+    AuthorityEdition, CommunityRoles, Grant, MAX_BANLIST, Permissions, Role, Roster, citation_ok,
+    fold_roster,
+};
+use crate::cord04::{
+    AuthorityCitation, EditionFields, EditionMeta, EntityHead, Floors, ParsedEdition,
+    build_edition, fold_head, parse_edition, vsk,
+};
 use crate::derive::{
     banlist_locator, community_id_of, control_group_key, control_signer_group_key, grant_locator,
     invite_links_locator, pins_locator, verify_community_id,
 };
-use crate::edition::{
-    AuthorityCitation, EditionFields, EditionMeta, EntityHead, Floors, ParsedEdition,
-    build_edition, fold_head, parse_edition, vsk,
-};
-use crate::roles::{
-    AuthorityEdition, CommunityRoles, Grant, MAX_BANLIST, Permissions, Role, Roster, citation_ok,
-    fold_roster,
-};
-use crate::stream::{KIND_WRAP, SealForm, build_seal, open_wrap_at, wrap_seal_with};
 use crate::{ChannelId, CommunityId, Epoch, Extra, GroupKey, random_32};
 
 pub const MAX_NAME_BYTES: usize = 64;
@@ -731,12 +734,13 @@ mod tests {
     use nostr_memory::MemoryDatabase;
 
     use super::*;
-    use crate::chat::{self, build_message, seal_rumor};
+    use crate::cord03::{self, build_message, seal_rumor};
+    use crate::cord04::fold;
+    use crate::cord04::pins;
+    use crate::cord04::roles::{Grant, MAX_BANLIST, MAX_ROLES_PER_MEMBER, Role, RoleScope};
     use crate::derive::{channel_group_key, grant_locator};
-    use crate::edition::fold;
-    use crate::roles::{Grant, MAX_BANLIST, MAX_ROLES_PER_MEMBER, Role, RoleScope};
     use crate::store::{CommunityState, load_state, save_state};
-    use crate::{Extra, RoleId, pins};
+    use crate::{Extra, RoleId};
 
     const AT: u64 = 1_700_000_000;
 
@@ -1102,7 +1106,7 @@ mod tests {
             None,
         );
         let (wrap, _) = seal_rumor(&rumor, &group, &author, false).expect("seals");
-        let opened = chat::open(&wrap, &group, &channel, ROOT_EPOCH)
+        let opened = cord03::open(&wrap, &group, &channel, ROOT_EPOCH)
             .expect("opens")
             .0;
         let entry = pins::build_entry(&opened, &group, &channel).expect("pins");

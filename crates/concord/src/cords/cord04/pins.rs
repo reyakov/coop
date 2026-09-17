@@ -9,9 +9,9 @@ use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
-use crate::chat::{ChatAction, ChatRumor, KIND_COMMENT, KIND_EDIT, KIND_MESSAGE};
-use crate::edition::canonical_decimal;
-use crate::stream::{self, OpenedStream, SealForm, resolve_ms_strict};
+use crate::cord01::{self, OpenedStream, SealForm, resolve_ms_strict};
+use crate::cord03::{ChatAction, ChatRumor, KIND_COMMENT, KIND_EDIT, KIND_MESSAGE};
+use crate::cord04::canonical_decimal;
 use crate::{ChannelId, Epoch, Extra, GroupKey, decode_hex_lower};
 
 pub const PIN_MAX_ENTRIES: usize = 25;
@@ -315,7 +315,7 @@ fn disclosed_keys(opened: &OpenedStream, group: &GroupKey) -> Result<MessageKeys
 pub fn verify_entry(entry: &PinEntry, channel: &ChannelId) -> Option<VerifiedPin> {
     let seal = &entry.seal;
 
-    if seal.kind.as_u16() != stream::KIND_SEAL_ENCRYPTED || seal.verify().is_err() {
+    if seal.kind.as_u16() != cord01::KIND_SEAL_ENCRYPTED || seal.verify().is_err() {
         return None;
     }
 
@@ -376,7 +376,7 @@ fn verify_edit_bundle(
     let seal = &bundle.seal;
 
     // Checkable before any crypto: nobody else may revise another member's words.
-    if seal.kind.as_u16() != stream::KIND_SEAL_ENCRYPTED || seal.pubkey != *original_author {
+    if seal.kind.as_u16() != cord01::KIND_SEAL_ENCRYPTED || seal.pubkey != *original_author {
         return None;
     }
 
@@ -456,7 +456,7 @@ fn serialize_sealed(
     }
 
     let inner = encode_form(entries)?;
-    let sealed = stream::seal_bytes(group.conversation(), inner.as_bytes())
+    let sealed = cord01::seal_bytes(group.conversation(), inner.as_bytes())
         .map_err(|error| PinError::Seal(error.to_string()))?;
     let content = serde_json::json!({ "epoch": epoch.to_string(), "sealed": sealed }).to_string();
 
@@ -526,7 +526,7 @@ pub fn read_list(content: &str, unseal: impl Fn(Epoch) -> Option<GroupKey>) -> R
         };
     };
 
-    let Ok(inner) = stream::open_bytes(group.conversation(), sealed) else {
+    let Ok(inner) = cord01::open_bytes(group.conversation(), sealed) else {
         return EMPTY;
     };
 
@@ -554,7 +554,7 @@ mod tests {
     use nostr::nips::nip44::v2::{self, ConversationKey};
 
     use super::*;
-    use crate::chat::{ChatRumor, build_delete, build_edit, build_message, open, seal_rumor};
+    use crate::cord03::{ChatRumor, build_delete, build_edit, build_message, open, seal_rumor};
     use crate::derive::channel_group_key;
 
     const AT_MS: u64 = 1_700_000_000_000;
@@ -657,7 +657,7 @@ mod tests {
         assert!(verify_entry(&forged, &channel()).is_none());
 
         // A rumor carrying a claimed id that is not its own is refused.
-        let plaintext = stream::open_bytes(&conversation(), &opened.seal.content).expect("opens");
+        let plaintext = cord01::open_bytes(&conversation(), &opened.seal.content).expect("opens");
         let mut value: serde_json::Value = serde_json::from_slice(&plaintext).expect("json");
         value["id"] = serde_json::Value::String("00".repeat(32));
 
@@ -668,7 +668,7 @@ mod tests {
         )
         .expect("encrypts");
         let content = BASE64.encode(&raw);
-        let seal = EventBuilder::new(Kind::Custom(stream::KIND_SEAL_ENCRYPTED), &content)
+        let seal = EventBuilder::new(Kind::Custom(cord01::KIND_SEAL_ENCRYPTED), &content)
             .custom_created_at(opened.seal.created_at)
             .finalize(&author)
             .expect("signs");

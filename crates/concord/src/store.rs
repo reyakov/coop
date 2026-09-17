@@ -6,13 +6,13 @@ use anyhow::{Result, anyhow};
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::chat::{self, ChatRumor, plane_keys};
-use crate::control::{
+use crate::cord01::{KIND_WRAP_EPHEMERAL, OpenedStream};
+use crate::cord02::{
     ChannelMetadata, CommunityGenesis, CommunityMetadata, ControlFold, ROOT_EPOCH,
 };
+use crate::cord03::{self, ChatRumor, plane_keys};
+use crate::cord04::{EntityHead, Floors, ParsedEdition, vsk};
 use crate::derive::control_signer_group_key;
-use crate::edition::{EntityHead, Floors, ParsedEdition, vsk};
-use crate::stream::{KIND_WRAP_EPHEMERAL, OpenedStream};
 use crate::{ChannelId, CommunityId, Epoch, GroupKey};
 
 static LOCAL_KEYS: LazyLock<Keys> = LazyLock::new(Keys::generate);
@@ -31,7 +31,8 @@ pub async fn cache_rumor(
     channel: &ChannelId,
     opened: &OpenedStream,
 ) -> Result<bool> {
-    if chat::expiration_of(&opened.rumor)?.is_some_and(|expiration| expiration <= Timestamp::now())
+    if cord03::expiration_of(&opened.rumor)?
+        .is_some_and(|expiration| expiration <= Timestamp::now())
     {
         return Ok(false);
     }
@@ -73,7 +74,7 @@ pub async fn purge_expired(
             continue;
         };
 
-        let Ok(Some(expiration)) = chat::expiration_of(&rumor) else {
+        let Ok(Some(expiration)) = cord03::expiration_of(&rumor) else {
             continue;
         };
 
@@ -374,7 +375,7 @@ fn advance(
             continue;
         };
 
-        let Ok((opened, rumor)) = chat::open(wrap, group, channel, *epoch) else {
+        let Ok((opened, rumor)) = cord03::open(wrap, group, channel, *epoch) else {
             continue;
         };
 
@@ -419,11 +420,11 @@ mod tests {
 
     use super::*;
     use crate::Epoch;
-    use crate::chat::{build_message, seal_rumor};
-    use crate::derive::channel_group_key;
-    use crate::stream::{
+    use crate::cord01::{
         KIND_WRAP, SealForm, build_rumor_ms, build_seal, channel_binding_tags, open_wrap, wrap_seal,
     };
+    use crate::cord03::{build_message, seal_rumor};
+    use crate::derive::channel_group_key;
 
     const SECRET: [u8; 32] = [0x07u8; 32];
     const NEXT_SECRET: [u8; 32] = [0x11u8; 32];

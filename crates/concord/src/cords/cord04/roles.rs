@@ -4,10 +4,10 @@ use anyhow::{Result, bail};
 use nostr_sdk::prelude::PublicKey;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-use crate::derive::{banlist_locator, grant_locator};
-use crate::edition::{
+use crate::cord04::{
     AuthorityCitation, EditionMeta, EntityHead, Floors, ParsedEdition, fold_head, vsk,
 };
+use crate::derive::{banlist_locator, grant_locator};
 use crate::{ChannelId, CommunityId, Extra, RoleId, decode_hex_32};
 
 pub const MAX_ROLES_PER_COMMUNITY: usize = 100;
@@ -759,7 +759,7 @@ mod tests {
     use nostr_sdk::prelude::Keys;
 
     use super::*;
-    use crate::edition::{EditionFields, build_edition, parse_edition};
+    use crate::cord04::{EditionFields, build_edition, parse_edition};
 
     const COMMUNITY: [u8; 32] = [0xc0; 32];
     const AT: u64 = 1_700_000_000;

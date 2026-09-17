@@ -1,3 +1,6 @@
+pub mod pins;
+pub mod roles;
+
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -7,8 +10,8 @@ use nostr_sdk::prelude::{EventId, PublicKey, Tag, UnsignedEvent};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::cord01::build_rumor_secs;
 use crate::decode_hex_32;
-use crate::stream::build_rumor_secs;
 
 pub const KIND_CONTROL: u16 = 3308;
 

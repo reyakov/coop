@@ -7,17 +7,17 @@ use nostr::nips::nip44::v2::ConversationKey;
 use nostr_sdk::prelude::{Event, Keys, PublicKey, SecretKey, Tag, Timestamp, UnsignedEvent};
 use serde::{Deserialize, Serialize};
 
-use crate::control::CommunityIdentity;
+use crate::cord01::{self, KIND_SEAL_PLAINTEXT, OpenedStream, SealForm, StreamError};
+use crate::cord02::CommunityIdentity;
+use crate::cord04::roles::CommunityRoles;
+use crate::cord04::{
+    AuthorityCitation, KIND_CONTROL, TAG_SUBKIND, canonical_decimal, citation_from, citation_tag,
+    vsk,
+};
 use crate::derive::{
     base_rekey_group_key, channel_rekey_group_key, control_group_key, control_signer_group_key,
     dissolved_group_key, epoch_key_commitment, recipient_locator,
 };
-use crate::edition::{
-    AuthorityCitation, KIND_CONTROL, TAG_SUBKIND, canonical_decimal, citation_from, citation_tag,
-    vsk,
-};
-use crate::roles::CommunityRoles;
-use crate::stream::{self, KIND_SEAL_PLAINTEXT, OpenedStream, SealForm, StreamError};
 use crate::{ChannelId, CommunityId, Epoch, GroupKey, random_32};
 
 pub const KIND_REKEY: u16 = 3303;
@@ -325,7 +325,7 @@ pub fn open_blob(
 ) -> Result<KeyDelivery, RekeyError> {
     let conversation =
         ConversationKey::derive(recipient.secret_key(), rotator).map_err(crypto_error)?;
-    let plaintext = stream::open_bytes(&conversation, &blob.wrapped)?;
+    let plaintext = cord01::open_bytes(&conversation, &blob.wrapped)?;
 
     parse_blob_plaintext(&plaintext, scope, epoch, community_id)
 }
@@ -347,7 +347,7 @@ fn seal_to(
     plaintext: &[u8],
 ) -> Result<String, RekeyError> {
     let conversation = ConversationKey::derive(secret, recipient).map_err(crypto_error)?;
-    Ok(stream::seal_bytes(&conversation, plaintext)?)
+    Ok(cord01::seal_bytes(&conversation, plaintext)?)
 }
 
 #[derive(Debug, Clone)]
@@ -539,7 +539,7 @@ pub fn compact(
     let mut wraps = Vec::with_capacity(seals.len());
 
     for seal in seals {
-        wraps.push(stream::rewrap_seal(seal, read, signer, at)?.0);
+        wraps.push(cord01::rewrap_seal(seal, read, signer, at)?.0);
     }
 
     Ok(wraps)
@@ -592,7 +592,7 @@ pub fn build_rekey_rumor(
         tags.push(Tag::custom(TAG_SEVER, ["1"]));
     }
 
-    Ok(stream::build_rumor_secs(
+    Ok(cord01::build_rumor_secs(
         KIND_REKEY, rotator, &content, tags, at_secs,
     ))
 }
@@ -633,11 +633,11 @@ pub fn build_rekey_chunks(
             at_secs,
         )?;
 
-        let seal = stream::build_seal(&rumor, SealForm::Encrypted, group, rotator)?;
-        let (wrap, _) = stream::wrap_seal(
+        let seal = cord01::build_seal(&rumor, SealForm::Encrypted, group, rotator)?;
+        let (wrap, _) = cord01::wrap_seal(
             &seal,
             group,
-            stream::KIND_WRAP,
+            cord01::KIND_WRAP,
             Timestamp::from_secs(at_secs),
             &[],
         )?;
@@ -704,7 +704,7 @@ pub fn parse_rekey_chunk(opened: &OpenedStream) -> Result<RekeyChunk, RekeyError
         prev_commit,
         chunk: parse_chunk(rumor)?,
         blobs,
-        citation: tag(rumor, crate::edition::TAG_CITATION)?.and_then(citation_from),
+        citation: tag(rumor, crate::cord04::TAG_CITATION)?.and_then(citation_from),
         severed,
     })
 }
@@ -719,7 +719,7 @@ pub fn dissolved_tombstone_rumor(
     community_id: &CommunityId,
     at_secs: u64,
 ) -> UnsignedEvent {
-    stream::build_rumor_secs(
+    cord01::build_rumor_secs(
         KIND_CONTROL,
         owner,
         "",
@@ -738,11 +738,11 @@ pub fn seal_dissolved(
     at_secs: u64,
 ) -> Result<Event, RekeyError> {
     let group = dissolved_group_key(community_id).map_err(crypto_error)?;
-    let seal = stream::build_seal(rumor, SealForm::Plaintext, &group, owner)?;
-    let (wrap, _) = stream::wrap_seal(
+    let seal = cord01::build_seal(rumor, SealForm::Plaintext, &group, owner)?;
+    let (wrap, _) = cord01::wrap_seal(
         &seal,
         &group,
-        stream::KIND_WRAP,
+        cord01::KIND_WRAP,
         Timestamp::from_secs(at_secs),
         &[],
     )?;
@@ -756,7 +756,7 @@ pub fn open_dissolved(
     community_id: &CommunityId,
 ) -> Result<DissolvedTombstone, RekeyError> {
     let group = dissolved_group_key(community_id).map_err(crypto_error)?;
-    let opened = stream::open_wrap(wrap, &group)?;
+    let opened = cord01::open_wrap(wrap, &group)?;
 
     if !is_tombstone(&opened.rumor, community_id) {
         return Err(RekeyError::NotADissolution);
@@ -859,13 +859,13 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::control::{
+    use crate::cord01::KIND_WRAP;
+    use crate::cord02::{
         CommunityMetadata, ControlWriter, Edition, ROOT_EPOCH, fold_control, genesis, open_edition,
     };
+    use crate::cord04::roles::{Grant, Permissions, Role, RoleScope};
+    use crate::cord04::{EditionFields, Floors, build_edition};
     use crate::derive::{community_id_of, grant_locator};
-    use crate::edition::{EditionFields, Floors, build_edition};
-    use crate::roles::{Grant, Permissions, Role, RoleScope};
-    use crate::stream::KIND_WRAP;
     use crate::{Extra, RoleId};
 
     const AT: u64 = 1_700_000_000;
@@ -1074,7 +1074,7 @@ mod tests {
         .expect("builds");
         assert_eq!(chunks.len(), 1);
 
-        let opened = stream::open_wrap(&chunks[0], &group).expect("opens");
+        let opened = cord01::open_wrap(&chunks[0], &group).expect("opens");
         let chunk = parse_rekey_chunk(&opened).expect("parses");
         assert_eq!(
             chunk.rotator,
@@ -1486,7 +1486,7 @@ mod tests {
             at_secs: AT,
         });
         let seal =
-            stream::build_seal(&rumor, SealForm::Plaintext, &prior_read, &owner).expect("seals");
+            cord01::build_seal(&rumor, SealForm::Plaintext, &prior_read, &owner).expect("seals");
 
         let refounding = plan_refounding(Epoch(1)).expect("plans");
         let read = refounding.read(&community_id).expect("derives");
@@ -1497,7 +1497,7 @@ mod tests {
             compact(std::slice::from_ref(&seal), &read, &signer, AT + 1).expect("compacts");
         assert_eq!(compacted.len(), 1);
 
-        let reopened = stream::open_wrap_at(&compacted[0], &signer.pk(), read.conversation(), true)
+        let reopened = cord01::open_wrap_at(&compacted[0], &signer.pk(), read.conversation(), true)
             .expect("opens");
         assert_eq!(
             reopened.seal.sig, seal.sig,
@@ -1508,7 +1508,7 @@ mod tests {
 
         // Only a plaintext seal can be carried forward.
         let encrypted =
-            stream::build_seal(&rumor, SealForm::Encrypted, &prior_read, &owner).expect("seals");
+            cord01::build_seal(&rumor, SealForm::Encrypted, &prior_read, &owner).expect("seals");
         assert!(matches!(
             compact(&[encrypted], &read, &signer, AT + 1),
             Err(RekeyError::Stream(StreamError::NotRewrappable))
@@ -1550,7 +1550,7 @@ mod tests {
         // The spec's all-zero `eid` is refused: it would let one owner's genuine
         // tombstone be re-wrapped at another of their communities and kill it.
         let zeroed = seal_dissolved(
-            &stream::build_rumor_secs(
+            &cord01::build_rumor_secs(
                 KIND_CONTROL,
                 owner.public_key(),
                 "",
@@ -1580,10 +1580,10 @@ mod tests {
             owner: owner.public_key(),
             owner_salt: other_salt,
         };
-        let seal = stream::open_wrap(&wrap, &dissolved_group_key(&community_id).expect("derives"))
+        let seal = cord01::open_wrap(&wrap, &dissolved_group_key(&community_id).expect("derives"))
             .expect("opens")
             .seal;
-        let replayed = stream::wrap_seal(
+        let replayed = cord01::wrap_seal(
             &seal,
             &dissolved_group_key(&other_id).expect("derives"),
             KIND_WRAP,

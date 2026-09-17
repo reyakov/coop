@@ -5,8 +5,8 @@ use std::fmt;
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::invite::{ChannelGrant, CommunityInvite};
-use crate::stream::{self, NIP44_MAX_PLAINTEXT};
+use crate::cord01::{self, NIP44_MAX_PLAINTEXT};
+use crate::cord05::{ChannelGrant, CommunityInvite};
 use crate::{CommunityId, Epoch, Extra};
 
 pub const KIND_COMMUNITY_LIST: u16 = 13302;
@@ -42,8 +42,8 @@ impl fmt::Display for ListError {
 
 impl std::error::Error for ListError {}
 
-impl From<stream::StreamError> for ListError {
-    fn from(error: stream::StreamError) -> Self {
+impl From<cord01::StreamError> for ListError {
+    fn from(error: cord01::StreamError) -> Self {
         ListError::Crypto(error.to_string())
     }
 }
@@ -187,7 +187,7 @@ pub fn build_list_event(keys: &Keys, list: &CommunityList) -> Result<Event, List
     list.fits()?;
 
     let json = serde_json::to_string(list).map_err(json_error)?;
-    let content = stream::seal_to_self(keys, json.as_bytes())?;
+    let content = cord01::seal_to_self(keys, json.as_bytes())?;
 
     EventBuilder::new(Kind::Custom(KIND_COMMUNITY_LIST), content)
         .finalize(keys)
@@ -199,7 +199,7 @@ pub fn parse_list_event(keys: &Keys, event: &Event) -> Result<CommunityList, Lis
         return Err(ListError::Kind(event.kind.as_u16()));
     }
 
-    let json = stream::open_to_self(keys, &event.content)?;
+    let json = cord01::open_to_self(keys, &event.content)?;
 
     serde_json::from_slice(&json).map_err(json_error)
 }
