@@ -1,7 +1,11 @@
+use std::any::Any;
+use std::sync::Arc;
+
 use gpui::{
     AnyElement, AnyView, App, Element, Entity, EventEmitter, FocusHandle, Focusable, Render,
     SharedString, Window,
 };
+use gpui_base::dock::{PanelId, PanelState};
 
 use crate::button::Button;
 use crate::menu::PopupMenu;
@@ -11,14 +15,6 @@ pub enum PanelEvent {
     ZoomIn,
     ZoomOut,
     LayoutChanged,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PanelStyle {
-    /// Display the TabBar when there are multiple tabs, otherwise display the simple title.
-    Default,
-    /// Always display the tab bar.
-    TabBar,
 }
 
 pub trait Panel: EventEmitter<PanelEvent> + Render + Focusable {
@@ -154,5 +150,86 @@ impl<T: Panel> From<&dyn PanelView> for Entity<T> {
 impl PartialEq for dyn PanelView {
     fn eq(&self, other: &Self) -> bool {
         self.view() == other.view()
+    }
+}
+
+#[derive(Clone)]
+pub struct PanelHandle {
+    id: PanelId,
+    panel: Arc<dyn PanelView>,
+}
+
+impl PanelHandle {
+    pub fn new<P: Panel>(panel: Entity<P>) -> Self {
+        Self {
+            id: PanelId::from(panel.entity_id()),
+            panel: Arc::new(panel),
+        }
+    }
+
+    /// Recover the coop handle behind one of base's.
+    pub fn of(panel: &Arc<dyn gpui_base::dock::PanelView>) -> Option<&Self> {
+        panel.as_any().downcast_ref::<Self>()
+    }
+
+    /// The coop panel behind this handle.
+    pub fn panel(&self) -> &Arc<dyn PanelView> {
+        &self.panel
+    }
+}
+
+impl gpui_base::dock::PanelView for PanelHandle {
+    fn panel_name(&self, _: &App) -> &'static str {
+        "CoopPanel"
+    }
+
+    fn panel_id(&self, _: &App) -> PanelId {
+        self.id
+    }
+
+    fn closable(&self, cx: &App) -> bool {
+        self.panel.closable(cx)
+    }
+
+    fn zoomable(&self, cx: &App) -> bool {
+        self.panel.zoomable(cx)
+    }
+
+    fn visible(&self, cx: &App) -> bool {
+        self.panel.visible(cx)
+    }
+
+    fn set_active(&self, active: bool, _: &mut Window, cx: &mut App) {
+        self.panel.set_active(active, cx);
+    }
+
+    fn set_zoomed(&self, zoomed: bool, _: &mut Window, cx: &mut App) {
+        self.panel.set_zoomed(zoomed, cx);
+    }
+
+    fn on_added_to(
+        &self,
+        _group: gpui::WeakEntity<gpui_base::dock::TabGroup>,
+        _: &mut Window,
+        _: &mut App,
+    ) {
+    }
+
+    fn on_removed(&self, _: &mut Window, _: &mut App) {}
+
+    fn view(&self) -> AnyView {
+        self.panel.view()
+    }
+
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.panel.focus_handle(cx)
+    }
+
+    fn dump(&self, cx: &App) -> PanelState {
+        PanelState::new(self.panel_name(cx))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }

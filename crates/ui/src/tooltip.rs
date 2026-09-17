@@ -1,8 +1,9 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, relative, App, AppContext, Context, Entity, IntoElement, ParentElement, Render,
-    SharedString, Styled, Window,
+    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
+    Window, div, relative,
 };
+use gpui_base::Tooltip as BaseTooltip;
 use theme::ActiveTheme;
 
 pub struct Tooltip {
@@ -18,7 +19,7 @@ impl Tooltip {
 impl Render for Tooltip {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div().child(
-            div()
+            BaseTooltip::new("tooltip")
                 .font_family(".SystemUIFont")
                 .m_3()
                 .p_1p5()

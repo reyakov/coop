@@ -1,31 +1,76 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, DefiniteLength, Edges, EdgesRefinement, Entity, Hsla, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement as _, Rems, RenderOnce, StyleRefinement, Styled,
-    TextAlign, Window, div, px, relative,
+    AnyElement, App, DefiniteLength, Edges, Entity, Hsla, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement as _, Pixels, Rems, RenderOnce, StyleRefinement, Styled, TextAlign,
+    Window, div, px, relative,
 };
+use gpui_base::InputBase;
+use gpui_base::input::{InputBaseState, InputEditorStyle, InputMode, InputModeKind, TextareaMode};
 use theme::ActiveTheme;
 
-use super::InputState;
-use super::element::EditorScrollbar;
 use crate::button::{Button, ButtonVariants as _};
 use crate::indicator::Indicator;
 use crate::input::clear_button;
 use crate::{IconName, Selectable, Sizable, Size, StyleSized, StyledExt, h_flex, v_flex};
 
-/// Returns `(background, foreground)` colors for input-like components.
-pub(crate) fn input_style(disabled: bool, cx: &App) -> (Hsla, Hsla) {
+/// The background of an input frame, which reads muted while the input is disabled.
+fn input_background(disabled: bool, cx: &App) -> Hsla {
     if disabled {
-        (cx.theme().surface_background, cx.theme().text_muted)
+        cx.theme().surface_background
     } else {
-        (cx.theme().elevated_surface_background, cx.theme().text)
+        cx.theme().elevated_surface_background
     }
 }
 
-/// A text input element bind to an [`InputState`].
+/// The colors base paints input text with, read from the coop theme.
+///
+/// Base fills in any color left transparent from its own palette, and that
+/// palette is only a projection of this one, so every color coop paints with is
+/// named here rather than left to resolve.
+fn input_editor_style(cx: &App) -> InputEditorStyle {
+    let theme = cx.theme();
+    InputEditorStyle {
+        foreground: theme.text,
+        muted_foreground: theme.text_muted,
+        background: theme.elevated_surface_background,
+        border: theme.border,
+        selection: theme.selection,
+        caret: theme.cursor,
+        ..InputEditorStyle::default()
+    }
+}
+
+/// The input's own padding, resolved to pixels.
+///
+/// Base applies the multi-line padding itself so that the text, the gutter, and
+/// the scrollbar share one inset, and the single-line frame carries its own.
+/// Both come from the same size table, resolved through the window's rem size.
+fn input_paddings(size: Size, style: &StyleRefinement, window: &Window) -> Edges<Pixels> {
+    let mut probe = div().input_px(size).input_py(size).refine_style(style);
+    let padding = probe.style().padding.clone();
+    let base_size = window.text_style().font_size;
+    let rem_size = window.rem_size();
+    let resolve = |value: Option<DefiniteLength>| {
+        value
+            .map(|value| value.to_pixels(base_size, rem_size))
+            .unwrap_or(px(0.))
+    };
+
+    Edges {
+        left: resolve(padding.left),
+        right: resolve(padding.right),
+        top: resolve(padding.top),
+        bottom: resolve(padding.bottom),
+    }
+}
+
+/// A text input element bound to an [`InputState`] or a [`TextareaState`].
+///
+/// The editing kind lives on the state, so `Input::new` accepts either and
+/// infers which one is rendered.
 #[derive(IntoElement)]
-pub struct Input {
-    state: Entity<InputState>,
+pub struct Input<M: InputModeKind = InputMode> {
+    state: Entity<InputBaseState<M>>,
     style: StyleRefinement,
     size: Size,
     prefix: Option<AnyElement>,
@@ -39,14 +84,17 @@ pub struct Input {
     selected: bool,
 }
 
-impl Sizable for Input {
+/// A styled multi-line text input.
+pub type Textarea = Input<TextareaMode>;
+
+impl<M: InputModeKind> Sizable for Input<M> {
     fn with_size(mut self, size: impl Into<Size>) -> Self {
         self.size = size.into();
         self
     }
 }
 
-impl Selectable for Input {
+impl<M: InputModeKind> Selectable for Input<M> {
     fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
         self
@@ -57,9 +105,9 @@ impl Selectable for Input {
     }
 }
 
-impl Input {
-    /// Create a new [`Input`] element bind to the [`InputState`].
-    pub fn new(state: &Entity<InputState>) -> Self {
+impl<M: InputModeKind> Input<M> {
+    /// Create a new [`Input`] element bind to the given state.
+    pub fn new(state: &Entity<InputBaseState<M>>) -> Self {
         Self {
             state: state.clone(),
             size: Size::default(),
@@ -128,8 +176,7 @@ impl Input {
         self
     }
 
-    fn render_toggle_mask_button(state: &Entity<InputState>, cx: &App) -> impl IntoElement {
-        let _masked = state.read(cx).masked;
+    fn render_toggle_mask_button(state: &Entity<InputBaseState<M>>) -> impl IntoElement {
         Button::new("toggle-mask")
             .icon(IconName::Eye)
             .xsmall()
@@ -137,78 +184,42 @@ impl Input {
             .tab_stop(false)
             .on_click({
                 let state = state.clone();
-                move |_, window, cx| {
-                    state.update(cx, |state, cx| {
-                        state.set_masked(!state.masked, window, cx);
-                    })
-                }
+                move |_, window, cx| state.update(cx, |state, cx| state.toggle_masked(window, cx))
             })
-    }
-
-    /// This method must after the refine_style.
-    fn render_editor(
-        paddings: EdgesRefinement<DefiniteLength>,
-        input_state: &Entity<InputState>,
-        state: &InputState,
-        window: &Window,
-    ) -> impl IntoElement {
-        let base_size = window.text_style().font_size;
-        let rem_size = window.rem_size();
-
-        let paddings = Edges {
-            left: paddings
-                .left
-                .map(|v| v.to_pixels(base_size, rem_size))
-                .unwrap_or(px(0.)),
-            right: paddings
-                .right
-                .map(|v| v.to_pixels(base_size, rem_size))
-                .unwrap_or(px(0.)),
-            top: paddings
-                .top
-                .map(|v| v.to_pixels(base_size, rem_size))
-                .unwrap_or(px(0.)),
-            bottom: paddings
-                .bottom
-                .map(|v| v.to_pixels(base_size, rem_size))
-                .unwrap_or(px(0.)),
-        };
-
-        state.editor_scrollbar_paddings.set(paddings);
-        state.editor_scrollbar_snapshot.set(None);
-
-        v_flex().size_full().child(
-            div()
-                .relative()
-                .flex_1()
-                .child(input_state.clone())
-                .child(EditorScrollbar::new(input_state.clone())),
-        )
     }
 }
 
-impl Styled for Input {
+impl<M: InputModeKind> Styled for Input<M> {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
     }
 }
 
-impl RenderOnce for Input {
+impl<M: InputModeKind> RenderOnce for Input<M> {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         const LINE_HEIGHT: Rems = Rems(1.25);
         let text_align = self.style.text.text_align.unwrap_or(TextAlign::Left);
 
-        self.state.update(cx, |state, _| {
-            state.disabled = self.disabled;
-            state.size = self.size;
-            // Only for single line mode
-            if state.mode.is_single_line() {
-                state.text_align = text_align;
+        let multi_line = self.state.read(cx).is_multi_line();
+        let editor_paddings = if multi_line {
+            input_paddings(self.size, &self.style, window)
+        } else {
+            Edges::default()
+        };
+        self.state.update(cx, |state, cx| {
+            state.set_editor_style(input_editor_style(cx));
+            state.set_editor_paddings(editor_paddings);
+            state.set_disabled(self.disabled, cx);
+            if state.is_single_line() {
+                state.set_text_align(text_align, cx);
             }
         });
 
         let state = self.state.read(cx);
-        let _focused = state.focus_handle.is_focused(window) && !state.disabled;
+        let presentation = state.presentation();
+        let disabled = presentation.is_disabled();
+        let loading = presentation.is_loading();
+        let text_is_empty = state.text().len() == 0;
 
         let gap_x = match self.size {
             Size::Small => px(4.),
@@ -216,117 +227,49 @@ impl RenderOnce for Input {
             _ => px(6.),
         };
 
-        let (bg, _) = input_style(state.disabled, cx);
+        let background = input_background(disabled, cx);
+        let show_clear_button =
+            self.cleanable && state.is_editable() && !loading && !text_is_empty && !multi_line;
+        let has_suffix = self.suffix.is_some() || loading || self.mask_toggle || show_clear_button;
 
         let prefix = self.prefix;
         let suffix = self.suffix;
-        let show_clear_button = self.cleanable
-            && !state.disabled
-            && !state.loading
-            && state.text.len() > 0
-            && state.mode.is_single_line();
-        let has_suffix = suffix.is_some() || state.loading || self.mask_toggle || show_clear_button;
+        let state_entity = self.state.clone();
 
-        div()
-            .id(("input", self.state.entity_id()))
+        InputBase::new(("input", self.state.entity_id()))
             .flex()
-            .key_context(crate::input::CONTEXT)
-            .track_focus(&state.focus_handle.clone())
-            .tab_index(self.tab_index)
-            .when(!state.disabled, |this| {
-                this.on_action(window.listener_for(&self.state, InputState::backspace))
-                    .on_action(window.listener_for(&self.state, InputState::delete))
-                    .on_action(
-                        window.listener_for(&self.state, InputState::delete_to_beginning_of_line),
-                    )
-                    .on_action(window.listener_for(&self.state, InputState::delete_to_end_of_line))
-                    .on_action(window.listener_for(&self.state, InputState::delete_previous_word))
-                    .on_action(window.listener_for(&self.state, InputState::delete_next_word))
-                    .on_action(window.listener_for(&self.state, InputState::enter))
-                    .on_action(window.listener_for(&self.state, InputState::escape))
-                    .on_action(window.listener_for(&self.state, InputState::paste))
-                    .on_action(window.listener_for(&self.state, InputState::cut))
-                    .on_action(window.listener_for(&self.state, InputState::undo))
-                    .on_action(window.listener_for(&self.state, InputState::redo))
-                    .when(state.mode.is_multi_line(), |this| {
-                        this.on_action(window.listener_for(&self.state, InputState::indent_inline))
-                            .on_action(window.listener_for(&self.state, InputState::outdent_inline))
-                            .on_action(window.listener_for(&self.state, InputState::indent_block))
-                            .on_action(window.listener_for(&self.state, InputState::outdent_block))
-                    })
-            })
-            .on_action(window.listener_for(&self.state, InputState::left))
-            .on_action(window.listener_for(&self.state, InputState::right))
-            .on_action(window.listener_for(&self.state, InputState::select_left))
-            .on_action(window.listener_for(&self.state, InputState::select_right))
-            .when(state.mode.is_multi_line(), |this| {
-                this.on_action(window.listener_for(&self.state, InputState::up))
-                    .on_action(window.listener_for(&self.state, InputState::down))
-                    .on_action(window.listener_for(&self.state, InputState::select_up))
-                    .on_action(window.listener_for(&self.state, InputState::select_down))
-                    .on_action(window.listener_for(&self.state, InputState::page_up))
-                    .on_action(window.listener_for(&self.state, InputState::page_down))
-            })
-            .on_action(window.listener_for(&self.state, InputState::select_all))
-            .on_action(window.listener_for(&self.state, InputState::select_to_start_of_line))
-            .on_action(window.listener_for(&self.state, InputState::select_to_end_of_line))
-            .on_action(window.listener_for(&self.state, InputState::select_to_previous_word))
-            .on_action(window.listener_for(&self.state, InputState::select_to_next_word))
-            .on_action(window.listener_for(&self.state, InputState::home))
-            .on_action(window.listener_for(&self.state, InputState::end))
-            .on_action(window.listener_for(&self.state, InputState::move_to_start))
-            .on_action(window.listener_for(&self.state, InputState::move_to_end))
-            .on_action(window.listener_for(&self.state, InputState::move_to_previous_word))
-            .on_action(window.listener_for(&self.state, InputState::move_to_next_word))
-            .on_action(window.listener_for(&self.state, InputState::select_to_start))
-            .on_action(window.listener_for(&self.state, InputState::select_to_end))
-            .on_action(window.listener_for(&self.state, InputState::show_character_palette))
-            .on_action(window.listener_for(&self.state, InputState::copy))
-            .on_key_down(window.listener_for(&self.state, InputState::on_key_down))
-            .on_mouse_down(
-                MouseButton::Left,
-                window.listener_for(&self.state, InputState::on_mouse_down),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                window.listener_for(&self.state, InputState::on_mouse_down),
-            )
-            .on_mouse_up(
-                MouseButton::Left,
-                window.listener_for(&self.state, InputState::on_mouse_up),
-            )
-            .on_mouse_up(
-                MouseButton::Right,
-                window.listener_for(&self.state, InputState::on_mouse_up),
-            )
-            .on_scroll_wheel(window.listener_for(&self.state, InputState::on_scroll_wheel))
             .size_full()
             .line_height(LINE_HEIGHT)
-            .input_px(self.size)
-            .input_py(self.size)
+            .when(!multi_line, |this| {
+                this.input_px(self.size).input_py(self.size)
+            })
             .input_h(self.size)
-            .input_font_size(self.size)
-            .when(!self.disabled, |this| this.cursor_text())
+            .when(!disabled, |this| this.cursor_text())
+            .on_mouse_down(MouseButton::Left, {
+                let state_entity = state_entity.clone();
+                move |_, window, cx| state_entity.update(cx, |state, cx| state.focus(window, cx))
+            })
             .items_center()
-            .when(state.mode.is_multi_line(), |this| {
+            .when(multi_line, |this| {
                 this.h_auto()
                     .when_some(self.height, |this, height| this.h(height))
             })
             .when(self.appearance, |this| {
-                this.bg(bg)
+                this.bg(background)
                     .when(self.disabled, |this| this.opacity(0.5))
                     .rounded(cx.theme().radius)
             })
-            .items_center()
+            .tab_index(self.tab_index)
             .gap(gap_x)
             .refine_style(&self.style)
             .children(prefix)
-            .when(state.mode.is_multi_line(), |mut this| {
-                let paddings = this.style().padding.clone();
-                this.child(Self::render_editor(paddings, &self.state, state, window))
-            })
-            .when(!state.mode.is_multi_line(), |this| {
-                this.child(self.state.clone())
+            .when(!multi_line, |this| this.child(state_entity.clone()))
+            .when(multi_line, |this| {
+                this.child(
+                    v_flex()
+                        .size_full()
+                        .child(div().relative().flex_1().child(state_entity.clone())),
+                )
             })
             .when(has_suffix, |this| {
                 this.pr_2().child(
@@ -334,13 +277,13 @@ impl RenderOnce for Input {
                         .id("suffix")
                         .gap(gap_x)
                         .items_center()
-                        .when(state.loading, |this| this.child(Indicator::new()))
+                        .when(loading, |this| this.child(Indicator::new()))
                         .when(self.mask_toggle, |this| {
-                            this.child(Self::render_toggle_mask_button(&self.state, cx))
+                            this.child(Self::render_toggle_mask_button(&state_entity))
                         })
                         .when(show_clear_button, |this| {
                             this.child(clear_button(cx).on_click({
-                                let state = self.state.clone();
+                                let state = state_entity.clone();
                                 move |_, window, cx| {
                                     state.update(cx, |state, cx| {
                                         state.clean(window, cx);

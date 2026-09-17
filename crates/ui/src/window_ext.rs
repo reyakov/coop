@@ -3,7 +3,6 @@ use std::rc::Rc;
 use gpui::{App, ElementId, Entity, Window};
 
 use crate::Root;
-use crate::input::InputState;
 use crate::modal::Modal;
 use crate::notification::Notification;
 
@@ -43,12 +42,6 @@ pub trait WindowExtension: Sized {
 
     /// Clear all notifications
     fn clear_notifications(&mut self, cx: &mut App);
-
-    /// Return current focused Input entity.
-    fn focused_input(&mut self, cx: &mut App) -> Option<Entity<InputState>>;
-
-    /// Returns true if there is a focused Input entity.
-    fn has_focused_input(&mut self, cx: &mut App) -> bool;
 }
 
 impl WindowExtension for Window {
@@ -121,13 +114,5 @@ impl WindowExtension for Window {
     fn notifications(&mut self, cx: &mut App) -> Rc<Vec<Entity<Notification>>> {
         let entity = Root::read(self, cx).notification.clone();
         Rc::new(entity.read(cx).notifications())
-    }
-
-    fn has_focused_input(&mut self, cx: &mut App) -> bool {
-        Root::read(self, cx).focused_input.is_some()
-    }
-
-    fn focused_input(&mut self, cx: &mut App) -> Option<Entity<InputState>> {
-        Root::read(self, cx).focused_input.clone()
     }
 }

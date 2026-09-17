@@ -8,7 +8,7 @@ use common::download_dir;
 use device::{DeviceEvent, DeviceRegistry};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, App, AppContext, Axis, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    Action, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     Render, SharedString, Styled, Subscription, Task, Window, div, px,
 };
 use nostr_sdk::prelude::*;
@@ -19,7 +19,7 @@ use state::{NostrRegistry, StateEvent};
 use theme::{ActiveTheme, SIDEBAR_WIDTH, Theme, ThemeRegistry};
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
-use ui::dock::{ClosePanel, DockArea, DockItem, DockPlacement, PanelView};
+use ui::dock::{self, ClosePanel, DockArea, DockLayout, DockPlacement, Panel, PanelHandle};
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::{Notification, NotificationKind};
 use ui::{Icon, IconName, Root, Sizable, TitleBar, WindowExtension, h_flex, v_flex};
@@ -78,7 +78,7 @@ impl Workspace {
         let nostr = NostrRegistry::global(cx);
 
         let sidebar = cx.new(|cx| Sidebar::new(window, cx));
-        let dock = cx.new(|cx| DockArea::new(window, cx));
+        let dock = dock::dock_area("coop", window, cx);
 
         let mut subscriptions = smallvec![];
 
@@ -185,20 +185,18 @@ impl Workspace {
                     }
                     ChatEvent::OpenRoom(id) => {
                         if let Some(room) = chat.read(cx).room(id, cx) {
-                            this.dock.update(cx, |this, cx| {
-                                this.add_panel(
-                                    Arc::new(chat_ui::init(room, window, cx)),
-                                    DockPlacement::Center,
-                                    window,
-                                    cx,
-                                );
-                            });
+                            this.add_panel_to_dock(
+                                chat_ui::init(room, window, cx),
+                                DockPlacement::Center,
+                                window,
+                                cx,
+                            );
                         }
                     }
                     ChatEvent::CloseRoom(..) => {
-                        this.dock.update(cx, |this, cx| {
+                        this.dock.update(cx, |area, cx| {
                             // Force focus to the tab panel
-                            this.focus_tab_panel(window, cx);
+                            ui::dock::focus_tab_panel(area, window, cx);
 
                             // Dispatch the close panel action
                             cx.defer_in(window, |_, window, cx| {
@@ -216,14 +214,12 @@ impl Workspace {
         );
 
         cx.defer_in(window, |this, window, cx| {
-            let dock = this.dock.downgrade();
-            let greeter = Arc::new(greeter::init(window, cx));
-            let tabs = DockItem::tabs(vec![greeter], None, &dock, window, cx);
-            let center = DockItem::split(Axis::Vertical, vec![tabs], &dock, window, cx);
+            let greeter = PanelHandle::new(greeter::init(window, cx));
+            let center = DockLayout::v_split()
+                .child(DockLayout::tabs().panel_view(Arc::new(greeter), cx), None);
 
-            this.dock.update(cx, |this, cx| {
-                this.set_center(center, window, cx);
-            });
+            this.dock
+                .update(cx, |area, cx| area.set_center(center, window, cx));
         });
 
         Self {
@@ -234,20 +230,34 @@ impl Workspace {
         }
     }
 
-    /// Add panel to the dock
-    pub fn add_panel<P>(panel: P, placement: DockPlacement, window: &mut Window, cx: &mut App)
-    where
-        P: PanelView,
-    {
+    /// Add a panel to the dock, from anywhere that has the window but not the
+    /// workspace.
+    pub fn add_panel<P: Panel>(
+        panel: Entity<P>,
+        placement: DockPlacement,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
         if let Some(root) = window.root::<Root>().flatten()
             && let Ok(workspace) = root.read(cx).view().clone().downcast::<Self>()
         {
             workspace.update(cx, |this, cx| {
-                this.dock.update(cx, |this, cx| {
-                    this.add_panel(Arc::new(panel), placement, window, cx);
-                });
+                this.add_panel_to_dock(panel, placement, window, cx)
             });
         }
+    }
+
+    /// Add a panel to the dock, or focus it if it is already docked.
+    fn add_panel_to_dock<P: Panel>(
+        &mut self,
+        panel: Entity<P>,
+        placement: DockPlacement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dock.update(cx, |area, cx| {
+            ui::dock::add_panel(area, PanelHandle::new(panel), placement, window, cx)
+        });
     }
 
     /// Handle command events
@@ -268,45 +278,32 @@ impl Workspace {
                 let nostr = NostrRegistry::global(cx);
 
                 if let Some(public_key) = nostr.read(cx).current_user() {
-                    self.dock.update(cx, |this, cx| {
-                        this.add_panel(
-                            Arc::new(profile::init(public_key, window, cx)),
-                            DockPlacement::Left,
-                            window,
-                            cx,
-                        );
-                    });
+                    self.add_panel_to_dock(
+                        profile::init(public_key, window, cx),
+                        DockPlacement::Left,
+                        window,
+                        cx,
+                    );
                 }
             }
             Command::ShowContactList => {
-                self.dock.update(cx, |this, cx| {
-                    this.add_panel(
-                        Arc::new(contact_list::init(window, cx)),
-                        DockPlacement::Left,
-                        window,
-                        cx,
-                    );
-                });
+                self.add_panel_to_dock(
+                    contact_list::init(window, cx),
+                    DockPlacement::Left,
+                    window,
+                    cx,
+                );
             }
             Command::ShowBackup => {
-                self.dock.update(cx, |this, cx| {
-                    this.add_panel(
-                        Arc::new(backup::init(window, cx)),
-                        DockPlacement::Left,
-                        window,
-                        cx,
-                    );
-                });
+                self.add_panel_to_dock(backup::init(window, cx), DockPlacement::Left, window, cx);
             }
             Command::ShowMessaging => {
-                self.dock.update(cx, |this, cx| {
-                    this.add_panel(
-                        Arc::new(messaging_relays::init(window, cx)),
-                        DockPlacement::Left,
-                        window,
-                        cx,
-                    );
-                });
+                self.add_panel_to_dock(
+                    messaging_relays::init(window, cx),
+                    DockPlacement::Left,
+                    window,
+                    cx,
+                );
             }
             Command::RefreshMessagingRelays => {
                 let chat = ChatRegistry::global(cx);
@@ -316,14 +313,12 @@ impl Workspace {
                 });
             }
             Command::ShowRelayList => {
-                self.dock.update(cx, |this, cx| {
-                    this.add_panel(
-                        Arc::new(relay_list::init(window, cx)),
-                        DockPlacement::Right,
-                        window,
-                        cx,
-                    );
-                });
+                self.add_panel_to_dock(
+                    relay_list::init(window, cx),
+                    DockPlacement::Right,
+                    window,
+                    cx,
+                );
             }
             Command::RefreshEncryption => {
                 let device = DeviceRegistry::global(cx);

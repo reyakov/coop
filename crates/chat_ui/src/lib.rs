@@ -29,7 +29,7 @@ use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
-use ui::input::{Input, InputEvent, InputState};
+use ui::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use ui::menu::DropdownMenu;
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
@@ -85,7 +85,7 @@ pub struct ChatPanel {
     reports_by_id: Arc<RwLock<BTreeMap<EventId, Vec<SendReport>>>>,
 
     /// Chat input state
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
 
     /// Subject input state
     subject_input: Entity<InputState>,
@@ -142,7 +142,7 @@ impl ChatPanel {
 
         // Define input state
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder(format!("Message {}", name))
                 .auto_grow(1, 20)
                 .clean_on_escape()
@@ -2108,7 +2108,7 @@ impl Render for ChatPanel {
                                         this.upload(window, cx);
                                     })),
                             )
-                            .child(Input::new(&self.input).appearance(false).flex_1())
+                            .child(Textarea::new(&self.input).appearance(false).flex_1())
                             .child(
                                 h_flex()
                                     .pl_1()

@@ -9,14 +9,21 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
-# GPUI
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "x11", "wayland"] }
-gpui_linux = { git = "https://github.com/zed-industries/zed" }
-gpui_windows = { git = "https://github.com/zed-industries/zed" }
-gpui_macos = { git = "https://github.com/zed-industries/zed" }
-gpui_tokio = { git = "https://github.com/zed-industries/zed" }
-reqwest_client = { git = "https://github.com/zed-industries/zed" }
+# GPUI. The `gpui-pre` family is upstream zed's gpui republished unchanged, so these
+# aliases keep every `use gpui::..` site as it is while moving off the zed git pin.
+gpui = { package = "gpui-pre", version = "0.3.5" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.5", features = ["font-kit", "x11", "wayland"] }
+gpui_linux = { package = "gpui-pre-linux", version = "0.3.5" }
+gpui_windows = { package = "gpui-pre-windows", version = "0.3.5" }
+gpui_macos = { package = "gpui-pre-macos", version = "0.3.5" }
+gpui_web = { package = "gpui-pre-web", version = "0.3.5" }
+gpui_util = { package = "gpui-pre-util", version = "0.3.5" }
+sum_tree = { package = "gpui-pre-sum-tree", version = "0.3.5" }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.5" }
+gpui_tokio = { path = "crates/gpui_tokio" }
+
+# Unstyled behavior, state, and infrastructure from GPUI Kit
+gpui-base = "0.6.1"
 
 # Nostr
 nostr-lmdb = { git = "https://github.com/rust-nostr/nostr" }

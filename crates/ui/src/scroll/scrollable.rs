@@ -1,15 +1,14 @@
 use std::panic::Location;
-use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, Div, Element, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
-    ScrollHandle, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, div,
+    ScrollHandle, Stateful, StatefulInteractiveElement, StyleRefinement, Styled, Window, div, px,
 };
+use gpui_base::{Scrollbar, ScrollbarAxis, ScrollbarHandle};
+use theme::ActiveTheme as _;
 
-use super::{Scrollbar, ScrollbarAxis};
-use crate::StyledExt;
-use crate::scroll::ScrollbarHandle;
+use crate::StyledExt as _;
 
 /// A trait for elements that can be made scrollable with scrollbars.
 pub trait ScrollableElement: InteractiveElement + Styled + ParentElement + Element {
@@ -23,7 +22,7 @@ pub trait ScrollableElement: InteractiveElement + Styled + ParentElement + Eleme
         self.child(ScrollbarLayer {
             id: "scrollbar_layer".into(),
             axis: axis.into(),
-            scroll_handle: Rc::new(scroll_handle.clone()),
+            scroll_handle: scroll_handle.clone(),
         })
     }
 
@@ -54,6 +53,72 @@ pub trait ScrollableElement: InteractiveElement + Styled + ParentElement + Eleme
     #[track_caller]
     fn overflow_y_scrollbar(self) -> Scrollable<Self> {
         Scrollable::new(self, ScrollbarAxis::Vertical)
+    }
+}
+
+/// The scrollbar the application's theme describes: a 10px rail holding a 6px
+/// rounded thumb that grows to 8px under the pointer.
+fn scrollbar<H: ScrollbarHandle + Clone>(
+    scroll_handle: &H,
+    axis: ScrollbarAxis,
+    cx: &App,
+) -> Scrollbar {
+    let theme = cx.theme();
+    let (thumb_width, thumb_radius) = if theme.scrollbar_mode.is_scrolling() {
+        (px(6.), px(3.))
+    } else {
+        (px(8.), px(4.))
+    };
+
+    Scrollbar::new(scroll_handle).axis(axis).styles(|styles| {
+        styles
+            .track(|track| {
+                track
+                    .bg(theme.scrollbar_track_background)
+                    .border_color(theme.scrollbar_thumb_border)
+                    .width(px(10.))
+            })
+            .track_hover(|track| track.bg(theme.scrollbar_thumb_background).width(px(10.)))
+            .thumb(|thumb| {
+                thumb
+                    .bg(theme.scrollbar_thumb_background)
+                    .width(thumb_width)
+                    .inset(px(1.))
+                    .radius(thumb_radius)
+                    .min_length(px(48.))
+            })
+            .thumb_hover(|thumb| {
+                thumb
+                    .bg(theme.scrollbar_thumb_hover_background)
+                    .width(px(8.))
+                    .inset(px(1.))
+                    .radius(px(4.))
+            })
+            .thumb_active(|thumb| {
+                thumb
+                    .bg(theme.scrollbar_thumb_hover_background)
+                    .width(px(8.))
+                    .inset(px(1.))
+                    .radius(px(4.))
+            })
+    })
+}
+
+/// A scrollbar child that resolves the theme while rendering, which the
+/// [`ScrollableElement`] helpers cannot do at the call site.
+#[derive(IntoElement)]
+struct ScrollbarLayer<H: ScrollbarHandle + Clone> {
+    id: ElementId,
+    axis: ScrollbarAxis,
+    scroll_handle: H,
+}
+
+impl<H> RenderOnce for ScrollbarLayer<H>
+where
+    H: ScrollbarHandle + Clone + 'static,
+{
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        scrollbar(&self.scroll_handle, self.axis, cx).id(self.id)
     }
 }
 
@@ -149,13 +214,7 @@ where
                             .flex_1(),
                     ),
             )
-            .child(render_scrollbar(
-                "scrollbar",
-                &scroll_handle,
-                self.axis,
-                window,
-                cx,
-            ))
+            .child(scrollbar(&scroll_handle, self.axis, cx).id("scrollbar"))
     }
 }
 
@@ -166,46 +225,4 @@ where
     E: ParentElement + Styled + Element,
     Self: InteractiveElement,
 {
-}
-
-#[derive(IntoElement)]
-struct ScrollbarLayer<H: ScrollbarHandle + Clone> {
-    id: ElementId,
-    axis: ScrollbarAxis,
-    scroll_handle: Rc<H>,
-}
-
-impl<H> RenderOnce for ScrollbarLayer<H>
-where
-    H: ScrollbarHandle + Clone + 'static,
-{
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        render_scrollbar(self.id, self.scroll_handle.as_ref(), self.axis, window, cx)
-    }
-}
-
-#[inline]
-#[track_caller]
-fn render_scrollbar<H: ScrollbarHandle + Clone>(
-    id: impl Into<ElementId>,
-    scroll_handle: &H,
-    axis: ScrollbarAxis,
-    window: &mut Window,
-    cx: &mut App,
-) -> Div {
-    // Do not render scrollbar when inspector is picking elements,
-    // to allow us to pick the background elements.
-    let is_inspector_picking = window.is_inspector_picking(cx);
-
-    if is_inspector_picking {
-        return div();
-    }
-
-    div()
-        .absolute()
-        .top_0()
-        .left_0()
-        .right_0()
-        .bottom_0()
-        .child(Scrollbar::new(scroll_handle).id(id).axis(axis))
 }

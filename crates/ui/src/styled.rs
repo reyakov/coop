@@ -1,4 +1,5 @@
 use gpui::{App, DefiniteLength, Div, Edges, Pixels, Refineable, StyleRefinement, Styled, div, px};
+pub use gpui_base::component_traits::{Collapsible, Disableable, Selectable};
 use serde::{Deserialize, Serialize};
 use theme::ActiveTheme;
 
@@ -108,26 +109,6 @@ impl From<Pixels> for Size {
     fn from(size: Pixels) -> Self {
         Size::Size(size)
     }
-}
-
-/// A trait for defining element that can be selected.
-pub trait Selectable: Sized {
-    /// Set the selected state of the element.
-    fn selected(self, selected: bool) -> Self;
-
-    /// Returns true if the element is selected.
-    fn is_selected(&self) -> bool;
-
-    /// Set is the element mouse right clicked, default do nothing.
-    fn secondary_selected(self, _: bool) -> Self {
-        self
-    }
-}
-
-/// A trait for defining element that can be disabled.
-pub trait Disableable {
-    /// Set the disabled state of the element.
-    fn disabled(self, disabled: bool) -> Self;
 }
 
 /// A trait for setting the size of an element.
@@ -266,10 +247,4 @@ impl<T: Styled> StyleSized<T> for T {
             Size::Size(size) => self.size(size),
         }
     }
-}
-
-/// A trait for defining element that can be collapsed.
-pub trait Collapsible {
-    fn collapsed(self, collapsed: bool) -> Self;
-    fn is_collapsed(&self) -> bool;
 }

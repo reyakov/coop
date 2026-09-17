@@ -46,6 +46,63 @@ pub fn init(cx: &mut App) {
     Theme::sync_scrollbar_appearance(cx);
 }
 
+/// Mirror the active coop theme into the `gpui-base` global theme.
+///
+/// Base paints a few things from its own tokens -- the focus ring, the wash
+/// behind selected text, scrollbars, and overlay backdrops -- so the two
+/// globals have to agree or those details drift away from the palette.
+///
+/// Only roles base can act on are projected. Radius, spacing, typography sizes,
+/// shadows, and scrollbar geometry keep their base defaults: coop has a single
+/// `radius`/`radius_lg`/`font_size` where base has six-point scales, so any
+/// mapping would be invented rather than derived.
+///
+/// This is a no-op before the coop theme global exists; [`Theme::change`] is the
+/// authoritative hook that keeps the projection current.
+pub fn sync_base(cx: &mut App) {
+    let Some(theme) = cx.try_global::<Theme>() else {
+        return;
+    };
+
+    let appearance = if theme.mode.is_dark() {
+        gpui_base::ThemeAppearance::Dark
+    } else {
+        gpui_base::ThemeAppearance::Light
+    };
+    let scrollbar_mode = match theme.scrollbar_mode {
+        ScrollbarMode::Scrolling => gpui_base::ScrollbarMode::Scrolling,
+        ScrollbarMode::Hover => gpui_base::ScrollbarMode::Hover,
+        ScrollbarMode::Always => gpui_base::ScrollbarMode::Always,
+    };
+    let colors = theme.colors;
+    let font_family = theme.font_family.clone();
+
+    let base = gpui_base::Theme::global_mut(cx);
+    base.appearance = appearance;
+    base.scrollbar = base.scrollbar.clone().with_mode(scrollbar_mode);
+    base.tokens.typography.sans = font_family;
+
+    let tokens = &mut base.tokens.colors;
+    tokens.background = colors.background;
+    tokens.foreground = colors.text;
+    tokens.surface = colors.surface_background;
+    tokens.surface_foreground = colors.text;
+    tokens.primary = colors.element_background;
+    tokens.primary_foreground = colors.element_foreground;
+    tokens.secondary = colors.secondary_background;
+    tokens.secondary_foreground = colors.secondary_foreground;
+    tokens.muted = colors.ghost_element_background_alt;
+    tokens.muted_foreground = colors.text_muted;
+    tokens.accent = colors.ghost_element_hover;
+    tokens.accent_foreground = colors.text;
+    tokens.destructive = colors.danger_background;
+    tokens.destructive_foreground = colors.danger_foreground;
+    tokens.border = colors.border;
+    tokens.input = colors.border;
+    tokens.ring = colors.ring;
+    tokens.selection = colors.selection;
+}
+
 pub trait ActiveTheme {
     fn theme(&self) -> &Theme;
 }
@@ -183,6 +240,9 @@ impl Theme {
         if let Some(window) = window {
             window.refresh();
         }
+
+        // Keep the base-layer projection in step with the coop palette
+        sync_base(cx);
     }
 }
 

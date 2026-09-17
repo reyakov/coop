@@ -2,15 +2,16 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, ClickEvent, Div, ElementId, Hsla, InteractiveElement, IntoElement,
-    ParentElement, RenderOnce, SharedString, Stateful, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Window, div, relative,
+    AnyElement, App, ClickEvent, ElementId, Hsla, InteractiveElement, IntoElement, MouseButton,
+    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement as _, StyleRefinement,
+    Styled, Window, div, relative,
 };
+use gpui_base::Button as BaseButton;
 use theme::ActiveTheme;
 
 use crate::indicator::Indicator;
 use crate::tooltip::Tooltip;
-use crate::{Disableable, Icon, IconName, Selectable, Sizable, Size, StyledExt, h_flex};
+use crate::{Disableable, Icon, IconName, Selectable, Sizable, Size, h_flex};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct ButtonCustomVariant {
@@ -114,9 +115,7 @@ pub trait ButtonVariants: Sized {
 #[derive(IntoElement)]
 #[allow(clippy::type_complexity)]
 pub struct Button {
-    id: ElementId,
-    base: Stateful<Div>,
-    style: StyleRefinement,
+    base: BaseButton,
 
     icon: Option<Icon>,
     label: Option<SharedString>,
@@ -151,12 +150,8 @@ impl From<Button> for AnyElement {
 
 impl Button {
     pub fn new(id: impl Into<ElementId>) -> Self {
-        let id = id.into();
-
         Self {
-            id: id.clone(),
-            base: div().flex_shrink_0().id(id),
-            style: StyleRefinement::default(),
+            base: BaseButton::new(id),
             icon: None,
             label: None,
             variant: ButtonVariant::default(),
@@ -301,7 +296,7 @@ impl ButtonVariants for Button {
 
 impl Styled for Button {
     fn style(&mut self) -> &mut StyleRefinement {
-        &mut self.style
+        self.base.style()
     }
 }
 
@@ -318,7 +313,7 @@ impl InteractiveElement for Button {
 }
 
 impl RenderOnce for Button {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let style: ButtonVariant = self.variant;
         let clickable = self.clickable();
         let hoverable = self.hoverable();
@@ -329,18 +324,21 @@ impl RenderOnce for Button {
             _ => self.size,
         };
 
-        let focus_handle = window
-            .use_keyed_state(self.id.clone(), cx, |_window, cx| cx.focus_handle())
-            .read(cx)
-            .clone();
-
         self.base
-            .when(!self.disabled, |this| {
-                this.track_focus(
-                    &focus_handle
-                        .tab_index(self.tab_index)
-                        .tab_stop(self.tab_stop),
-                )
+            .tab_index(self.tab_index)
+            .tab_stop(self.tab_stop)
+            .disabled(self.disabled)
+            .when_some(self.on_click.clone(), |this, on_click| {
+                this.on_click(move |event, window, cx| {
+                    // Stop handle any click event when disabled.
+                    // To avoid handle dropdown menu open when button is disabled.
+                    if !clickable {
+                        cx.stop_propagation();
+                        return;
+                    }
+
+                    on_click(event, window, cx);
+                })
             })
             .relative()
             .flex_shrink_0()
@@ -349,7 +347,6 @@ impl RenderOnce for Button {
             .justify_center()
             .cursor_default()
             .overflow_hidden()
-            .refine_style(&self.style)
             .map(|this| match self.rounded {
                 false => this.rounded(cx.theme().radius),
                 true => this.rounded_full(),
@@ -399,8 +396,7 @@ impl RenderOnce for Button {
                     }
                 }
             })
-            .refine_style(&self.style)
-            .on_mouse_down(gpui::MouseButton::Left, move |_, window, cx| {
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 // Stop handle any click event when disabled.
                 // To avoid handle dropdown menu open when button is disabled.
                 if self.disabled {
@@ -409,18 +405,6 @@ impl RenderOnce for Button {
                 }
                 // Avoid focus on mouse down.
                 window.prevent_default();
-            })
-            .when_some(self.on_click, |this, on_click| {
-                this.on_click(move |event, window, cx| {
-                    // Stop handle any click event when disabled.
-                    // To avoid handle dropdown menu open when button is disabled.
-                    if !clickable {
-                        cx.stop_propagation();
-                        return;
-                    }
-
-                    on_click(event, window, cx);
-                })
             })
             .when_some(self.on_hover.filter(|_| hoverable), |this, on_hover| {
                 this.on_hover(move |hovered, window, cx| {

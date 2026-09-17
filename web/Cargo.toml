@@ -21,7 +21,7 @@ person = { path = "../crates/person" }
 
 gpui.workspace = true
 gpui_platform.workspace = true
-gpui_web = { git = "https://github.com/zed-industries/zed" }
+gpui_web.workspace = true
 
 log.workspace = true
 instant = { workspace = true, features = ["wasm-bindgen"] }

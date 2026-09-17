@@ -15,7 +15,7 @@ use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
-use ui::input::{Input, InputState};
+use ui::input::{Input, InputState, Textarea, TextareaState};
 use ui::notification::Notification;
 use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
@@ -38,7 +38,7 @@ pub struct ProfilePanel {
     avatar_input: Entity<InputState>,
 
     /// User's bio multi line input
-    bio_input: Entity<InputState>,
+    bio_input: Entity<TextareaState>,
 
     /// User's website url text input
     website_input: Entity<InputState>,
@@ -64,8 +64,7 @@ impl ProfilePanel {
 
         // Use multi-line input for bio
         let bio_input = cx.new(|cx| {
-            InputState::new(window, cx)
-                .multi_line(true)
+            TextareaState::new(window, cx)
                 .auto_grow(3, 8)
                 .placeholder("A short introduce about you.")
         });
@@ -367,7 +366,7 @@ impl Render for ProfilePanel {
                             .text_color(cx.theme().text_muted)
                             .child(SharedString::from("A short introduction about you:")),
                     )
-                    .child(Input::new(&self.bio_input).small()),
+                    .child(Textarea::new(&self.bio_input).small()),
             )
             .child(
                 v_flex()

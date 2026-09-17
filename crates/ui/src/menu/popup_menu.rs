@@ -4,13 +4,12 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, Anchor, AnyElement, App, AppContext, Axis, Bounds, ClickEvent, Context, DismissEvent,
     Edges, Entity, EventEmitter, FocusHandle, Focusable, Half, InteractiveElement, IntoElement,
-    KeyBinding, MouseDownEvent, OwnedMenuItem, ParentElement, Pixels, Point, Render, ScrollHandle,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, anchored,
-    div, px, rems,
+    KeyBinding, MouseDownEvent, ParentElement, Pixels, Point, Render, ScrollHandle, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, anchored, div, px, rems,
 };
+use gpui_base::actions::{Cancel, Confirm, SelectDown, SelectLeft, SelectRight, SelectUp};
 use theme::{ActiveTheme, Side};
 
-use crate::actions::{Cancel, Confirm, SelectDown, SelectLeft, SelectRight, SelectUp};
 use crate::kbd::Kbd;
 use crate::menu::menu_item::MenuItemElement;
 use crate::scroll::ScrollableElement;
@@ -679,42 +678,6 @@ impl PopupMenu {
                 .checked(checked)
                 .action(action),
         );
-        self
-    }
-
-    pub(super) fn with_menu_items<I>(
-        mut self,
-        items: impl IntoIterator<Item = I>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Self
-    where
-        I: Into<OwnedMenuItem>,
-    {
-        for item in items {
-            match item.into() {
-                OwnedMenuItem::Action {
-                    name,
-                    action,
-                    checked,
-                    ..
-                } => self = self.menu_with_check(name, checked, action.boxed_clone()),
-                OwnedMenuItem::Separator => {
-                    self = self.separator();
-                }
-                OwnedMenuItem::Submenu(submenu) => {
-                    self = self.submenu(submenu.name, window, cx, move |menu, window, cx| {
-                        menu.with_menu_items(submenu.items.clone(), window, cx)
-                    })
-                }
-                OwnedMenuItem::SystemMenu(_) => {}
-            }
-        }
-
-        if self.menu_items.len() > 20 {
-            self.scrollable = true;
-        }
-
         self
     }
 

@@ -257,10 +257,10 @@ impl Sidebar {
     }
 
     /// Set the finding status
-    fn set_finding(&mut self, status: bool, _window: &mut Window, cx: &mut Context<Self>) {
+    fn set_finding(&mut self, status: bool, window: &mut Window, cx: &mut Context<Self>) {
         // Disable the input to prevent duplicate requests
         self.find_input.update(cx, |this, cx| {
-            this.set_loading(status, cx);
+            this.set_loading(status, window, cx);
         });
         // Set the search status
         self.finding = status;
@@ -530,15 +530,18 @@ impl Render for Sidebar {
                         .small()
                         .text_xs()
                         .disabled(loading)
-                        .when(!self.find_input.read(cx).loading, |this| {
-                            this.suffix(
-                                Button::new("find-icon")
-                                    .icon(IconName::Search)
-                                    .tooltip("Press Enter to search")
-                                    .transparent()
-                                    .small(),
-                            )
-                        }),
+                        .when(
+                            !self.find_input.read(cx).presentation().is_loading(),
+                            |this| {
+                                this.suffix(
+                                    Button::new("find-icon")
+                                        .icon(IconName::Search)
+                                        .tooltip("Press Enter to search")
+                                        .transparent()
+                                        .small(),
+                                )
+                            },
+                        ),
                 ),
             )
             .child(

@@ -13,7 +13,6 @@ use theme::{
     CLIENT_SIDE_DECORATION_SHADOW,
 };
 
-use crate::input::InputState;
 use crate::modal::Modal;
 use crate::notification::{Notification, NotificationList};
 
@@ -50,9 +49,6 @@ pub struct Root {
     /// Notification layer
     pub(crate) notification: Entity<NotificationList>,
 
-    /// Current focused input
-    pub(crate) focused_input: Option<Entity<InputState>>,
-
     /// App view
     view: AnyView,
 }
@@ -60,7 +56,6 @@ pub struct Root {
 impl Root {
     pub fn new(view: AnyView, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
-            focused_input: None,
             active_modals: Vec::new(),
             notification: cx.new(|cx| NotificationList::new(window, cx)),
             view,
@@ -98,8 +93,7 @@ impl Root {
         Some(
             div()
                 .absolute()
-                .top_0()
-                .right_0()
+                .inset_0()
                 .child(root.read(cx).notification.clone()),
         )
     }
@@ -171,8 +165,6 @@ impl Root {
 
     /// Close the topmost modal.
     pub fn close_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focused_input = None;
-
         if let Some(handle) = self
             .active_modals
             .pop()
@@ -187,7 +179,6 @@ impl Root {
 
     /// Close all modals.
     pub fn close_all_modals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.focused_input = None;
         self.active_modals.clear();
 
         let previous_focused_handle = self

@@ -1,0 +1,11 @@
+[package]
+name = "gpui_tokio"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+gpui.workspace = true
+gpui_util.workspace = true
+tokio = { version = "1", features = ["rt", "rt-multi-thread"] }

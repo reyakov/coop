@@ -2,27 +2,18 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, Bounds, BoxShadow, ClickEvent, Div, FocusHandle,
-    InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement, Pixels, Point,
-    RenderOnce, SharedString, StyleRefinement, Styled, Window, anchored, div, hsla, point, px,
+    Animation, AnimationExt as _, AnyElement, App, BoxShadow, ClickEvent, Div, FocusHandle,
+    InteractiveElement as _, IntoElement, ParentElement, Pixels, RenderOnce, SharedString,
+    StyleRefinement, Styled, Window, div, hsla, point, px, size,
 };
+use gpui_base::Dialog;
 use instant::Duration;
 use theme::ActiveTheme;
 
-use crate::actions::{Cancel, Confirm};
 use crate::animation::cubic_bezier;
 use crate::button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _};
 use crate::scroll::ScrollableElement;
 use crate::{IconName, Root, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
-
-const CONTEXT: &str = "Modal";
-
-pub fn init(cx: &mut App) {
-    cx.bind_keys([
-        KeyBinding::new("escape", Cancel, Some(CONTEXT)),
-        KeyBinding::new("enter", Confirm { secondary: false }, Some(CONTEXT)),
-    ]);
-}
 
 type OnClose = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type OnOk = Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static>>;
@@ -275,6 +266,8 @@ impl Styled for Modal {
 impl RenderOnce for Modal {
     fn render(self, window: &mut Window, cx: &mut App) -> impl gpui::IntoElement {
         let layer_ix = self.layer_ix;
+        let is_topmost = layer_ix + 1 == Root::read(window, cx).active_modals.len();
+        let has_footer = self.footer.is_some();
         let on_close = self.on_close.clone();
         let on_ok = self.on_ok.clone();
         let on_cancel = self.on_cancel.clone();
@@ -345,19 +338,16 @@ impl RenderOnce for Modal {
         let radius = cx.theme().radius_lg;
 
         let view_size = window.viewport_size()
-            - gpui::size(
+            - size(
                 window_paddings.left + window_paddings.right,
                 window_paddings.top + window_paddings.bottom,
             );
 
-        let bounds = Bounds {
-            origin: Point::default(),
-            size: view_size,
-        };
-
         let offset_top = px(layer_ix as f32 * 16.);
         let y = self.margin_top.unwrap_or(view_size.height / 10.) + offset_top;
-        let x = bounds.center().x - self.width / 2.;
+        let x = view_size.width / 2. - self.width / 2.;
+        let card_top = window_paddings.top + y;
+        let card_left = window_paddings.left + x;
 
         let mut padding_right = px(16.);
         let mut padding_left = px(16.);
@@ -373,168 +363,138 @@ impl RenderOnce for Modal {
         let animation = Animation::new(Duration::from_secs_f64(0.25))
             .with_easing(cubic_bezier(0.32, 0.72, 0., 1.));
 
-        anchored()
-            .position(point(window_paddings.left, window_paddings.top))
-            .snap_to_window()
+        let backdrop = div()
+            .absolute()
+            .top(window_paddings.top)
+            .left(window_paddings.left)
+            .w(view_size.width)
+            .h(view_size.height)
+            .when(self.overlay_visible, |this| {
+                this.occlude().bg(cx.theme().overlay)
+            })
+            .with_animation("fade-in", animation.clone(), move |this, delta| {
+                this.opacity(delta)
+            });
+
+        let card = v_flex()
+            .id(layer_ix)
+            .bg(cx.theme().background)
+            .border_1()
+            .border_color(cx.theme().border.alpha(0.4))
+            .rounded(radius)
+            .when(cx.theme().shadow, |this| this.shadow_xl())
+            .min_h_24()
+            .refine_style(&self.style)
+            // There style is high priority, can't be overridden.
+            .absolute()
+            .occlude()
+            .relative()
+            .left(card_left)
+            .top(card_top)
+            .w(self.width)
+            .when_some(self.max_width, |this, w| this.max_w(w))
             .child(
                 div()
-                    .id("modal")
-                    .w(view_size.width)
-                    .h(view_size.height)
-                    .when(self.overlay_visible, |this| {
-                        this.occlude().bg(cx.theme().overlay)
-                    })
-                    .when(self.overlay_closable, |this| {
-                        // Only the last modal owns the `mouse down - close modal` event.
-                        if (self.layer_ix + 1) != Root::read(window, cx).active_modals.len() {
-                            return this;
-                        }
+                    .px_4()
+                    .h_8()
+                    .w_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when_some(self.title, |this, title| {
+                        this.h_10().font_semibold().text_center().child(title)
+                    }),
+            )
+            .when(self.show_close, |this| {
+                let on_cancel = on_cancel.clone();
+                let on_close = on_close.clone();
 
-                        this.on_mouse_down(MouseButton::Left, {
-                            let on_cancel = on_cancel.clone();
-                            let on_close = on_close.clone();
-                            move |_, window, cx| {
-                                on_cancel(&ClickEvent::default(), window, cx);
-                                on_close(&ClickEvent::default(), window, cx);
-                                window.close_modal(cx);
-                            }
-                        })
-                    })
+                this.child(
+                    Button::new("close")
+                        .icon(IconName::CloseCircleFill)
+                        .absolute()
+                        .top_1p5()
+                        .right_2()
+                        .custom(
+                            ButtonCustomVariant::new(window, cx)
+                                .foreground(cx.theme().icon_muted)
+                                .color(cx.theme().ghost_element_background)
+                                .hover(cx.theme().ghost_element_background)
+                                .active(cx.theme().ghost_element_background),
+                        )
+                        .on_click(move |_, window, cx| {
+                            on_cancel(&ClickEvent::default(), window, cx);
+                            on_close(&ClickEvent::default(), window, cx);
+                            window.close_modal(cx);
+                        }),
+                )
+            })
+            .child(
+                div()
+                    .pt_px()
+                    .w_full()
+                    .h_auto()
+                    .flex_1()
+                    .overflow_hidden()
                     .child(
                         v_flex()
-                            .id(layer_ix)
-                            .bg(cx.theme().background)
-                            .border_1()
-                            .border_color(cx.theme().border.alpha(0.4))
-                            .rounded(radius)
-                            .when(cx.theme().shadow, |this| this.shadow_xl())
-                            .min_h_24()
-                            .key_context(CONTEXT)
-                            .track_focus(&self.focus_handle)
-                            .refine_style(&self.style)
-                            .when(self.keyboard, |this| {
-                                this.on_action({
-                                    let on_cancel = on_cancel.clone();
-                                    let on_close = on_close.clone();
-                                    move |_: &Cancel, window, cx| {
-                                        // FIXME:
-                                        //
-                                        // Here some Modal have no focus_handle, so it will not work will Escape key.
-                                        // But by now, we `cx.close_modal()` going to close the last active model, so the Escape is unexpected to work.
-                                        on_cancel(&ClickEvent::default(), window, cx);
-                                        on_close(&ClickEvent::default(), window, cx);
-                                        window.close_modal(cx);
-                                    }
-                                })
-                                .on_action({
-                                    let on_ok = on_ok.clone();
-                                    let on_close = on_close.clone();
-                                    let has_footer = self.footer.is_some();
-                                    move |_: &Confirm, window, cx| {
-                                        if let Some(on_ok) = &on_ok {
-                                            if on_ok(&ClickEvent::default(), window, cx) {
-                                                on_close(&ClickEvent::default(), window, cx);
-                                                window.close_modal(cx);
-                                            }
-                                        } else if has_footer {
-                                            window.close_modal(cx);
-                                        }
-                                    }
-                                })
-                            })
-                            // There style is high priority, can't be overridden.
-                            .absolute()
-                            .occlude()
-                            .relative()
-                            .left(x)
-                            .top(y)
-                            .w(self.width)
-                            .when_some(self.max_width, |this, w| this.max_w(w))
-                            .child(
-                                div()
-                                    .px_4()
-                                    .h_8()
-                                    .w_full()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .when_some(self.title, |this, title| {
-                                        this.h_10().font_semibold().text_center().child(title)
-                                    }),
-                            )
-                            .when(self.show_close, |this| {
-                                this.child(
-                                    Button::new("close")
-                                        .icon(IconName::CloseCircleFill)
-                                        .absolute()
-                                        .top_1p5()
-                                        .right_2()
-                                        .custom(
-                                            ButtonCustomVariant::new(window, cx)
-                                                .foreground(cx.theme().icon_muted)
-                                                .color(cx.theme().ghost_element_background)
-                                                .hover(cx.theme().ghost_element_background)
-                                                .active(cx.theme().ghost_element_background),
-                                        )
-                                        .on_click(move |_, window, cx| {
-                                            on_cancel(&ClickEvent::default(), window, cx);
-                                            on_close(&ClickEvent::default(), window, cx);
-                                            window.close_modal(cx);
-                                        }),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .pt_px()
-                                    .w_full()
-                                    .h_auto()
-                                    .flex_1()
-                                    .overflow_hidden()
-                                    .child(
-                                        v_flex()
-                                            .pr(padding_right)
-                                            .pl(padding_left)
-                                            .size_full()
-                                            .overflow_y_scrollbar()
-                                            .child(self.content),
-                                    ),
-                            )
-                            .when_none(&self.footer, |this| this.child(div().pt(padding_left)))
-                            .when_some(self.footer, |this, footer| {
-                                this.child(
-                                    h_flex()
-                                        .gap_2()
-                                        .pt(padding_left)
-                                        .pr(padding_right)
-                                        .pb(padding_left)
-                                        .pl(padding_right)
-                                        .justify_end()
-                                        .children(footer(render_ok, render_cancel, window, cx)),
-                                )
-                            })
-                            .with_animation("slide-down", animation.clone(), move |this, delta| {
-                                let y_offset = px(0.) + delta * px(30.);
-                                // This is equivalent to `shadow_xl` with an extra opacity.
-                                let shadow = vec![
-                                    BoxShadow {
-                                        color: hsla(0., 0., 0., 0.1 * delta),
-                                        offset: point(px(0.), px(20.)),
-                                        blur_radius: px(25.),
-                                        spread_radius: px(-5.),
-                                        inset: false,
-                                    },
-                                    BoxShadow {
-                                        color: hsla(0., 0., 0., 0.1 * delta),
-                                        offset: point(px(0.), px(8.)),
-                                        blur_radius: px(10.),
-                                        spread_radius: px(-6.),
-                                        inset: false,
-                                    },
-                                ];
-                                this.top(y + y_offset).shadow(shadow)
-                            }),
-                    )
-                    .with_animation("fade-in", animation, move |this, delta| this.opacity(delta)),
+                            .pr(padding_right)
+                            .pl(padding_left)
+                            .size_full()
+                            .overflow_y_scrollbar()
+                            .child(self.content),
+                    ),
             )
+            .when_none(&self.footer, |this| this.child(div().pt(padding_left)))
+            .when_some(self.footer, |this, footer| {
+                this.child(
+                    h_flex()
+                        .gap_2()
+                        .pt(padding_left)
+                        .pr(padding_right)
+                        .pb(padding_left)
+                        .pl(padding_right)
+                        .justify_end()
+                        .children(footer(render_ok, render_cancel, window, cx)),
+                )
+            })
+            .with_animation("slide-down", animation, move |this, delta| {
+                let y_offset = px(0.) + delta * px(30.);
+                // This is equivalent to `shadow_xl` with an extra opacity.
+                let shadow = vec![
+                    BoxShadow {
+                        color: hsla(0., 0., 0., 0.1 * delta),
+                        offset: point(px(0.), px(20.)),
+                        blur_radius: px(25.),
+                        spread_radius: px(-5.),
+                        inset: false,
+                    },
+                    BoxShadow {
+                        color: hsla(0., 0., 0., 0.1 * delta),
+                        offset: point(px(0.), px(8.)),
+                        blur_radius: px(10.),
+                        spread_radius: px(-6.),
+                        inset: false,
+                    },
+                ];
+                this.top(card_top + y_offset).shadow(shadow)
+            });
+
+        Dialog::new(cx)
+            .layer(layer_ix, is_topmost)
+            .focus_handle(self.focus_handle.clone())
+            .close_on_escape(self.keyboard)
+            .close_on_backdrop_press(self.overlay_closable)
+            .on_ok(move |event, window, cx| match &on_ok {
+                Some(on_ok) => on_ok(event, window, cx),
+                None => has_footer,
+            })
+            .on_cancel(move |event, window, cx| on_cancel(event, window, cx))
+            .on_close(move |event, window, cx| {
+                on_close(event, window, cx);
+                window.close_modal(cx);
+            })
+            .backdrop(backdrop)
+            .popup(card)
     }
 }
