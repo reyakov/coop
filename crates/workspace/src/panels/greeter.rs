@@ -139,13 +139,14 @@ impl Render for GreeterPanel {
                                 v_flex()
                                     .gap_2()
                                     .w_full()
+                                    .justify_start()
+                                    .items_start()
                                     .child(
                                         Button::new("profile")
                                             .icon(Icon::new(IconName::Profile))
                                             .label("Update profile")
                                             .ghost()
                                             .small()
-                                            .justify_start()
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.add_profile_panel(window, cx)
                                             })),
@@ -156,7 +157,6 @@ impl Render for GreeterPanel {
                                             .label("Change theme")
                                             .ghost()
                                             .small()
-                                            .justify_start()
                                             .on_click(cx.listener(move |_, _, _, cx| {
                                                 cx.dispatch_action(&Command::ToggleTheme);
                                             })),

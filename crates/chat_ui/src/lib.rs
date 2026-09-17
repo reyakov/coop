@@ -2052,6 +2052,7 @@ impl Render for ChatPanel {
             .child(
                 v_flex()
                     .flex_1()
+                    .min_h_0()
                     .relative()
                     .map(|this| {
                         if self.messages.is_empty() {
