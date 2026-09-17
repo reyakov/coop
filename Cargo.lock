@@ -1303,6 +1303,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e8ccc4ea9f6acc32d102c0f6d471d11d913ad15f20c04de743374861fa1d414"
 
 [[package]]
+name = "concord"
+version = "1.0.2"
+dependencies = [
+ "anyhow",
+ "chacha20 0.9.1",
+ "data-encoding",
+ "hkdf",
+ "hmac 0.12.1",
+ "nostr",
+ "nostr-memory",
+ "nostr-sdk",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "smol",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

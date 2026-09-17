@@ -31,6 +31,12 @@ nostr = { git = "https://github.com/rust-nostr/nostr", features = [ "nip59", "ni
 aes-gcm = "0.10"
 sha2 = "0.10"
 data-encoding = "2"
+hkdf = "0.12"
+# Pinned to the instances `nostr` already builds: the NIP-44 message-key disclosure
+chacha20 = "0.9"
+hmac = "0.12"
+# Pinned to the instance `nostr-sdk` already builds, so NIP-44 nonces share it
+rand = { version = "0.10", default-features = false, features = [ "std", "sys_rng" ] }
 
 # Others
 anyhow = "1.0.44"
