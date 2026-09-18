@@ -1,0 +1,22 @@
+[package]
+name = "community"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+concord = { path = "../concord" }
+state = { path = "../state" }
+
+gpui.workspace = true
+nostr-sdk.workspace = true
+
+anyhow.workspace = true
+flume.workspace = true
+log.workspace = true
+serde_json.workspace = true
+smallvec.workspace = true
+
+[dev-dependencies]
+nostr-memory.workspace = true
+smol.workspace = true

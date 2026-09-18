@@ -1275,6 +1275,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "community"
+version = "1.0.2"
+dependencies = [
+ "anyhow",
+ "concord",
+ "flume 0.11.1",
+ "gpui-pre",
+ "log",
+ "nostr-memory",
+ "nostr-sdk",
+ "serde_json",
+ "smallvec",
+ "smol",
+ "state",
+]
+
+[[package]]
 name = "compression-codecs"
 version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"

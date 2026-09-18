@@ -290,7 +290,7 @@ fn state_identifier(id: &CommunityId) -> String {
 
 pub async fn save_state<D>(database: &D, state: &CommunityState) -> Result<()>
 where
-    D: NostrDatabase,
+    D: NostrDatabase + ?Sized,
 {
     let event = EventBuilder::new(Kind::ApplicationSpecificData, serde_json::to_string(state)?)
         .tags([Tag::identifier(state.identifier())])
@@ -304,7 +304,7 @@ where
 
 pub async fn load_state<D>(database: &D, id: &CommunityId) -> Result<Option<CommunityState>>
 where
-    D: NostrDatabase,
+    D: NostrDatabase + ?Sized,
 {
     let filter = Filter::new()
         .kind(Kind::ApplicationSpecificData)
