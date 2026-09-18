@@ -3,8 +3,8 @@ use std::rc::Rc;
 use chat::RoomKind;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, ClickEvent, InteractiveElement, IntoElement, ParentElement as _, RenderOnce,
-    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
+    App, ClickEvent, InteractiveElement, IntoElement, ParentElement as _, RenderOnce, SharedString,
+    StatefulInteractiveElement, Styled, Window, div, px,
 };
 use nostr_sdk::prelude::*;
 use settings::AppSettings;
@@ -16,22 +16,19 @@ use ui::{Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension, h_flex
 
 use crate::dialogs::screening;
 
-/// Group name callers can target from a `trailing` element to react to row hover.
-pub const ROOM_ENTRY_GROUP: &str = "room-entry";
-
 #[derive(IntoElement)]
 pub struct RoomEntry {
     ix: usize,
     public_key: Option<PublicKey>,
     name: Option<SharedString>,
     avatar: Option<SharedString>,
+    seed: Option<SharedString>,
     created_at: Option<SharedString>,
     kind: Option<RoomKind>,
     depth: u8,
     selected: bool,
     #[allow(clippy::type_complexity)]
     handler: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
-    trailing: Option<AnyElement>,
 }
 
 impl RoomEntry {
@@ -41,12 +38,12 @@ impl RoomEntry {
             public_key: None,
             name: None,
             avatar: None,
+            seed: None,
             created_at: None,
             kind: None,
             depth: 0,
             handler: None,
             selected: false,
-            trailing: None,
         }
     }
 
@@ -60,8 +57,13 @@ impl RoomEntry {
         self
     }
 
-    pub fn avatar(mut self, avatar: impl Into<SharedString>) -> Self {
-        self.avatar = Some(avatar.into());
+    pub fn avatar(mut self, picture: Option<SharedString>) -> Self {
+        self.avatar = picture;
+        self
+    }
+
+    pub fn seed(mut self, seed: impl Into<SharedString>) -> Self {
+        self.seed = Some(seed.into());
         self
     }
 
@@ -77,11 +79,6 @@ impl RoomEntry {
 
     pub fn depth(mut self, depth: u8) -> Self {
         self.depth = depth;
-        self
-    }
-
-    pub fn trailing(mut self, trailing: impl IntoElement) -> Self {
-        self.trailing = Some(trailing.into_any_element());
         self
     }
 
@@ -112,22 +109,26 @@ impl RenderOnce for RoomEntry {
 
         let public_key = self.public_key;
         let is_selected = self.is_selected();
+        let avatar = match (self.avatar, self.seed) {
+            (None, None) => None,
+            (picture, seed) => Some(
+                Avatar::new(picture)
+                    .when_some(seed, |avatar, seed| avatar.seed(seed))
+                    .xsmall()
+                    .flex_shrink_0(),
+            ),
+        };
 
         h_flex()
             .id(self.ix)
-            .group(ROOM_ENTRY_GROUP)
             .h_8()
             .w_full()
-            .pl(px(6. + self.depth as f32 * 14.))
+            .pl(px(6. + self.depth as f32 * 10.))
             .pr_1p5()
             .gap_2()
             .text_sm()
             .rounded(cx.theme().radius)
-            .when(!hide_avatar, |this| {
-                this.when_some(self.avatar, |this, avatar| {
-                    this.child(Avatar::new(avatar).small().flex_shrink_0())
-                })
-            })
+            .when(!hide_avatar, |this| this.children(avatar))
             .child(
                 div()
                     .flex_1()
@@ -162,7 +163,6 @@ impl RenderOnce for RoomEntry {
                             .when_some(self.created_at, |this, created_at| this.child(created_at)),
                     ),
             )
-            .when_some(self.trailing, |this, trailing| this.child(trailing))
             .hover(|this| this.bg(cx.theme().elevated_surface_background))
             .when_some(self.handler, |this, handler| {
                 this.on_click(move |event, window, cx| {

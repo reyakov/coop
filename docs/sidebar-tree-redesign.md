@@ -1,7 +1,7 @@
 # Sidebar tree redesign
 
-Status: steps 1-9 implemented. Search lives in `panels/search.rs`; the sidebar
-renders the nav rail, the flattened tree, per-row pin/unpin menus, and the
+Status: steps 1-10 implemented. Search lives in `panels/search.rs`; the sidebar
+renders the nav rail, the flattened tree, per-row pin/unpin context menus, and the
 Community section from placeholder data (`TODO(concord)`). Pins and expanded
 sections persist through `settings::Settings`. `cargo check`, `cargo clippy
 --workspace --all-targets` and `rustfmt --check` on the changed files are clean.
@@ -247,9 +247,9 @@ API exposes it.
 
 ### 6.3 File rows
 
-- Rooms reuse `RoomEntry` with two additions: `.depth(u8)` (left padding
-  `px(6. + depth * 14.)`) and an optional `.trailing(AnyElement)` slot for the
-  hover ellipsis; height becomes `h_8`.
+- Rooms reuse `RoomEntry` with `.depth(u8)` (left padding
+  `px(6. + depth * 14.)`), wrapped in a `ContextMenu` that opens the pin/unpin
+  menu; height becomes `h_8`.
 - Community rows use `TreeRow` with a 20px `element_background` circle and the
   first letter, `text_sm` label.
 - Indent guide (optional polish): 1px `border_variant` vertical line at the
@@ -278,12 +278,15 @@ Search is now a panel, not a sidebar mode:
 ## 8. Pin folder
 
 - Pin state: `pinned_rooms: Vec<u64>` in `Sidebar`, order = pin order.
-- UI: hover ellipsis (`IconName::Ellipsis`, `ghost_alt`, `xsmall`, `compact`)
-  on each room row, opening a `DropdownMenu` with `Pin` / `Unpin`
-  (`PopupMenuItem::new(...).on_click(...)`). The ellipsis is a `RoomEntry`
-  trailing element, hidden by default and revealed with `group_hover` against the
-  row's `ROOM_ENTRY_GROUP` group. (There is no right-click menu pattern in the
-  codebase yet; a context menu is a follow-up.)
+- UI: right-clicking a room row opens a `ContextMenu`
+  (`crates/ui/src/menu/dropdown_menu.rs`) with `Pin` / `Unpin`
+  (`PopupMenuItem::new(...).on_click(...)`). The menu is a `PopupMenu` anchored to
+  the row and opened with `MouseButton::Right`, reusing the cached-menu machinery
+  shared with `DropdownMenuPopover`.
+- The row keeps its own left-click handler: GPUI fires `on_click` only for the
+  left button, and the popover's right-button handler calls `cx.stop_propagation()`,
+  so pinning never opens the room. `RoomEntry` no longer carries a `trailing` slot
+  or a group name for hover-revealed chrome.
 - `Pinned` folder is hidden when no pinned room resolves to a live room;
   otherwise expanded by default, showing pinned rooms in pin order.
 - A pinned room remains listed under `Messages`.
@@ -351,15 +354,16 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
   `uniform_list("sidebar-tree")`. `has_search`, `find_focused`, `set_input_focus`
   were dropped because they only existed to switch the sidebar between the room
   list and the search view.
-- [x] **Step 6 — pin UI.** Per-row ellipsis (`IconName::Ellipsis`, `ghost_alt`,
-  `xsmall`, `compact`) passed to `RoomEntry::trailing`, revealed on row hover
-  through the `ROOM_ENTRY_GROUP` group name, opening a `DropdownMenu` with
-  Pin/Unpin; the handlers call `pin_room`/`unpin_room` through a
-  `WeakEntity<Sidebar>`. Click propagation: `gpui_base::Popover` registers the
-  trigger's `on_mouse_down` with `cx.stop_propagation()`, and GPUI only fires an
-  element's `on_click` when that element recorded the matching mouse-down, so the
-  row's `emit_room` click does not fire when the menu trigger is clicked. No extra
-  handling was needed.
+- [x] **Step 6 — pin UI.** Each room row is wrapped in a `ContextMenu`
+  (`ui::menu::ContextMenu`, added in this step) that opens a `PopupMenu` with
+  `Pin` / `Unpin` on right-click; the handlers call `pin_room`/`unpin_room` through
+  a `WeakEntity<Sidebar>`. `ContextMenu` reuses the cached-menu logic extracted
+  from `DropdownMenuPopover` and opens through `Popover::trigger_with`, so the
+  trigger keeps its own click handler and no `Selectable` state is forced onto the
+  row. Left-click still opens the room, because GPUI fires `on_click` only for the
+  left button while the popover handles the right one. (The first cut used a
+  hover ellipsis in a `RoomEntry::trailing` slot; that was removed once the context
+  menu existed.)
 - [x] **Step 7 — community section.** Dummy entries and the empty-state hint are
   rendered; the `TODO(concord)` marker sits on `dummy_communities()`. The
   flattening and rendering landed with step 5 (`SidebarRow::Community` ->
@@ -393,6 +397,37 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
   checked per file with `rustfmt +nightly --check`; `cargo fmt --all` is **not**
   run, because the repo's committed formatting does not match the installed
   nightly rustfmt (many pre-existing diffs in unrelated files).
+- [x] **Step 10 — nav item element.** Extracted the rail rows into
+  `ui::nav_item::NavItem` (`crates/ui/src/nav_item.rs`), ported from the
+  `signed_ui` reference and adapted to this repo (`Rc<dyn Fn>` handlers,
+  `ghost_element_hover`, `StyledExt::refine_style`, no `gpui_component`
+  dependency). The sidebar builds the three rail rows directly with it and the
+  local `nav_item(...) -> Button` helper is gone.
+- [x] **Step 11 — pixel avatars.** Entities without a picture used to fall back
+  to the generic `brand/avatar.png` (and `brand/group.png` for groups), and the
+  community rows drew a first-letter circle. Both are replaced by a deterministic
+  pixel avatar ported from the `signed_ui` `pixel_avatar.rs` reference and added
+  to `ui::avatar` (`crates/ui/src/avatar.rs`) as `PixelAvatar`: an 8x8 mirrored
+  grid seeded by an FNV-1a hash of a stable string, with the hue offset from
+  `theme().icon_accent` and fixed saturation/lightness per appearance so patterns
+  stay readable in both modes and distinguishable between seeds. The cells are
+  painted as path geometry in a `canvas` and cropped to a circle with
+  Sutherland-Hodgman clipping: GPUI clips an overflowing child to its bounding box
+  and never to a corner radius, so a rounded container cannot crop a grid into a
+  circle, while paths are rasterized with MSAA, so the crop is anti-aliased and the
+  avatar is a true circle rather than a stair-stepped disc. It sizes through the
+  shared `avatar_size`, so it matches `Avatar` at every size, including the
+  default, and is adapted to this repo like step 10 (no `gpui_component`,
+  `crate::Sizable`/`Size`, `StyledExt::refine_style`). `Avatar::new` now takes
+  `Option<SharedString>` (the
+  picture) plus `.seed(...)`, and renders the generated avatar both when the
+  picture is absent and when it fails to load; `Person::avatar()` and
+  `Room::display_image()` return `Option`, with the new `Person::avatar_seed()`
+  and `Room::display_image_seed()` supplying the seed (public key for a person or
+  DM, room id for a group). `RoomEntry` takes the picture plus a seed, and
+  `TreeRow`'s letter circle became a `PixelAvatar` seeded by the row's name. Every
+  avatar call site passes a seed: chat (`chat_ui`), device, screening, contact
+  list, profile, search, and the sidebar.
 
 ## 13. Files touched
 
@@ -400,13 +435,20 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
 | --- | --- |
 | `crates/workspace/src/sidebar/mod.rs` | State, flattening, render rewrite; search code moves out |
 | `crates/workspace/src/sidebar/tree.rs` | New: sections, rows, `TreeRow`, dummy data |
-| `crates/workspace/src/sidebar/entry.rs` | `depth`, `trailing`, height |
+| `crates/workspace/src/sidebar/entry.rs` | `depth`, height |
 | `crates/workspace/src/panels/{inbox,browse,search}.rs` | New panel modules |
 | `crates/workspace/src/panels/mod.rs` | Module registration |
 | `crates/workspace/src/lib.rs` | `Command` variants + `on_command` arms |
 | `crates/ui/src/icon.rs` | New icon variants |
 | `assets/icons/{folder,compass,message}.svg` | New assets |
 | `crates/settings/src/lib.rs` | Step 8: `pinned_rooms`, `expanded_sections`, accessors, `entity()` |
+| `crates/ui/src/nav_item.rs` | Step 10: `NavItem` element, new |
+| `crates/ui/src/avatar.rs` | Step 11: `PixelAvatar`; `Avatar` takes a picture plus a seed |
+| `crates/person/src/person.rs` | Step 11: `avatar()` returns `Option`, new `avatar_seed()` |
+| `crates/chat/src/room.rs` | Step 11: `display_image()` returns `Option`, new `display_image_seed()` |
+| `crates/workspace/src/{sidebar,panels,dialogs}/**.rs` | Step 11: room rows, community rows, and person avatars pass seeds |
+| `crates/ui/src/menu/dropdown_menu.rs` | Step 6: `ContextMenu` + cached-menu helper shared with `DropdownMenuPopover` |
+| `crates/ui/src/popover.rs` | Step 6: `Popover::trigger_with` for triggers without a selected state |
 
 ## 14. Edge cases
 
@@ -443,13 +485,16 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
   - each folder toggles and keeps its state across re-renders and room updates;
   - Requests starts collapsed; the dot appears on `ChatEvent::Ping` and clears
     when expanded;
-  - pin/unpin from the row menu updates the Pinned folder without opening the
-    room; clicking a pinned row opens it;
+  - pin/unpin from the row context menu (right-click) updates the Pinned folder
+    without opening the room; clicking a pinned row opens it;
   - Messages lists ongoing rooms and still opens the screening modal for
     non-ongoing rooms;
   - pins and expanded/collapsed folders survive an app restart (collapsing every
     folder also survives, rather than reverting to the default sections);
-  - empty states at 0 ongoing and 0 requests.
+  - empty states at 0 ongoing and 0 requests;
+  - profiles, DMs, groups, and community rows without a picture show a generated
+    pixel avatar, which is stable across restarts and matches wherever the same
+    identity appears; a picture that fails to load falls back to it as well.
 - There is no GPUI test infrastructure in the repo (no `#[gpui::test]`
   anywhere), so tests are limited to pure helpers (`TreeSection` defaults, pin
   ordering) if they are extracted as free functions; `cargo check` plus the

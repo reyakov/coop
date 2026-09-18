@@ -87,6 +87,19 @@ impl Popover {
         self
     }
 
+    /// Set the trigger from a builder, for elements that have no selected state.
+    ///
+    /// [`Self::trigger`] marks the trigger as selected while the popover is
+    /// open, so it cannot be used with elements whose selection carries a
+    /// different meaning, such as a row that indicates the current room.
+    pub fn trigger_with<F>(mut self, trigger: F) -> Self
+    where
+        F: FnOnce(bool, &Window, &App) -> AnyElement + 'static,
+    {
+        self.trigger = Some(Box::new(trigger));
+        self
+    }
+
     /// Set the default open state of the popover, default is `false`.
     ///
     /// This is only used to initialize the open state of the popover.

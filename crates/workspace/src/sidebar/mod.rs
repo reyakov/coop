@@ -20,10 +20,12 @@ use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
 use ui::indicator::Indicator;
-use ui::menu::{DropdownMenu, PopupMenuItem};
+use ui::menu::{ContextMenu, DropdownMenu, PopupMenuItem};
+use ui::nav_item::NavItem;
 use ui::scroll::Scrollbar;
 use ui::{
-    IconName, Sizable, StyledExt, TRAFFIC_LIGHT_PADDING, h_flex, title_bar_drag_handlers, v_flex,
+    Icon, IconName, Sizable, StyledExt, TRAFFIC_LIGHT_PADDING, h_flex, title_bar_drag_handlers,
+    v_flex,
 };
 
 use crate::Command;
@@ -31,7 +33,6 @@ use crate::Command;
 mod entry;
 mod tree;
 
-use entry::ROOM_ENTRY_GROUP;
 pub(crate) use entry::RoomEntry;
 use tree::{SidebarRow, TreeRow, TreeRowKind, TreeSection, dummy_communities};
 
@@ -291,7 +292,8 @@ impl Sidebar {
                         let room_id = room.read(cx).id;
                         let public_key = room.read(cx).display_member(cx).public_key();
                         let name = room.read(cx).display_name(cx);
-                        let avatar = room.read(cx).display_image(cx);
+                        let picture = room.read(cx).display_image(cx);
+                        let seed = room.read(cx).display_image_seed(cx);
                         let kind = room.read(cx).kind;
                         let created_at = room.read(cx).created_at.to_ago();
                         let room_clone = room.clone();
@@ -301,55 +303,47 @@ impl Sidebar {
                             });
                         });
 
-                        let sidebar = cx.entity().downgrade();
-                        let trailing =
-                            Button::new(ElementId::NamedInteger("room-menu".into(), index as u64))
-                                .icon(IconName::Ellipsis)
-                                .ghost_alt()
-                                .xsmall()
-                                .compact()
-                                .invisible()
-                                .group_hover(ROOM_ENTRY_GROUP, |style| style.visible())
-                                .dropdown_menu(move |this, _window, _cx| {
-                                    let sidebar = sidebar.clone();
-
-                                    if pinned {
-                                        this.item(PopupMenuItem::new("Unpin").on_click(
-                                            move |_event, _window, cx| {
-                                                if let Err(error) =
-                                                    sidebar.update(cx, |sidebar, cx| {
-                                                        sidebar.unpin_room(room_id, cx);
-                                                    })
-                                                {
-                                                    log::error!("Failed to unpin room: {error}");
-                                                }
-                                            },
-                                        ))
-                                    } else {
-                                        this.item(PopupMenuItem::new("Pin").on_click(
-                                            move |_event, _window, cx| {
-                                                if let Err(error) =
-                                                    sidebar.update(cx, |sidebar, cx| {
-                                                        sidebar.pin_room(room_id, cx);
-                                                    })
-                                                {
-                                                    log::error!("Failed to pin room: {error}");
-                                                }
-                                            },
-                                        ))
-                                    }
-                                });
-
-                        RoomEntry::new(index)
+                        let entry = RoomEntry::new(index)
                             .name(name)
-                            .avatar(avatar)
+                            .avatar(picture)
+                            .seed(seed)
                             .public_key(public_key)
                             .kind(kind)
                             .created_at(created_at)
                             .depth(*depth)
-                            .trailing(trailing)
-                            .on_click(handler)
-                            .into_any_element()
+                            .on_click(handler);
+
+                        let sidebar = cx.entity().downgrade();
+                        ContextMenu::new(
+                            ElementId::NamedInteger("room-context-menu".into(), index as u64),
+                            entry,
+                            move |this, _window, _cx| {
+                                let sidebar = sidebar.clone();
+
+                                if pinned {
+                                    this.item(PopupMenuItem::new("Unpin").on_click(
+                                        move |_event, _window, cx| {
+                                            if let Err(error) = sidebar.update(cx, |sidebar, cx| {
+                                                sidebar.unpin_room(room_id, cx);
+                                            }) {
+                                                log::error!("Failed to unpin room: {error}");
+                                            }
+                                        },
+                                    ))
+                                } else {
+                                    this.item(PopupMenuItem::new("Pin").on_click(
+                                        move |_event, _window, cx| {
+                                            if let Err(error) = sidebar.update(cx, |sidebar, cx| {
+                                                sidebar.pin_room(room_id, cx);
+                                            }) {
+                                                log::error!("Failed to pin room: {error}");
+                                            }
+                                        },
+                                    ))
+                                }
+                            },
+                        )
+                        .into_any_element()
                     }
                     SidebarRow::Community { entry, depth } => TreeRow::new(
                         ElementId::NamedInteger("tree-row".into(), index as u64),
@@ -399,17 +393,23 @@ impl Sidebar {
                     let persons = PersonRegistry::global(cx);
                     let profile = persons.read(cx).get(public_key, cx);
                     let avatar = profile.avatar();
+                    let avatar_seed = profile.avatar_seed();
                     let name = profile.name();
 
                     this.child(
                         Button::new("current-user")
-                            .child(Avatar::new(avatar.clone()).xsmall())
+                            .child(
+                                Avatar::new(avatar.clone())
+                                    .seed(avatar_seed.clone())
+                                    .xsmall(),
+                            )
                             .small()
                             .caret()
                             .compact()
                             .transparent()
                             .dropdown_menu(move |this, _window, cx| {
                                 let avatar = avatar.clone();
+                                let avatar_seed = avatar_seed.clone();
                                 let name = name.clone();
 
                                 this.min_w(px(256.))
@@ -418,7 +418,11 @@ impl Sidebar {
                                             .gap_1p5()
                                             .text_xs()
                                             .text_color(cx.theme().text_muted)
-                                            .child(Avatar::new(avatar.clone()).xsmall())
+                                            .child(
+                                                Avatar::new(avatar.clone())
+                                                    .seed(avatar_seed.clone())
+                                                    .xsmall(),
+                                            )
                                             .child(name.clone())
                                     }))
                                     .separator()
@@ -461,19 +465,6 @@ impl Sidebar {
             cx,
         )
     }
-}
-
-fn nav_item(id: &'static str, icon: IconName, label: &'static str, command: Command) -> Button {
-    Button::new(id)
-        .icon(icon)
-        .label(label)
-        .ghost_alt()
-        .small()
-        .w_full()
-        .justify_start()
-        .on_click(move |_event, _window, cx| {
-            cx.dispatch_action(&command);
-        })
 }
 
 fn load_expanded(cx: &App) -> BTreeSet<TreeSection> {
@@ -520,24 +511,24 @@ impl Render for Sidebar {
                     .px_2()
                     .py_1()
                     .gap_1()
-                    .child(nav_item(
-                        "nav-inbox",
-                        IconName::Inbox,
-                        "Inbox",
-                        Command::ShowInbox,
-                    ))
-                    .child(nav_item(
-                        "nav-browse",
-                        IconName::Compass,
-                        "Browse",
-                        Command::ShowBrowse,
-                    ))
-                    .child(nav_item(
-                        "nav-search",
-                        IconName::Search,
-                        "Search",
-                        Command::ShowSearch,
-                    )),
+                    .child(
+                        NavItem::new("nav-inbox", "Inbox", Icon::new(IconName::Inbox).small())
+                            .on_click(|_event, _window, cx| {
+                                cx.dispatch_action(&Command::ShowInbox)
+                            }),
+                    )
+                    .child(
+                        NavItem::new("nav-browse", "Browse", Icon::new(IconName::Compass).small())
+                            .on_click(|_event, _window, cx| {
+                                cx.dispatch_action(&Command::ShowBrowse)
+                            }),
+                    )
+                    .child(
+                        NavItem::new("nav-search", "Search", Icon::new(IconName::Search).small())
+                            .on_click(|_event, _window, cx| {
+                                cx.dispatch_action(&Command::ShowSearch)
+                            }),
+                    ),
             )
             .child(
                 v_flex()

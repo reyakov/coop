@@ -239,7 +239,11 @@ impl ContactListPanel {
                         h_flex()
                             .gap_2()
                             .text_sm()
-                            .child(Avatar::new(profile.avatar()).small())
+                            .child(
+                                Avatar::new(profile.avatar())
+                                    .seed(profile.avatar_seed())
+                                    .small(),
+                            )
                             .child(profile.name()),
                     )
                     .child(

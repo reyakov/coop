@@ -295,7 +295,11 @@ impl Screening {
                                     .rounded(cx.theme().radius)
                                     .text_sm()
                                     .hover(|this| this.bg(cx.theme().elevated_surface_background))
-                                    .child(Avatar::new(profile.avatar()).small())
+                                    .child(
+                                        Avatar::new(profile.avatar())
+                                            .seed(profile.avatar_seed())
+                                            .small(),
+                                    )
                                     .child(profile.name()),
                             );
                         }
@@ -335,7 +339,11 @@ impl Render for Screening {
                     .items_center()
                     .justify_center()
                     .text_center()
-                    .child(Avatar::new(profile.avatar()).large())
+                    .child(
+                        Avatar::new(profile.avatar())
+                            .seed(profile.avatar_seed())
+                            .large(),
+                    )
                     .child(
                         div()
                             .font_semibold()

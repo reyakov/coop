@@ -655,7 +655,11 @@ impl DeviceRegistry {
                                             .child(
                                                 h_flex()
                                                     .gap_2()
-                                                    .child(Avatar::new(profile.avatar()).xsmall())
+                                                    .child(
+                                                        Avatar::new(profile.avatar())
+                                                            .seed(profile.avatar_seed())
+                                                            .xsmall(),
+                                                    )
                                                     .child(profile.name()),
                                             ),
                                     ),

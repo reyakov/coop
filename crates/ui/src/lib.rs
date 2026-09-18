@@ -18,6 +18,7 @@ pub mod indicator;
 pub mod input;
 pub mod menu;
 pub mod modal;
+pub mod nav_item;
 pub mod notification;
 pub mod popover;
 pub mod resizable;

@@ -7,6 +7,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use theme::ActiveTheme;
+use ui::avatar::PixelAvatar;
 use ui::{Icon, IconName, Sizable, StyledExt, h_flex};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -147,8 +148,9 @@ impl TreeRow {
         self
     }
 
-    pub fn avatar(mut self, name: impl Into<SharedString>) -> Self {
-        self.avatar = Some(name.into());
+    /// Sets the seed for the row's generated avatar.
+    pub fn avatar(mut self, seed: impl Into<SharedString>) -> Self {
+        self.avatar = Some(seed.into());
         self
     }
 
@@ -174,11 +176,7 @@ impl TreeRow {
 impl RenderOnce for TreeRow {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let indent = px(6. + self.depth as f32 * 14.);
-        let avatar_initial = self
-            .avatar
-            .as_ref()
-            .and_then(|name| name.chars().next())
-            .map(|letter| SharedString::from(letter.to_uppercase().to_string()));
+        let avatar_seed = self.avatar;
         let is_section = self.kind == TreeRowKind::Section;
         let is_community = self.kind == TreeRowKind::Community;
         let is_hint = self.kind == TreeRowKind::Hint;
@@ -192,9 +190,7 @@ impl RenderOnce for TreeRow {
             .gap_2()
             .rounded(cx.theme().radius)
             .when(is_section, |this| {
-                this.text_xs()
-                    .font_semibold()
-                    .text_color(cx.theme().text_muted)
+                this.text_xs().text_color(cx.theme().text_muted)
             })
             .when(is_community, |this| this.text_sm())
             .when(is_hint, |this| {
@@ -202,36 +198,30 @@ impl RenderOnce for TreeRow {
                     .font_normal()
                     .text_color(cx.theme().text_placeholder)
             })
-            .when_some(self.caret, |this, caret| {
-                this.child(Icon::new(caret).xsmall().text_color(cx.theme().icon_muted))
-            })
             .when_some(self.icon, |this, icon| {
                 this.child(Icon::new(icon).small().text_color(cx.theme().icon_muted))
             })
-            .when_some(avatar_initial, |this, initial| {
-                this.child(
-                    div()
-                        .flex_shrink_0()
-                        .size_5()
-                        .rounded_full()
-                        .bg(cx.theme().element_background)
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_xs()
-                        .text_color(cx.theme().text)
-                        .child(initial),
-                )
+            .when_some(avatar_seed, |this, seed| {
+                this.child(PixelAvatar::new(seed).xsmall())
             })
-            .child(div().flex_1().truncate().child(self.label))
-            .when_some(self.count, |this, count| {
-                this.child(
-                    div()
-                        .flex_shrink_0()
-                        .text_xs()
-                        .text_color(cx.theme().text_placeholder)
-                        .child(count.to_string()),
-                )
+            .child(
+                h_flex()
+                    .gap_1()
+                    .flex_1()
+                    .child(div().truncate().min_w_0().child(self.label))
+                    .when_some(self.count, |this, count| {
+                        this.child(
+                            div()
+                                .flex_shrink_0()
+                                .text_xs()
+                                .text_color(cx.theme().text_placeholder)
+                                .font_semibold()
+                                .child(count.to_string()),
+                        )
+                    }),
+            )
+            .when_some(self.caret, |this, caret| {
+                this.child(Icon::new(caret).xsmall().text_color(cx.theme().icon_muted))
             })
             .when(self.dot, |this| {
                 this.child(

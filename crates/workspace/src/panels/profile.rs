@@ -309,12 +309,7 @@ impl Render for ProfilePanel {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         let avatar_input = self.avatar_input.read(cx).value();
 
-        // Get the avatar
-        let avatar = if avatar_input.is_empty() {
-            "brand/avatar.png"
-        } else {
-            avatar_input.as_str()
-        };
+        let picture = (!avatar_input.is_empty()).then_some(avatar_input);
 
         // Get the public key as short string
         let shorten_pkey = SharedString::from(shorten_pubkey(self.public_key, 8));
@@ -331,7 +326,7 @@ impl Render for ProfilePanel {
                     .items_center()
                     .justify_center()
                     .gap_4()
-                    .child(Avatar::new(avatar).large())
+                    .child(Avatar::new(picture).seed(self.public_key.to_hex()).large())
                     .child(
                         Button::new("upload")
                             .icon(IconName::PlusCircle)
