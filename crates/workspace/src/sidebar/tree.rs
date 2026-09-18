@@ -18,6 +18,24 @@ pub enum TreeSection {
     Messages,
 }
 
+impl TreeSection {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pins => "Pinned",
+            Self::Requests => "Requests",
+            Self::Community => "Community",
+            Self::Messages => "Messages",
+        }
+    }
+
+    pub fn icon(self) -> IconName {
+        match self {
+            Self::Pins | Self::Requests | Self::Community => IconName::Folder,
+            Self::Messages => IconName::Message,
+        }
+    }
+}
+
 /// One rendered tree row, in flattened order.
 pub enum SidebarRow {
     Section {

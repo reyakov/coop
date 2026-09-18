@@ -1,7 +1,10 @@
 # Sidebar tree redesign
 
-Status: steps 1-4 implemented (icons, tree primitives, `RoomEntry` extensions,
-panel shells); step 5 (search relocation + sidebar render rewrite) not started.
+Status: steps 1-5 implemented. Search now lives in `panels/search.rs`; the
+sidebar renders the nav rail and the flattened tree. Remaining: step 6 (pin UI),
+step 7 (community rows are already rendered from dummy data, tracked by the
+`TODO(concord)`), optional step 8 (persistence), step 9 (cleanup of the step-6
+dead code).
 
 Scope: `crates/workspace/src/sidebar` (`mod.rs`, `entry.rs`, new `tree.rs`),
 new panel shells in `crates/workspace/src/panels/`, and the `Command` wiring in
@@ -318,7 +321,7 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
   `greeter.rs`); register them in `panels/mod.rs`; handle the commands in
   `Workspace::on_command` with `add_panel_to_dock(..., DockPlacement::Center, ...)`.
   All three render empty bodies for now; the Search body is filled in step 5.
-- [ ] **Step 5 — relocation + render rewrite (atomic, separate workstream
+- [x] **Step 5 — relocation + render rewrite (atomic, separate workstream
   handoff).** Move the search/select implementation out of `Sidebar` into
   `panels/search.rs` (inventory in §7), wiring the input, results, contacts,
   selection, and create-DM button exactly as they are today; at the same time
@@ -326,11 +329,18 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
   tree list, scrollbar, `render_user`, loading pill), add
   `expanded`/`pinned_rooms`/`tree_rows`, and delete `filter`, `current_filter`,
   `set_filter`, and the sidebar's search state. The search workstream owns the
-  relocated module afterwards.
+  relocated module afterwards. Done: `SearchPanel` owns the input, debounce,
+  results, contacts, selection and create-DM flow; `Sidebar` owns
+  `expanded`/`pinned_rooms` and flattens the four sections into one
+  `uniform_list("sidebar-tree")`. `has_search`, `find_focused`, `set_input_focus`
+  were dropped because they only existed to switch the sidebar between the room
+  list and the search view.
 - [ ] **Step 6 — pin UI.** Build the per-row ellipsis dropdown, wire
   `pin_room`/`unpin_room`.
 - [ ] **Step 7 — community section.** Render dummy entries and hint; add the
-  `TODO(concord)` marker.
+  `TODO(concord)` marker. The flattening and rendering landed with step 5
+  (`SidebarRow::Community` -> `TreeRow`, dummy data from `dummy_communities()`),
+  so this step is effectively complete once the names in §10 are confirmed.
 - [ ] **Step 8 (optional) — persistence.** Add
   `#[serde(default)] pinned_rooms: Vec<u64>` (and optionally
   `expanded_sections: Vec<String>`) to `settings::Settings`, register accessors
