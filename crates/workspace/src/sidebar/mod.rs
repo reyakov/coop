@@ -144,6 +144,7 @@ impl Sidebar {
             section: TreeSection::Requests,
             count: requests.len(),
         });
+
         if self.is_expanded(TreeSection::Requests) {
             if requests.is_empty() {
                 rows.push(SidebarRow::Hint {
@@ -167,12 +168,20 @@ impl Sidebar {
             section: TreeSection::Community,
             count: communities.len(),
         });
+
         if self.is_expanded(TreeSection::Community) {
-            rows.extend(
-                communities
-                    .iter()
-                    .map(|entry| SidebarRow::Community { entry, depth: 1 }),
-            );
+            if communities.is_empty() {
+                rows.push(SidebarRow::Hint {
+                    text: "No communities yet".into(),
+                    depth: 1,
+                });
+            } else {
+                rows.extend(
+                    communities
+                        .iter()
+                        .map(|entry| SidebarRow::Community { entry, depth: 1 }),
+                );
+            }
         }
 
         let messages = chat.rooms(&RoomKind::Ongoing, cx);
@@ -180,6 +189,7 @@ impl Sidebar {
             section: TreeSection::Messages,
             count: messages.len(),
         });
+
         if self.is_expanded(TreeSection::Messages) {
             if messages.is_empty() {
                 rows.push(SidebarRow::Hint {
@@ -450,8 +460,9 @@ impl Focusable for Sidebar {
 impl Render for Sidebar {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let nostr = NostrRegistry::global(cx);
-        let chat = ChatRegistry::global(cx);
         let logged_in = nostr.read(cx).current_user().is_some();
+
+        let chat = ChatRegistry::global(cx);
         let loading = chat.read(cx).loading() && logged_in;
 
         let rows = Rc::new(self.tree_rows(cx));

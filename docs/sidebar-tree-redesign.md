@@ -1,9 +1,10 @@
 # Sidebar tree redesign
 
-Status: steps 1-6 implemented. Search lives in `panels/search.rs`; the sidebar
-renders the nav rail, the flattened tree, and per-row pin/unpin menus. Remaining:
-step 7 (confirm the placeholder community names), optional step 8 (persistence),
-step 9 (remove the unused `TreeRow::selected` and run the final cleanup).
+Status: steps 1-7 implemented. Search lives in `panels/search.rs`; the sidebar
+renders the nav rail, the flattened tree, per-row pin/unpin menus, and the
+Community section from placeholder data (`TODO(concord)`). Remaining: optional
+step 8 (persistence), step 9 (remove the unused `TreeRow::selected` and run the
+final cleanup).
 
 Scope: `crates/workspace/src/sidebar` (`mod.rs`, `entry.rs`, new `tree.rs`),
 new panel shells in `crates/workspace/src/panels/`, and the `Command` wiring in
@@ -343,10 +344,11 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
   element's `on_click` when that element recorded the matching mouse-down, so the
   row's `emit_room` click does not fire when the menu trigger is clicked. No extra
   handling was needed.
-- [ ] **Step 7 — community section.** Render dummy entries and hint; add the
-  `TODO(concord)` marker. The flattening and rendering landed with step 5
-  (`SidebarRow::Community` -> `TreeRow`, dummy data from `dummy_communities()`),
-  so this step is effectively complete once the names in §10 are confirmed.
+- [x] **Step 7 — community section.** Dummy entries and the empty-state hint are
+  rendered; the `TODO(concord)` marker sits on `dummy_communities()`. The
+  flattening and rendering landed with step 5 (`SidebarRow::Community` ->
+  `TreeRow`), so this step added the missing hint branch and confirmed the §10
+  placeholder names.
 - [ ] **Step 8 (optional) — persistence.** Add
   `#[serde(default)] pinned_rooms: Vec<u64>` (and optionally
   `expanded_sections: Vec<String>`) to `settings::Settings`, register accessors
