@@ -35,6 +35,7 @@ common = { path = "../crates/common" }
 state = { path = "../crates/state" }
 device = { path = "../crates/device" }
 chat = { path = "../crates/chat" }
+community = { path = "../crates/community" }
 settings = { path = "../crates/settings" }
 auto_update = { path = "../crates/auto_update" }
 person = { path = "../crates/person" }

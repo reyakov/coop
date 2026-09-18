@@ -221,7 +221,21 @@ impl ChatRegistry {
                 };
 
                 match *message {
-                    RelayMessage::Event { event, .. } => {
+                    RelayMessage::Event {
+                        subscription_id,
+                        event,
+                        ..
+                    } => {
+                        let chat_sub = subscription_id.as_str() != sub_id1.as_str();
+                        let device_sub = subscription_id.as_str() != sub_id2.as_str();
+
+                        // Concord wraps are also kind 1059.
+                        //
+                        // Only the two gift wrap subscriptions carry NIP-59 wraps for this account.
+                        if event.kind == Kind::GiftWrap && chat_sub && device_sub {
+                            continue;
+                        }
+
                         // Prune the dedup set before it grows unbounded
                         if processed_events.len() >= MAX_PROCESSED {
                             processed_events.clear();

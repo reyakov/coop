@@ -102,6 +102,9 @@ fn main() {
                 // Initialize app registry
                 chat::init(window, cx);
 
+                // Initialize community registry
+                community::init(window, cx);
+
                 // Initialize auto update
                 auto_update::init(window, cx);
 

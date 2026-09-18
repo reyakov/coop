@@ -72,6 +72,9 @@ pub fn run() -> Result<(), JsValue> {
             // Initialize app registry
             chat::init(window, cx);
 
+            // Initialize community registry
+            community::init(window, cx);
+
             // Root view
             cx.new(|cx| Root::new(workspace::init(window, cx).into(), window, cx))
         })
