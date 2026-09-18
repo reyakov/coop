@@ -4,7 +4,7 @@ use anyhow::Result;
 use concord::CommunityId;
 use concord::cord01::KIND_WRAP;
 use concord::store::CommunityState;
-use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task, Window};
+use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
@@ -15,8 +15,8 @@ mod sync;
 pub use community::*;
 pub use sync::*;
 
-pub fn init(window: &mut Window, cx: &mut App) {
-    CommunityRegistry::set_global(cx.new(|cx| CommunityRegistry::new(window, cx)), cx);
+pub fn init(cx: &mut App) {
+    CommunityRegistry::set_global(cx.new(CommunityRegistry::new), cx);
 }
 
 struct GlobalCommunityRegistry(Entity<CommunityRegistry>);
@@ -56,7 +56,8 @@ impl CommunityRegistry {
         cx.set_global(GlobalCommunityRegistry(state));
     }
 
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let entity = cx.entity().downgrade();
         let nostr = NostrRegistry::global(cx);
         let (tx, rx) = flume::bounded::<Signal>(256);
         let mut subscriptions = smallvec![];
@@ -69,12 +70,15 @@ impl CommunityRegistry {
             }
         }));
 
-        cx.defer_in(window, move |this, _window, cx| {
-            this.handle_notifications(cx);
-
-            if nostr.read(cx).current_user().is_some() {
-                this.load(cx);
-            }
+        cx.defer(move |cx| {
+            entity
+                .update(cx, |this, cx| {
+                    this.handle_notifications(cx);
+                    if nostr.read(cx).current_user().is_some() {
+                        this.load(cx);
+                    }
+                })
+                .ok();
         });
 
         Self {

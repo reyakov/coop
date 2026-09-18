@@ -24,8 +24,8 @@ use ui::{Disableable, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 const IDENTIFIER: &str = "coop:device";
 
-pub fn init(window: &mut Window, cx: &mut App) {
-    DeviceRegistry::set_global(cx.new(|cx| DeviceRegistry::new(window, cx)), cx);
+pub fn init(cx: &mut App) {
+    DeviceRegistry::set_global(cx.new(DeviceRegistry::new), cx);
 }
 
 struct GlobalDeviceRegistry(Entity<DeviceRegistry>);
@@ -89,7 +89,8 @@ impl DeviceRegistry {
     }
 
     /// Create a new device registry instance
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let entity = cx.entity().downgrade();
         let nostr = NostrRegistry::global(cx);
         let settings = AppSettings::global(cx);
 
@@ -114,8 +115,10 @@ impl DeviceRegistry {
             }),
         );
 
-        cx.defer_in(window, |this, window, cx| {
-            this.handle_notifications(window, cx);
+        cx.defer(move |cx| {
+            entity
+                .update(cx, |this, cx| this.handle_notifications(cx))
+                .ok();
         });
 
         Self {
@@ -127,7 +130,7 @@ impl DeviceRegistry {
         }
     }
 
-    fn handle_notifications(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_notifications(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
@@ -168,18 +171,18 @@ impl DeviceRegistry {
             Ok(())
         }));
 
-        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+        self.tasks.push(cx.spawn(async move |this, cx| {
             while let Ok(event) = rx.recv_async().await {
                 match event.kind {
                     Kind::Custom(10044) => {
-                        this.update_in(cx, |this, _window, cx| {
+                        this.update(cx, |this, cx| {
                             this.set_encryption(&event, cx);
                         })?;
                     }
                     // New request event from other device
                     Kind::Custom(4454) => {
-                        this.update_in(cx, |this, window, cx| {
-                            this.ask_for_approval(event, window, cx);
+                        this.update(cx, |this, cx| {
+                            this.ask_for_approval(event, cx);
                         })?;
                     }
                     // New response event from the master device
@@ -591,7 +594,7 @@ impl DeviceRegistry {
     }
 
     /// Handle encryption request
-    fn ask_for_approval(&mut self, event: Event, window: &mut Window, cx: &mut Context<Self>) {
+    fn ask_for_approval(&mut self, event: Event, cx: &mut Context<Self>) {
         // Ignore if there is already a pending request
         if self.pending_request {
             return;
@@ -600,7 +603,18 @@ impl DeviceRegistry {
 
         // Show notification
         let notification = self.notification(event, cx);
-        window.push_notification(notification, cx);
+
+        // The registry is global and not bound to a window, so surface the
+        // request in an open window.
+        if let Some(window) = cx.windows().first().copied() {
+            if let Err(error) = window.update(cx, |_view, window, cx| {
+                window.push_notification(notification, cx);
+            }) {
+                log::warn!("Failed to show encryption key request: {error}");
+            }
+        } else {
+            log::warn!("Failed to show encryption key request: no open window");
+        }
     }
 
     /// Build a notification for the encryption request.

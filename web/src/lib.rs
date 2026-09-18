@@ -47,35 +47,33 @@ pub fn run() -> Result<(), JsValue> {
     };
 
     app.run(|cx| {
-        // Open the root window
+        // Initialize components
+        ui::init(cx);
+
+        // Initialize theme registry
+        theme::init(cx);
+
+        // Initialize settings
+        settings::init(cx);
+
+        // Initialize the nostr client
+        state::init(cx, None);
+
+        // Initialize person registry
+        person::init(cx);
+
+        // Initialize device signer
+        //
+        // NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
+        device::init(cx);
+
+        // Initialize app registry
+        chat::init(cx);
+
+        // Initialize community registry
+        community::init(cx);
+
         cx.open_window(WindowOptions::default(), |window, cx| {
-            // Initialize components
-            ui::init(cx);
-
-            // Initialize theme registry
-            theme::init(cx);
-
-            // Initialize settings
-            settings::init(window, cx);
-
-            // Initialize the nostr client
-            state::init(window, cx, None);
-
-            // Initialize person registry
-            person::init(window, cx);
-
-            // Initialize device signer
-            //
-            // NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
-            device::init(window, cx);
-
-            // Initialize app registry
-            chat::init(window, cx);
-
-            // Initialize community registry
-            community::init(window, cx);
-
-            // Root view
             cx.new(|cx| Root::new(workspace::init(window, cx).into(), window, cx))
         })
         .expect("Failed to open window. Please restart the application.");

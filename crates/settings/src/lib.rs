@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use smallvec::{SmallVec, smallvec};
 use theme::{Theme, ThemeFamily, ThemeMode};
 
-pub fn init(window: &mut Window, cx: &mut App) {
-    AppSettings::set_global(cx.new(|cx| AppSettings::new(window, cx)), cx)
+pub fn init(cx: &mut App) {
+    AppSettings::set_global(cx.new(AppSettings::new), cx)
 }
 
 const DEFAULT_FILE_SERVER: &str = "https://nostr.download/";
@@ -195,7 +195,8 @@ impl AppSettings {
         cx.set_global(GlobalAppSettings(state));
     }
 
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let entity = cx.entity().downgrade();
         let inner = cx.new(|_| Settings::default());
         let mut subscriptions = smallvec![];
 
@@ -207,8 +208,8 @@ impl AppSettings {
         );
 
         // Run at the end of current cycle
-        cx.defer_in(window, |this, window, cx| {
-            this.load(window, cx);
+        cx.defer(move |cx| {
+            entity.update(cx, |this, cx| this.load(cx)).ok();
         });
 
         Self {
@@ -226,7 +227,7 @@ impl AppSettings {
     }
 
     /// Load settings
-    fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn load(&mut self, cx: &mut Context<Self>) {
         let task: Task<Result<Settings, Error>> = cx.background_spawn(async move {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -238,7 +239,7 @@ impl AppSettings {
             Err(anyhow!("Not found"))
         });
 
-        cx.spawn_in(window, async move |this, cx| {
+        cx.spawn(async move |this, cx| {
             let mut settings = task.await.unwrap_or(Settings::default());
 
             // Move settings still pointed at the old default file server over to the new one
@@ -247,9 +248,10 @@ impl AppSettings {
             }
 
             // Update settings
-            this.update_in(cx, |this, window, cx| {
+            this.update(cx, |this, cx| {
                 this.set_settings(settings, cx);
-                this.apply_theme(window, cx);
+                this.apply_theme(None, cx);
+                cx.refresh_windows();
             })
             .ok();
         })
@@ -281,7 +283,7 @@ impl AppSettings {
         });
 
         // Apply the new theme
-        self.apply_theme(window, cx);
+        self.apply_theme(Some(window), cx);
     }
 
     /// Reset theme
@@ -290,22 +292,22 @@ impl AppSettings {
             this.theme = None;
             cx.notify();
         });
-        self.apply_theme(window, cx);
+        self.apply_theme(Some(window), cx);
     }
 
     /// Apply theme
-    pub fn apply_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn apply_theme(&mut self, mut window: Option<&mut Window>, cx: &mut Context<Self>) {
         if let Some(name) = self.inner.read(cx).theme.as_ref() {
             let mode = self.inner.read(cx).theme_mode;
 
             if let Ok(new_theme) = ThemeFamily::from_assets(name) {
-                Theme::apply_theme(Rc::new(new_theme), Some(window), cx);
-                Theme::change(mode, Some(window), cx);
+                Theme::apply_theme(Rc::new(new_theme), window.as_deref_mut(), cx);
+                Theme::change(mode, window, cx);
             } else {
                 log::info!("Failed to load theme: {name}");
             }
         } else {
-            Theme::apply_theme(Rc::new(ThemeFamily::default()), Some(window), cx);
+            Theme::apply_theme(Rc::new(ThemeFamily::default()), window, cx);
         }
     }
 

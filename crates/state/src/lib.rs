@@ -4,7 +4,7 @@ use anyhow::{Error, anyhow};
 #[cfg(not(target_arch = "wasm32"))]
 use browser_signer_proxy::prelude::*;
 use common::config_dir;
-use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Task, Window};
+use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Task};
 use gpui_tokio::Tokio;
 use instant::Duration;
 use nostr_connect::prelude::*;
@@ -29,7 +29,7 @@ pub use nip4e::*;
 pub use nip05::*;
 pub use signer::{CoopAuthUrlHandler, UniversalSigner};
 
-pub fn init(window: &mut Window, cx: &mut App, cli_key: Option<SecretKey>) {
+pub fn init(cx: &mut App, cli_key: Option<SecretKey>) {
     // rustls uses the `aws_lc_rs` provider by default
     // This only errors if the default provider has already
     // been installed. We can ignore this `Result`.
@@ -42,7 +42,7 @@ pub fn init(window: &mut Window, cx: &mut App, cli_key: Option<SecretKey>) {
     #[cfg(not(target_arch = "wasm32"))]
     gpui_tokio::init(cx);
 
-    NostrRegistry::set_global(cx.new(|cx| NostrRegistry::new(window, cx, cli_key)), cx);
+    NostrRegistry::set_global(cx.new(|cx| NostrRegistry::new(cx, cli_key)), cx);
 }
 
 struct GlobalNostrRegistry(Entity<NostrRegistry>);
@@ -105,7 +105,8 @@ impl NostrRegistry {
     }
 
     /// Create a new nostr instance
-    fn new(window: &mut Window, cx: &mut Context<Self>, cli_key: Option<SecretKey>) -> Self {
+    fn new(cx: &mut Context<Self>, cli_key: Option<SecretKey>) -> Self {
+        let entity = cx.entity().downgrade();
         let signer = UniversalSigner::new(Keys::generate());
         let authenticator = SignerAuthenticator::new(signer.clone());
 
@@ -132,19 +133,23 @@ impl NostrRegistry {
             })
             .build();
 
-        // Connect to bootstrap relays after the window is ready
-        cx.defer_in(window, |this, _window, cx| {
-            this.connect_bootstrap_relays(cx);
+        // Connect to bootstrap relays once the registry has been returned to the app
+        cx.defer(move |cx| {
+            entity
+                .update(cx, |this, cx| {
+                    this.connect_bootstrap_relays(cx);
 
-            if cfg!(target_arch = "wasm32") {
-                cx.emit(StateEvent::NoSigner);
-            } else if let Some(secret) = cli_key {
-                // Use CLI-provided key -- same path as get_user_credential
-                let keys = Keys::new(secret);
-                this.set_signer(keys, cx);
-            } else {
-                this.get_user_credential(cx);
-            }
+                    if cfg!(target_arch = "wasm32") {
+                        cx.emit(StateEvent::NoSigner);
+                    } else if let Some(secret) = cli_key {
+                        // Use CLI-provided key -- same path as get_user_credential
+                        let keys = Keys::new(secret);
+                        this.set_signer(keys, cx);
+                    } else {
+                        this.get_user_credential(cx);
+                    }
+                })
+                .ok();
         });
 
         Self {
