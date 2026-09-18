@@ -2,28 +2,36 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use anyhow::Error;
+use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
 use common::{DebouncedDelay, TimestampExt};
 use entry::RoomEntry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
-    ParentElement, Render, SharedString, Styled, Subscription, Task, UniformListScrollHandle,
-    Window, div, retain_all, uniform_list,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task,
+    UniformListScrollHandle, Window, div, px, retain_all, uniform_list,
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use smallvec::{SmallVec, smallvec};
 use state::{FIND_DELAY, NostrRegistry};
-use theme::{ActiveTheme, SIDEBAR_WIDTH};
+use theme::{ActiveTheme, SIDEBAR_WIDTH, TABBAR_HEIGHT};
+use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
 use ui::indicator::Indicator;
 use ui::input::{Input, InputEvent, InputState};
+use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
-use ui::{Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::{
+    Icon, IconName, Selectable, Sizable, StyledExt, TRAFFIC_LIGHT_PADDING, WindowExtension, h_flex,
+    title_bar_drag_handlers, v_flex,
+};
+
+use crate::Command;
 
 mod entry;
 
@@ -485,6 +493,97 @@ impl Sidebar {
             })
             .collect()
     }
+
+    fn render_user(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let nostr = NostrRegistry::global(cx);
+        let current_user = nostr.read(cx).current_user();
+
+        title_bar_drag_handlers(
+            h_flex()
+                .id("sidebar-user")
+                .w_full()
+                .h(TABBAR_HEIGHT)
+                .flex_shrink_0()
+                .items_center()
+                .gap_2()
+                .px_2()
+                .when(cfg!(target_os = "macos"), |this| {
+                    this.pl(px(TRAFFIC_LIGHT_PADDING))
+                })
+                .when_none(&current_user, |this| {
+                    this.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().text_muted)
+                            .child(SharedString::from("Import your identity to continue")),
+                    )
+                })
+                .when_some(current_user.as_ref(), |this, public_key| {
+                    let persons = PersonRegistry::global(cx);
+                    let profile = persons.read(cx).get(public_key, cx);
+                    let avatar = profile.avatar();
+                    let name = profile.name();
+
+                    this.child(
+                        Button::new("current-user")
+                            .child(Avatar::new(avatar.clone()).xsmall())
+                            .small()
+                            .caret()
+                            .compact()
+                            .transparent()
+                            .dropdown_menu(move |this, _window, cx| {
+                                let avatar = avatar.clone();
+                                let name = name.clone();
+
+                                this.min_w(px(256.))
+                                    .item(PopupMenuItem::element(move |_window, cx| {
+                                        h_flex()
+                                            .gap_1p5()
+                                            .text_xs()
+                                            .text_color(cx.theme().text_muted)
+                                            .child(Avatar::new(avatar.clone()).xsmall())
+                                            .child(name.clone())
+                                    }))
+                                    .separator()
+                                    .menu_with_icon(
+                                        "Profile",
+                                        IconName::Profile,
+                                        Box::new(Command::ShowProfile),
+                                    )
+                                    .menu_with_icon(
+                                        "Contact List",
+                                        IconName::Book,
+                                        Box::new(Command::ShowContactList),
+                                    )
+                                    .menu_with_icon(
+                                        "Backup",
+                                        IconName::UserKey,
+                                        Box::new(Command::ShowBackup),
+                                    )
+                                    .menu_with_icon(
+                                        "Themes",
+                                        IconName::Sun,
+                                        Box::new(Command::ToggleTheme),
+                                    )
+                                    .when(AutoUpdater::is_available(cx), |this| {
+                                        this.separator().menu_with_icon(
+                                            "Check for Updates",
+                                            IconName::Device,
+                                            Box::new(Command::Update),
+                                        )
+                                    })
+                                    .menu_with_icon(
+                                        "Settings",
+                                        IconName::Settings,
+                                        Box::new(Command::ShowSettings),
+                                    )
+                            }),
+                    )
+                }),
+            window,
+            cx,
+        )
+    }
 }
 
 impl Panel for Sidebar {
@@ -502,7 +601,7 @@ impl Focusable for Sidebar {
 }
 
 impl Render for Sidebar {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let nostr = NostrRegistry::global(cx);
         let chat = ChatRegistry::global(cx);
         let logged_in = nostr.read(cx).current_user().is_some();
@@ -524,6 +623,7 @@ impl Render for Sidebar {
             .image_cache(retain_all("sidebar"))
             .size_full()
             .gap_2()
+            .child(self.render_user(window, cx))
             .child(
                 h_flex().px_2().py_1().child(
                     Input::new(&self.find_input)

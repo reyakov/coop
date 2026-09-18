@@ -24,6 +24,7 @@ use crate::menu::DropdownMenu as _;
 use crate::resizable::{resize_handle, resize_handle_appearance};
 use crate::tab::Tab;
 use crate::tab::tab_bar::TabBar;
+use crate::title_bar::{title_bar_drag_handlers, window_controls};
 use crate::{IconName, Selectable, Sizable, StyledExt, h_flex, v_flex};
 
 mod panel;
@@ -31,12 +32,34 @@ pub use panel::*;
 
 actions!(dock, [ToggleZoom, ClosePanel]);
 
+pub type TitleBarRenderer = fn(&mut Window, &mut App) -> AnyElement;
+
+#[derive(Default)]
+pub struct TitleBarChrome {
+    trailing: Cell<Option<TitleBarRenderer>>,
+}
+
+impl TitleBarChrome {
+    pub fn set_trailing(&self, renderer: TitleBarRenderer) {
+        self.trailing.set(Some(renderer));
+    }
+
+    fn trailing(&self, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
+        self.trailing.get().map(|render| render(window, cx))
+    }
+}
+
 pub fn dock_area(
     id: impl Into<SharedString>,
     window: &mut Window,
     cx: &mut App,
-) -> Entity<DockArea> {
-    let shared = Rc::new(SkinShared::default());
+) -> (Entity<DockArea>, Rc<TitleBarChrome>) {
+    let chrome = Rc::new(TitleBarChrome::default());
+    let shared = Rc::new(SkinShared {
+        area: RefCell::new(None),
+        resizing: Cell::new(None),
+        chrome: chrome.clone(),
+    });
     let area = cx.new(|cx| {
         DockArea::new(id, None, window, cx).with_renderer(Rc::new(DockSkin {
             shared: shared.clone(),
@@ -44,7 +67,7 @@ pub fn dock_area(
     });
 
     *shared.area.borrow_mut() = Some(area.downgrade());
-    area
+    (area, chrome)
 }
 
 pub fn add_panel(
@@ -167,6 +190,7 @@ fn right_top_group(node: &PaneNode) -> Option<NodeId> {
 struct SkinShared {
     area: RefCell<Option<WeakEntity<DockArea>>>,
     resizing: Cell<Option<DockPlacement>>,
+    chrome: Rc<TitleBarChrome>,
 }
 
 impl SkinShared {
@@ -394,6 +418,17 @@ impl TabGroupSkin {
         }
     }
 
+    fn is_title_bar_group(&self, group: &TabGroupContext, cx: &App) -> bool {
+        let Some(area) = self.shared.area() else {
+            return false;
+        };
+
+        area.read(cx)
+            .layout(DockPlacement::Center)
+            .and_then(|tree| left_top_group(tree.root()))
+            == Some(group.node())
+    }
+
     fn render_toolbar(
         &self,
         group: &TabGroupContext,
@@ -473,16 +508,17 @@ impl TabGroupSkin {
         let right_button = self.dock_toggle_button(DockPlacement::Right, group, cx);
         let has_leading = left_button.is_some() || bottom_button.is_some();
         let drag = tab_drag(group, ix, cx);
+        let is_title_bar = self.is_title_bar_group(group, cx);
+        let trailing_chrome = is_title_bar
+            .then(|| self.shared.chrome.trailing(window, cx))
+            .flatten();
 
-        h_flex()
+        let bar = h_flex()
+            .id("tab-title-bar")
             .justify_between()
             .items_center()
             .line_height(rems(1.0))
             .h(TABBAR_HEIGHT)
-            .py_2()
-            .pl_3()
-            .pr_2()
-            .rounded_t(cx.theme().radius_lg)
             .bg(cx.theme().panel_background)
             .when(left_button.is_some(), |this| this.pl_2())
             .when(right_button.is_some(), |this| this.pr_2())
@@ -499,9 +535,9 @@ impl TabGroupSkin {
             .child(
                 div()
                     .id("tab")
-                    .flex_1()
+                    .flex_initial()
+                    .min_w_0()
                     .px_2()
-                    .min_w_16()
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .child(
@@ -524,6 +560,14 @@ impl TabGroupSkin {
                         })
                     }),
             )
+            .child({
+                let space = div().id("tab-title-space").flex_1().h_full();
+                if is_title_bar {
+                    title_bar_drag_handlers(space, window, cx).into_any_element()
+                } else {
+                    space.into_any_element()
+                }
+            })
             .child(
                 h_flex()
                     .flex_shrink_0()
@@ -532,7 +576,18 @@ impl TabGroupSkin {
                     .child(self.render_toolbar(group, window, cx))
                     .children(right_button),
             )
-            .into_any_element()
+            .when_some(trailing_chrome, |this, chrome| this.child(chrome));
+
+        if is_title_bar {
+            h_flex()
+                .h(TABBAR_HEIGHT)
+                .bg(cx.theme().panel_background)
+                .child(bar.flex_1())
+                .child(window_controls())
+                .into_any_element()
+        } else {
+            bar.into_any_element()
+        }
     }
 
     fn render_tabs(
@@ -556,13 +611,36 @@ impl TabGroupSkin {
                 .iter()
                 .position(|panel| panel.panel_id(cx) == displayed)
         });
+        let is_title_bar = self.is_title_bar_group(group, cx);
+        let trailing_chrome = is_title_bar
+            .then(|| self.shared.chrome.trailing(window, cx))
+            .flatten();
+        let empty_space = div()
+            .id("tab-bar-empty-space")
+            .h_full()
+            .flex_grow_1()
+            .min_w_16()
+            .when(droppable, |this| {
+                this.drag_over::<DragPanel>(|this, _, _, cx| this.bg(cx.theme().surface_background))
+                    .on_drop({
+                        let group = TabGroupContext::clone(group);
+                        move |drag: &DragPanel, window, cx| {
+                            let ix = (drag.source() == group.node()).then(|| tabs_count - 1);
+                            group.drop_panel(drag.clone(), ix, false, window, cx);
+                        }
+                    })
+            });
+        let empty_space = if is_title_bar {
+            title_bar_drag_handlers(empty_space, window, cx).into_any_element()
+        } else {
+            empty_space.into_any_element()
+        };
 
-        TabBar::new("tab-bar")
+        let bar = TabBar::new("tab-bar")
             .track_scroll(&self.scroll_handle)
             .h(TABBAR_HEIGHT)
             .bg(cx.theme().panel_background)
-            .rounded_t(cx.theme().radius_lg)
-            .when(has_leading, |this| {
+            .when(is_title_bar || has_leading, |this| {
                 this.prefix(
                     h_flex()
                         .items_center()
@@ -639,26 +717,7 @@ impl TabGroupSkin {
                         })
                     })
             }))
-            .last_empty_space(
-                // Empty space so a panel can be moved past the last tab.
-                div()
-                    .id("tab-bar-empty-space")
-                    .h_full()
-                    .flex_grow_1()
-                    .min_w_16()
-                    .when(droppable, |this| {
-                        this.drag_over::<DragPanel>(|this, _, _, cx| {
-                            this.bg(cx.theme().surface_background)
-                        })
-                        .on_drop({
-                            let group = TabGroupContext::clone(group);
-                            move |drag: &DragPanel, window, cx| {
-                                let ix = (drag.source() == group.node()).then(|| tabs_count - 1);
-                                group.drop_panel(drag.clone(), ix, false, window, cx);
-                            }
-                        })
-                    }),
-            )
+            .last_empty_space(empty_space)
             .when(!collapsed, |this| {
                 this.suffix(
                     h_flex()
@@ -669,10 +728,22 @@ impl TabGroupSkin {
                         .px_0p5()
                         .gap_1()
                         .child(self.render_toolbar(group, window, cx))
-                        .children(right_button),
+                        .children(right_button)
+                        .children(trailing_chrome),
                 )
-            })
-            .into_any_element()
+            });
+
+        if is_title_bar {
+            h_flex()
+                .h(TABBAR_HEIGHT)
+                .w_full()
+                .bg(cx.theme().panel_background)
+                .child(bar.flex_1())
+                .child(window_controls())
+                .into_any_element()
+        } else {
+            bar.into_any_element()
+        }
     }
 
     fn dock_toggle_button(
@@ -738,28 +809,23 @@ impl TabGroupSkin {
 }
 
 impl TabGroupRenderer for TabGroupSkin {
-    fn frame(&self, group: &TabGroupContext, _: &mut Window, cx: &mut App) -> Stateful<Div> {
-        div()
-            .id("tab-panel")
-            .p_1()
-            .rounded(cx.theme().radius_lg)
-            .when(cx.theme().shadow, |this| this.shadow_xs())
-            .when(!group.is_collapsed(), |this| {
-                this.on_action({
-                    let group = TabGroupContext::clone(group);
-                    move |_: &ToggleZoom, window, cx| group.toggle_zoom(window, cx)
-                })
-                .on_action({
-                    let group = TabGroupContext::clone(group);
-                    move |_: &ClosePanel, window, cx| {
-                        let Some(panel) = group.active_panel() else {
-                            return;
-                        };
-                        let panel = panel.panel_id(cx);
-                        group.close(panel, window, cx);
-                    }
-                })
+    fn frame(&self, group: &TabGroupContext, _: &mut Window, _cx: &mut App) -> Stateful<Div> {
+        div().id("tab-panel").when(!group.is_collapsed(), |this| {
+            this.on_action({
+                let group = TabGroupContext::clone(group);
+                move |_: &ToggleZoom, window, cx| group.toggle_zoom(window, cx)
             })
+            .on_action({
+                let group = TabGroupContext::clone(group);
+                move |_: &ClosePanel, window, cx| {
+                    let Some(panel) = group.active_panel() else {
+                        return;
+                    };
+                    let panel = panel.panel_id(cx);
+                    group.close(panel, window, cx);
+                }
+            })
+        })
     }
 
     fn render_tab_bar(
@@ -811,7 +877,6 @@ impl TabGroupRenderer for TabGroupSkin {
             .child(
                 div()
                     .size_full()
-                    .rounded_b(cx.theme().radius_lg)
                     .bg(cx.theme().panel_background)
                     .overflow_hidden()
                     .child(panel.cached(StyleRefinement::default().v_flex().size_full())),

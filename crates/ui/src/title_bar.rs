@@ -2,9 +2,10 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, Decorations, Hsla, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Pixels, Render, RenderOnce, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, TitlebarOptions, Window, WindowControlArea, div, px,
+    AnyElement, App, ClickEvent, Context, Decorations, Div, Hsla, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, Pixels, Render, RenderOnce, Stateful,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, TitlebarOptions, Window,
+    WindowControlArea, div, px,
 };
 use smallvec::SmallVec;
 use theme::ActiveTheme;
@@ -210,8 +211,59 @@ impl RenderOnce for ControlIcon {
 
 #[derive(IntoElement)]
 #[allow(clippy::type_complexity)]
-struct WindowControls {
+pub(crate) struct WindowControls {
     on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
+}
+
+pub(crate) fn window_controls() -> WindowControls {
+    WindowControls {
+        on_close_window: None,
+    }
+}
+
+pub fn title_bar_drag_handlers(
+    this: Stateful<Div>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Stateful<Div> {
+    let state = window.use_state(cx, |_, _| TitleBarState { should_move: false });
+
+    let this = if cfg!(target_family = "wasm") {
+        this
+    } else {
+        this.window_control_area(WindowControlArea::Drag)
+    };
+
+    this.on_mouse_down_out(window.listener_for(&state, |state, _, _, _| {
+        state.should_move = false;
+    }))
+    .on_mouse_down(
+        MouseButton::Left,
+        window.listener_for(&state, |state, _, _, _| {
+            state.should_move = true;
+        }),
+    )
+    .on_mouse_up(
+        MouseButton::Left,
+        window.listener_for(&state, |state, _, _, _| {
+            state.should_move = false;
+        }),
+    )
+    .on_mouse_move(window.listener_for(&state, |state, _, window, _| {
+        if state.should_move {
+            state.should_move = false;
+            window.start_window_move();
+        }
+    }))
+    .on_click(|event, window, _| {
+        if event.click_count() == 2 {
+            if cfg!(target_os = "macos") {
+                window.titlebar_double_click();
+            } else {
+                window.zoom_window();
+            }
+        }
+    })
 }
 
 impl RenderOnce for WindowControls {

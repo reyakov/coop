@@ -9,6 +9,7 @@ use gpui::{
 use gpui_platform::application;
 use nostr_sdk::prelude::SecretKey;
 use state::{APP_ID, CLIENT_NAME};
+use theme::TABBAR_HEIGHT;
 use ui::Root;
 
 actions!(coop, [Quit]);
@@ -66,9 +67,13 @@ fn main() {
                 app_id: Some(APP_ID.to_owned()),
                 titlebar: Some(TitlebarOptions {
                     title: Some(SharedString::new_static(CLIENT_NAME)),
-                    traffic_light_position: Some(point(px(9.0), px(9.0))),
+                    traffic_light_position: Some(point(
+                        px(9.0),
+                        px(TABBAR_HEIGHT / px(2.) - 14. / 2.),
+                    )),
                     appears_transparent: true,
                 }),
+                app_owns_titlebar_drag: true,
                 ..Default::default()
             };
 

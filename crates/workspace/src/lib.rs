@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use ::settings::AppSettings;
@@ -8,8 +9,8 @@ use common::download_dir;
 use device::{DeviceEvent, DeviceRegistry};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, Styled, Subscription, Task, Window, div, px,
+    Action, AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, px,
 };
 use nostr_sdk::prelude::*;
 use person::{PersonRegistry, shorten_pubkey};
@@ -17,12 +18,11 @@ use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, StateEvent};
 use theme::{ActiveTheme, SIDEBAR_WIDTH, Theme, ThemeRegistry};
-use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{self, ClosePanel, DockArea, DockLayout, DockPlacement, Panel, PanelHandle};
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::{Notification, NotificationKind};
-use ui::{Icon, IconName, Root, Sizable, TitleBar, WindowExtension, h_flex, v_flex};
+use ui::{Icon, IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
 
 use crate::dialogs::import::ImportIdentity;
 use crate::dialogs::restore::RestoreEncryption;
@@ -63,6 +63,7 @@ pub struct Workspace {
     sidebar: Entity<Sidebar>,
     /// App's Dock Area
     dock: Entity<DockArea>,
+    title_bar_chrome: Rc<dock::TitleBarChrome>,
 
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
@@ -78,7 +79,7 @@ impl Workspace {
         let nostr = NostrRegistry::global(cx);
 
         let sidebar = cx.new(|cx| Sidebar::new(window, cx));
-        let dock = dock::dock_area("coop", window, cx);
+        let (dock, title_bar_chrome) = dock::dock_area("coop", window, cx);
 
         let mut subscriptions = smallvec![];
 
@@ -225,6 +226,7 @@ impl Workspace {
         Self {
             sidebar,
             dock,
+            title_bar_chrome,
             tasks: vec![],
             _subscriptions: subscriptions,
         }
@@ -518,95 +520,14 @@ impl Workspace {
         });
     }
 
-    fn titlebar_left(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let nostr = NostrRegistry::global(cx);
-        let current_user = nostr.read(cx).current_user();
-
-        h_flex()
-            .flex_shrink_0()
-            .gap_2()
-            .when_none(&current_user, |this| {
-                this.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().text_muted)
-                        .child(SharedString::from("Import your identity to continue")),
-                )
-            })
-            .when_some(current_user.as_ref(), |this, public_key| {
-                let persons = PersonRegistry::global(cx);
-                let profile = persons.read(cx).get(public_key, cx);
-                let avatar = profile.avatar();
-                let name = profile.name();
-
-                this.child(
-                    Button::new("current-user")
-                        .child(Avatar::new(avatar.clone()).xsmall())
-                        .small()
-                        .caret()
-                        .compact()
-                        .transparent()
-                        .dropdown_menu(move |this, _window, cx| {
-                            let avatar = avatar.clone();
-                            let name = name.clone();
-
-                            this.min_w(px(256.))
-                                .item(PopupMenuItem::element(move |_window, cx| {
-                                    h_flex()
-                                        .gap_1p5()
-                                        .text_xs()
-                                        .text_color(cx.theme().text_muted)
-                                        .child(Avatar::new(avatar.clone()).xsmall())
-                                        .child(name.clone())
-                                }))
-                                .separator()
-                                .menu_with_icon(
-                                    "Profile",
-                                    IconName::Profile,
-                                    Box::new(Command::ShowProfile),
-                                )
-                                .menu_with_icon(
-                                    "Contact List",
-                                    IconName::Book,
-                                    Box::new(Command::ShowContactList),
-                                )
-                                .menu_with_icon(
-                                    "Backup",
-                                    IconName::UserKey,
-                                    Box::new(Command::ShowBackup),
-                                )
-                                .menu_with_icon(
-                                    "Themes",
-                                    IconName::Sun,
-                                    Box::new(Command::ToggleTheme),
-                                )
-                                // Only offer in-app updates when auto-update is
-                                // enabled (managed channels update themselves).
-                                .when(AutoUpdater::is_available(cx), |this| {
-                                    this.separator().menu_with_icon(
-                                        "Check for Updates",
-                                        IconName::Device,
-                                        Box::new(Command::Update),
-                                    )
-                                })
-                                .menu_with_icon(
-                                    "Settings",
-                                    IconName::Settings,
-                                    Box::new(Command::ShowSettings),
-                                )
-                        }),
-                )
-            })
-    }
-
-    fn titlebar_right(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn titlebar_right(_window: &mut Window, cx: &mut App) -> AnyElement {
         let auto_updater = AutoUpdater::try_global(cx);
         let chat = ChatRegistry::global(cx);
         let nip4e_enabled = AppSettings::get_nip4e(cx);
         let nostr = NostrRegistry::global(cx);
 
         let Some(public_key) = nostr.read(cx).current_user() else {
-            return div();
+            return div().into_any_element();
         };
 
         let persons = PersonRegistry::global(cx);
@@ -635,11 +556,11 @@ impl Workspace {
                         .tooltip("Quit and relaunch into the installed update")
                         .small()
                         .ghost()
-                        .on_click(cx.listener(|_this, _event, _window, cx| {
+                        .on_click(|_event, _window, cx| {
                             if let Some(auto_updater) = AutoUpdater::try_global(cx) {
                                 auto_updater.update(cx, |this, cx| this.restart(cx));
                             }
-                        })),
+                        }),
                 )
             })
             .when(nip4e_enabled, |this| {
@@ -764,6 +685,7 @@ impl Workspace {
                             )
                     }),
             )
+            .into_any_element()
     }
 }
 
@@ -772,33 +694,24 @@ impl Render for Workspace {
         let modal_layer = Root::render_modal_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
 
+        self.title_bar_chrome.set_trailing(Self::titlebar_right);
+
         div()
             .id("workspace")
             .on_action(cx.listener(Self::on_command))
             .relative()
             .size_full()
             .child(
-                v_flex()
+                h_flex()
                     .size_full()
-                    // Title Bar
                     .child(
-                        TitleBar::new()
-                            .child(self.titlebar_left(cx))
-                            .child(self.titlebar_right(cx)),
+                        div()
+                            .flex_shrink_0()
+                            .h_full()
+                            .w(SIDEBAR_WIDTH)
+                            .child(self.sidebar.clone()),
                     )
-                    // Main
-                    .child(
-                        h_flex()
-                            .size_full()
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .h_full()
-                                    .w(SIDEBAR_WIDTH)
-                                    .child(self.sidebar.clone()),
-                            )
-                            .child(self.dock.clone()),
-                    ),
+                    .child(self.dock.clone()),
             )
             // Notifications
             .children(notification_layer)
