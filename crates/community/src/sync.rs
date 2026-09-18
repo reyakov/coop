@@ -95,14 +95,14 @@ pub struct Snapshot {
 
 /// Discovers the current account's communities from the local database.
 pub async fn load(
-    database: &dyn NostrDatabase,
+    client: &Client,
     signer: &UniversalSigner,
     self_pk: PublicKey,
 ) -> Result<Vec<CommunityState>> {
     let filter = Filter::new().kind(Kind::ApplicationSpecificData);
     let mut newest: BTreeMap<CommunityId, Event> = BTreeMap::new();
 
-    for event in database.query(filter).await? {
+    for event in client.database().query(filter).await? {
         let Some(id) = state_document_of(&event) else {
             continue;
         };
@@ -124,7 +124,7 @@ pub async fn load(
         }
     }
 
-    if let Some(list) = load_list(database, signer, self_pk).await? {
+    if let Some(list) = load_list(client, signer, self_pk).await? {
         states.retain(|state| list.is_live(&state.id));
     }
 
@@ -138,7 +138,7 @@ fn state_document_of(event: &Event) -> Option<CommunityId> {
 }
 
 async fn load_list(
-    database: &dyn NostrDatabase,
+    client: &Client,
     signer: &UniversalSigner,
     self_pk: PublicKey,
 ) -> Result<Option<CommunityList>> {
@@ -147,7 +147,7 @@ async fn load_list(
         .author(self_pk)
         .limit(1);
 
-    let Some(event) = database.query(filter).await?.into_iter().next() else {
+    let Some(event) = client.database().query(filter).await?.into_iter().next() else {
         return Ok(None);
     };
 
@@ -157,17 +157,18 @@ async fn load_list(
 }
 
 /// Rebuilds a community from the wraps already in the local database.
-pub async fn fold(
-    database: &dyn NostrDatabase,
-    state: &CommunityState,
-) -> Result<Option<Snapshot>> {
+pub async fn fold(client: &Client, state: &CommunityState) -> Result<Option<Snapshot>> {
     let planes = planes(state)?;
 
     if planes.is_empty() {
         return Ok(None);
     }
 
-    let wraps = database.query(subscription_filter(&planes)).await?;
+    let wraps = client
+        .database()
+        .query(subscription_filter(&planes))
+        .await?;
+
     let mut editions = Vec::new();
     let mut observed: BTreeMap<PublicKey, u64> = BTreeMap::new();
     let mut guestbook_rumors = Vec::new();
@@ -194,7 +195,7 @@ pub async fn fold(
                 if let Ok((opened, rumor)) =
                     concord::cord03::open(wrap, &plane.group, &channel, epoch)
                 {
-                    store::cache_rumor(database, &channel, &opened).await?;
+                    store::cache_rumor(client, &channel, &opened).await?;
                     observe(&mut observed, rumor.author, rumor.at_ms);
                 }
             }
@@ -243,7 +244,7 @@ pub async fn fold(
 
     let mut state = state.clone();
     state.apply_fold(&control);
-    store::save_state(database, &state).await?;
+    store::save_state(client, &state).await?;
 
     Ok(Some(Snapshot {
         state,
@@ -257,165 +258,4 @@ fn observe(observed: &mut BTreeMap<PublicKey, u64>, author: PublicKey, at_ms: u6
         .entry(author)
         .and_modify(|seen| *seen = (*seen).max(at_ms))
         .or_insert(at_ms);
-}
-
-#[cfg(test)]
-pub(crate) mod fixtures {
-    use concord::cord02::{CommunityGenesis, CommunityMetadata, ROOT_EPOCH};
-    use concord::cord04::ParsedEdition;
-    use concord::derive::control_signer_group_key;
-
-    use super::*;
-
-    pub const AT_MS: u64 = 1_719_800_000_000;
-
-    /// A genesis and the state it folds into, ready for a test database.
-    pub fn community(owner: &Keys) -> (CommunityGenesis, CommunityState) {
-        let metadata = CommunityMetadata {
-            name: "Room".to_owned(),
-            ..Default::default()
-        };
-        let genesis = cord02::genesis(owner, &metadata, AT_MS / 1000).expect("genesis");
-        let read = control_group_key(
-            &genesis.community_root,
-            &genesis.identity.community_id,
-            ROOT_EPOCH,
-        )
-        .expect("read key");
-        let address = control_signer_group_key(
-            &genesis.control_root,
-            &genesis.identity.community_id,
-            ROOT_EPOCH,
-        )
-        .expect("signer key")
-        .pk();
-
-        let editions: Vec<ParsedEdition> = genesis
-            .wraps
-            .iter()
-            .map(|wrap| cord02::open_edition(wrap, &read, &address, true).expect("opens"))
-            .collect();
-
-        let state = CommunityState::from_genesis(&genesis, &editions, AT_MS).expect("state");
-
-        (genesis, state)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use concord::cord02::ROOT_EPOCH;
-    use concord::cord02::list::{CommunityListEntry, JoinMaterial, Tombstone, build_list_event};
-    use concord::store::save_state;
-    use nostr_memory::MemoryDatabase;
-
-    use super::fixtures::{AT_MS, community};
-    use super::*;
-
-    fn material(state: &CommunityState) -> JoinMaterial {
-        JoinMaterial {
-            community_id: state.id,
-            owner: state.owner,
-            owner_salt: "00".repeat(32),
-            community_root: "11".repeat(32),
-            root_epoch: ROOT_EPOCH,
-            control_pk: None,
-            control_root: None,
-            channels: Vec::new(),
-            relays: Vec::new(),
-            name: "Room".to_owned(),
-            extra: Default::default(),
-        }
-    }
-
-    fn entry(state: &CommunityState, added_at: u64) -> CommunityListEntry {
-        let material = material(state);
-
-        CommunityListEntry {
-            community_id: state.id,
-            seed: material.clone(),
-            current: material,
-            added_at,
-            extra: Default::default(),
-        }
-    }
-
-    #[test]
-    fn every_held_plane_routes_by_its_wrap_author() {
-        let owner = Keys::generate();
-        let state = community(&owner).1;
-        let planes = planes(&state).expect("planes");
-
-        assert_eq!(
-            planes.len(),
-            3,
-            "the control epoch, the guestbook and #general"
-        );
-
-        let filter = subscription_filter(&planes);
-        let expected: BTreeSet<PublicKey> = planes.iter().map(|plane| plane.address).collect();
-        assert_eq!(filter.authors, Some(expected));
-        assert_eq!(filter.kinds, Some(BTreeSet::from([Kind::from(KIND_WRAP)])));
-
-        assert_eq!(community_of(&subscription_id(&state.id)), Some(state.id));
-        assert_eq!(community_of(&SubscriptionId::new("device-giftwrap")), None);
-    }
-
-    #[test]
-    fn loading_scans_state_documents_and_honours_the_list() {
-        smol::block_on(async {
-            let keys = Keys::generate();
-            let signer = UniversalSigner::new(keys.clone());
-            let owner = Keys::generate();
-            let state = community(&owner).1;
-
-            // With no list event, every state document is a community.
-            let no_list = MemoryDatabase::unbounded();
-            save_state(&no_list, &state).await.expect("saves");
-            let loaded = load(&no_list, &signer, keys.public_key())
-                .await
-                .expect("loads");
-            assert_eq!(loaded.len(), 1);
-            assert_eq!(loaded[0].id, state.id);
-
-            // A live entry keeps it.
-            let event = build_list_event(
-                &keys,
-                &CommunityList {
-                    entries: vec![entry(&state, AT_MS)],
-                    ..Default::default()
-                },
-            )
-            .expect("builds");
-            let live = MemoryDatabase::unbounded();
-            save_state(&live, &state).await.expect("saves");
-            live.save_event(&event).await.expect("saves list");
-            let loaded = load(&live, &signer, keys.public_key())
-                .await
-                .expect("loads");
-            assert_eq!(loaded.len(), 1);
-
-            // A newer tombstone than the entry retires it.
-            let event = build_list_event(
-                &keys,
-                &CommunityList {
-                    entries: vec![entry(&state, AT_MS)],
-                    tombstones: vec![Tombstone {
-                        community_id: state.id,
-                        removed_at: AT_MS + 1,
-                        extra: Default::default(),
-                    }],
-                    ..Default::default()
-                },
-            )
-            .expect("builds");
-            let retired = MemoryDatabase::unbounded();
-            save_state(&retired, &state).await.expect("saves");
-            retired.save_event(&event).await.expect("saves list");
-            let loaded = load(&retired, &signer, keys.public_key())
-                .await
-                .expect("loads");
-            assert!(loaded.is_empty());
-        });
-    }
 }

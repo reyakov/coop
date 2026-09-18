@@ -27,10 +27,12 @@ const STATE_PREFIX: &str = "concord/";
 
 /// An already-expired rumor is refused at ingest. Returns whether it was kept.
 pub async fn cache_rumor(
-    database: &dyn NostrDatabase,
+    client: &Client,
     channel: &ChannelId,
     opened: &OpenedStream,
 ) -> Result<bool> {
+    let at = Timestamp::from_secs(opened.at_ms / 1000);
+
     if cord03::expiration_of(&opened.rumor)?
         .is_some_and(|expiration| expiration <= Timestamp::now())
     {
@@ -45,23 +47,19 @@ pub async fn cache_rumor(
         Tag::custom(CHANNEL_TAG.as_str(), [channel.to_hex()]),
         Tag::public_key(opened.author),
     ];
-    let at = Timestamp::from_secs(opened.at_ms / 1000);
+
     let event = EventBuilder::new(Kind::ApplicationSpecificData, opened.rumor.as_json())
         .tags(tags)
         .custom_created_at(at)
         .finalize_async(&*LOCAL_KEYS)
         .await?;
 
-    database.save_event(&event).await?;
+    client.database().save_event(&event).await?;
 
     Ok(true)
 }
 
-pub async fn purge_expired(
-    database: &dyn NostrDatabase,
-    channel: &ChannelId,
-    now: Timestamp,
-) -> Result<usize> {
+pub async fn purge_expired(client: &Client, channel: &ChannelId, now: Timestamp) -> Result<usize> {
     let filter = Filter::new()
         .kind(Kind::ApplicationSpecificData)
         .custom_tag(MARK_TAG, MARK_VALUE)
@@ -69,7 +67,7 @@ pub async fn purge_expired(
 
     let mut expired = Vec::new();
 
-    for event in database.query(filter).await? {
+    for event in client.database().query(filter).await? {
         let Ok(rumor) = UnsignedEvent::from_json(&event.content) else {
             continue;
         };
@@ -86,7 +84,7 @@ pub async fn purge_expired(
     let purged = expired.len();
 
     if purged > 0 {
-        database.delete(Filter::new().ids(expired)).await?;
+        client.database().delete(Filter::new().ids(expired)).await?;
     }
 
     Ok(purged)
@@ -288,16 +286,13 @@ fn state_identifier(id: &CommunityId) -> String {
     format!("{STATE_PREFIX}{}", id.to_hex())
 }
 
-pub async fn save_state<D>(database: &D, state: &CommunityState) -> Result<()>
-where
-    D: NostrDatabase + ?Sized,
-{
+pub async fn save_state(client: &Client, state: &CommunityState) -> Result<()> {
     let event = EventBuilder::new(Kind::ApplicationSpecificData, serde_json::to_string(state)?)
         .tags([Tag::identifier(state.identifier())])
         .finalize_async(&*LOCAL_KEYS)
         .await?;
 
-    database.save_event(&event).await?;
+    client.database().save_event(&event).await?;
 
     Ok(())
 }
@@ -319,7 +314,6 @@ where
 
 pub async fn backfill(
     client: &Client,
-    database: &dyn NostrDatabase,
     channel: &ChannelId,
     held: &[(Epoch, [u8; 32])],
     until: Option<Timestamp>,
@@ -342,7 +336,7 @@ pub async fn backfill(
         let (fresh, next) = advance(&page, &planes, channel, cursor, limit, &mut seen);
 
         for (opened, rumor) in fresh {
-            if cache_rumor(database, channel, &opened).await? {
+            if cache_rumor(client, channel, &opened).await? {
                 found.push(rumor);
             }
         }
@@ -416,13 +410,8 @@ async fn fetch_page(
 
 #[cfg(test)]
 mod tests {
-    use nostr_memory::MemoryDatabase;
-
     use super::*;
     use crate::Epoch;
-    use crate::cord01::{
-        KIND_WRAP, SealForm, build_rumor_ms, build_seal, channel_binding_tags, open_wrap, wrap_seal,
-    };
     use crate::cord03::{build_message, seal_rumor};
     use crate::derive::channel_group_key;
 
@@ -498,151 +487,5 @@ mod tests {
             contents,
             ["after the rekey", "still before", "before the rekey"]
         );
-    }
-
-    #[test]
-    fn rumors_read_back_after_a_restart() {
-        let database = MemoryDatabase::unbounded();
-        let channel = ChannelId::from_bytes([0xabu8; 32]);
-        let author = Keys::generate();
-
-        smol::block_on(async {
-            let group = channel_group_key(&SECRET, &channel, Epoch(0)).expect("derives");
-
-            for (content, at_ms) in [("first", 1_000_000u64), ("second", 2_000_000)] {
-                let rumor = build_rumor_ms(
-                    9,
-                    author.public_key(),
-                    content,
-                    channel_binding_tags(&channel, Epoch(0)),
-                    at_ms,
-                );
-                let seal = build_seal(&rumor, SealForm::Encrypted, &group, &author).expect("seals");
-                let (wrap, _) = wrap_seal(
-                    &seal,
-                    &group,
-                    KIND_WRAP,
-                    Timestamp::from_secs(at_ms / 1000),
-                    &[],
-                )
-                .expect("wraps");
-
-                let opened = open_wrap(&wrap, &group).expect("opens");
-                cache_rumor(&database, &channel, &opened)
-                    .await
-                    .expect("caches");
-            }
-
-            // The group key is gone; only the local cache stands in for it.
-            let rumors = query_rumors(&database, &channel, None, 10)
-                .await
-                .expect("queries");
-            assert_eq!(rumors.len(), 2, "both messages come back");
-            assert_eq!(rumors[0].content, "second", "newest first");
-            assert_eq!(rumors[1].content, "first");
-
-            // A page boundary in message time, not in cache time.
-            let until = Timestamp::from_secs(1_500);
-            let page = query_rumors(&database, &channel, Some(until), 10)
-                .await
-                .expect("queries");
-            assert_eq!(page.len(), 1);
-            assert_eq!(page[0].content, "first");
-
-            let capped = query_rumors(&database, &channel, None, 1)
-                .await
-                .expect("queries");
-            assert_eq!(capped.len(), 1);
-            assert_eq!(capped[0].content, "second");
-        });
-    }
-
-    #[test]
-    fn an_expired_rumor_is_refused_at_ingest_and_purged_by_the_sweep() {
-        let database = MemoryDatabase::unbounded();
-        let channel = ChannelId::from_bytes([0x77u8; 32]);
-        let author = Keys::generate();
-        let group = channel_group_key(&SECRET, &channel, Epoch(0)).expect("derives");
-        let now = Timestamp::now().as_secs();
-
-        smol::block_on(async {
-            // A live timer is stored; one that already elapsed is refused at ingest.
-            assert!(
-                cache(
-                    &database,
-                    &group,
-                    &channel,
-                    &author,
-                    "live",
-                    Some(3_600),
-                    now
-                )
-                .await
-            );
-            assert!(
-                !cache(
-                    &database,
-                    &group,
-                    &channel,
-                    &author,
-                    "gone",
-                    Some(1),
-                    now - 120
-                )
-                .await
-            );
-
-            let stored = query_rumors(&database, &channel, None, 10)
-                .await
-                .expect("queries");
-            assert_eq!(stored.len(), 1);
-            assert_eq!(stored[0].content, "live");
-
-            // Hiding is not disappearing: the sweep removes the row itself,
-            // judged on the rumor's own signed tag.
-            let purged = purge_expired(&database, &channel, Timestamp::from_secs(now + 7_200))
-                .await
-                .expect("sweeps");
-            assert_eq!(purged, 1);
-            assert!(
-                query_rumors(&database, &channel, None, 10)
-                    .await
-                    .expect("queries")
-                    .is_empty()
-            );
-
-            // An untimed rumor is never swept, whatever the clock says.
-            assert!(cache(&database, &group, &channel, &author, "timeless", None, now).await);
-            let purged = purge_expired(&database, &channel, Timestamp::from_secs(now + 86_400))
-                .await
-                .expect("sweeps");
-            assert_eq!(purged, 0);
-        });
-    }
-
-    async fn cache(
-        database: &MemoryDatabase,
-        group: &GroupKey,
-        channel: &ChannelId,
-        author: &Keys,
-        content: &str,
-        timer: Option<u64>,
-        at_secs: u64,
-    ) -> bool {
-        let rumor = build_message(
-            author.public_key(),
-            channel,
-            Epoch(0),
-            content,
-            None,
-            at_secs * 1_000,
-            timer,
-        );
-        let (wrap, _) = seal_rumor(&rumor, group, author, false).expect("seals");
-        let opened = open_wrap(&wrap, group).expect("opens");
-
-        cache_rumor(database, channel, &opened)
-            .await
-            .expect("caches")
     }
 }

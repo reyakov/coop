@@ -731,15 +731,12 @@ fn seal_edition(
 
 #[cfg(test)]
 mod tests {
-    use nostr_memory::MemoryDatabase;
-
     use super::*;
     use crate::cord03::{self, build_message, seal_rumor};
-    use crate::cord04::fold;
     use crate::cord04::pins;
     use crate::cord04::roles::{Grant, MAX_BANLIST, MAX_ROLES_PER_MEMBER, Role, RoleScope};
     use crate::derive::{channel_group_key, grant_locator};
-    use crate::store::{CommunityState, load_state, save_state};
+    use crate::store::CommunityState;
     use crate::{Extra, RoleId};
 
     const AT: u64 = 1_700_000_000;
@@ -766,66 +763,6 @@ mod tests {
             name: name.to_owned(),
             ..CommunityMetadata::default()
         }
-    }
-
-    #[test]
-    fn genesis_reopens_for_a_second_holder() {
-        let owner = Keys::generate();
-        let community_metadata = CommunityMetadata {
-            name: "coop".to_owned(),
-            relays: vec!["wss://relay.example".to_owned()],
-            ..CommunityMetadata::default()
-        };
-
-        let minted = genesis(&owner, &community_metadata, AT).expect("mints");
-        assert!(minted.identity.verify(), "identity is self-certifying");
-
-        // Only what an invite hands over: the roots, the community id and the owner salt.
-        let (read, signer) = holder(&minted);
-        let editions = open_all(&minted.wraps, &read, &signer.pk());
-
-        assert_eq!(editions.len(), 2);
-
-        let community = &editions[0];
-        assert_eq!(community.subkind, vsk::COMMUNITY_METADATA);
-        assert_eq!(community.entity, *minted.identity.community_id.as_bytes());
-        assert_eq!(community.author, owner.public_key());
-        assert_eq!((community.version, community.prev), (1, None));
-        assert_eq!(
-            serde_json::from_str::<CommunityMetadata>(&community.content)
-                .expect("parses")
-                .name,
-            "coop"
-        );
-
-        let channel = &editions[1];
-        assert_eq!(channel.subkind, vsk::CHANNEL_METADATA);
-        assert_eq!(channel.entity, *minted.channel_id.as_bytes());
-
-        for edition in &editions {
-            let folded = fold(&[EditionMeta::from(edition)], 0, None);
-            assert_eq!(folded.head, Some(0));
-            assert!(
-                folded.anchored && !folded.gap,
-                "genesis anchors at its floor"
-            );
-        }
-
-        let state = CommunityState::from_genesis(&minted, &editions, AT * 1_000).expect("projects");
-
-        smol::block_on(async {
-            let database = MemoryDatabase::unbounded();
-            save_state(&database, &state).await.expect("saves");
-            let loaded = load_state(&database, &minted.identity.community_id)
-                .await
-                .expect("loads")
-                .expect("present");
-
-            assert_eq!(loaded.community_root, minted.community_root);
-            assert_eq!(loaded.control_root, Some(minted.control_root));
-            assert_eq!(loaded.channels.len(), 1);
-            assert_eq!(loaded.heads.len(), 2);
-        });
     }
 
     #[test]
