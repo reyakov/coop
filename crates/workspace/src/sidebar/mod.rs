@@ -34,6 +34,7 @@ use ui::{
 use crate::Command;
 
 mod entry;
+mod tree;
 
 const INPUT_PLACEHOLDER: &str = "Find or start a conversation";
 

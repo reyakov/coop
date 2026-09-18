@@ -27,7 +27,9 @@ use ui::{Icon, IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
 use crate::dialogs::import::ImportIdentity;
 use crate::dialogs::restore::RestoreEncryption;
 use crate::dialogs::settings;
-use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list};
+use crate::panels::{
+    backup, browse, contact_list, greeter, inbox, messaging_relays, profile, relay_list, search,
+};
 use crate::sidebar::Sidebar;
 
 mod dialogs;
@@ -57,6 +59,9 @@ enum Command {
     ShowSettings,
     ShowBackup,
     ShowContactList,
+    ShowInbox,
+    ShowBrowse,
+    ShowSearch,
 }
 
 pub struct Workspace {
@@ -295,6 +300,15 @@ impl Workspace {
                     window,
                     cx,
                 );
+            }
+            Command::ShowInbox => {
+                self.add_panel_to_dock(inbox::init(window, cx), DockPlacement::Center, window, cx);
+            }
+            Command::ShowBrowse => {
+                self.add_panel_to_dock(browse::init(window, cx), DockPlacement::Center, window, cx);
+            }
+            Command::ShowSearch => {
+                self.add_panel_to_dock(search::init(window, cx), DockPlacement::Center, window, cx);
             }
             Command::ShowBackup => {
                 self.add_panel_to_dock(backup::init(window, cx), DockPlacement::Left, window, cx);

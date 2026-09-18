@@ -1,6 +1,9 @@
 pub mod backup;
+pub mod browse;
 pub mod contact_list;
 pub mod greeter;
+pub mod inbox;
 pub mod messaging_relays;
 pub mod profile;
 pub mod relay_list;
+pub mod search;

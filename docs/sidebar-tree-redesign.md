@@ -1,6 +1,7 @@
 # Sidebar tree redesign
 
-Status: proposed, not implemented.
+Status: steps 1-4 implemented (icons, tree primitives, `RoomEntry` extensions,
+panel shells); step 5 (search relocation + sidebar render rewrite) not started.
 
 Scope: `crates/workspace/src/sidebar` (`mod.rs`, `entry.rs`, new `tree.rs`),
 new panel shells in `crates/workspace/src/panels/`, and the `Command` wiring in
@@ -302,16 +303,16 @@ because removing the search fields breaks the old render and rewriting the
 render orphans the search code. Helpers added in earlier steps may warn as
 unused until step 5 consumes them. Run the checks in §15 after each step.
 
-- [ ] **Step 1 — icons.** Add `assets/icons/folder.svg`, `compass.svg`,
+- [x] **Step 1 — icons.** Add `assets/icons/folder.svg`, `compass.svg`,
   `message.svg` (24x24 viewBox, `stroke="currentColor"`, `stroke-width="1.5"`,
   matching existing files); add `Folder`, `Compass`, `Message` variants to
   `IconName` and its `path()` match in `crates/ui/src/icon.rs`.
-- [ ] **Step 2 — tree primitives.** Add `crates/workspace/src/sidebar/tree.rs`
+- [x] **Step 2 — tree primitives.** Add `crates/workspace/src/sidebar/tree.rs`
   with `TreeSection`, `SidebarRow`, `CommunityEntry`, `dummy_communities()`,
   and the `TreeRow` element; declare `mod tree;` in `sidebar/mod.rs`.
-- [ ] **Step 3 — `RoomEntry`.** Add `.depth(u8)` and `.trailing(AnyElement)`;
+- [x] **Step 3 — `RoomEntry`.** Add `.depth(u8)` and `.trailing(AnyElement)`;
   change `h_9` to `h_8`.
-- [ ] **Step 4 — panel openers.** Add `Command::{ShowInbox, ShowBrowse,
+- [x] **Step 4 — panel openers.** Add `Command::{ShowInbox, ShowBrowse,
   ShowSearch}` and `panels/{inbox,browse,search}.rs` shells (`init`, `Panel`,
   `Focusable`, `EventEmitter<PanelEvent>`, empty `Render`, following
   `greeter.rs`); register them in `panels/mod.rs`; handle the commands in

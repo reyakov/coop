@@ -3,8 +3,8 @@ use std::rc::Rc;
 use chat::RoomKind;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, ClickEvent, InteractiveElement, IntoElement, ParentElement as _, RenderOnce, SharedString,
-    StatefulInteractiveElement, Styled, Window, div,
+    AnyElement, App, ClickEvent, InteractiveElement, IntoElement, ParentElement as _, RenderOnce,
+    SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use nostr_sdk::prelude::*;
 use settings::AppSettings;
@@ -24,9 +24,11 @@ pub struct RoomEntry {
     avatar: Option<SharedString>,
     created_at: Option<SharedString>,
     kind: Option<RoomKind>,
+    depth: u8,
     selected: bool,
     #[allow(clippy::type_complexity)]
     handler: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
+    trailing: Option<AnyElement>,
 }
 
 impl RoomEntry {
@@ -38,8 +40,10 @@ impl RoomEntry {
             avatar: None,
             created_at: None,
             kind: None,
+            depth: 0,
             handler: None,
             selected: false,
+            trailing: None,
         }
     }
 
@@ -65,6 +69,16 @@ impl RoomEntry {
 
     pub fn kind(mut self, kind: RoomKind) -> Self {
         self.kind = Some(kind);
+        self
+    }
+
+    pub fn depth(mut self, depth: u8) -> Self {
+        self.depth = depth;
+        self
+    }
+
+    pub fn trailing(mut self, trailing: impl IntoElement) -> Self {
+        self.trailing = Some(trailing.into_any_element());
         self
     }
 
@@ -98,9 +112,10 @@ impl RenderOnce for RoomEntry {
 
         h_flex()
             .id(self.ix)
-            .h_9()
+            .h_8()
             .w_full()
-            .px_1p5()
+            .pl(px(6. + self.depth as f32 * 14.))
+            .pr_1p5()
             .gap_2()
             .text_sm()
             .rounded(cx.theme().radius)
@@ -143,6 +158,7 @@ impl RenderOnce for RoomEntry {
                             .when_some(self.created_at, |this, created_at| this.child(created_at)),
                     ),
             )
+            .when_some(self.trailing, |this, trailing| this.child(trailing))
             .hover(|this| this.bg(cx.theme().elevated_surface_background))
             .when_some(self.handler, |this, handler| {
                 this.on_click(move |event, window, cx| {
