@@ -30,6 +30,7 @@ use crate::Command;
 mod entry;
 mod tree;
 
+use entry::ROOM_ENTRY_GROUP;
 pub(crate) use entry::RoomEntry;
 use tree::{SidebarRow, TreeRow, TreeRowKind, TreeSection, dummy_communities};
 
@@ -241,8 +242,10 @@ impl Sidebar {
                     SidebarRow::Room {
                         room,
                         depth,
-                        pinned: _pinned,
+                        pinned,
                     } => {
+                        let pinned = *pinned;
+                        let room_id = room.read(cx).id;
                         let public_key = room.read(cx).display_member(cx).public_key();
                         let name = room.read(cx).display_name(cx);
                         let avatar = room.read(cx).display_image(cx);
@@ -255,6 +258,45 @@ impl Sidebar {
                             });
                         });
 
+                        let sidebar = cx.entity().downgrade();
+                        let trailing =
+                            Button::new(ElementId::NamedInteger("room-menu".into(), index as u64))
+                                .icon(IconName::Ellipsis)
+                                .ghost_alt()
+                                .xsmall()
+                                .compact()
+                                .invisible()
+                                .group_hover(ROOM_ENTRY_GROUP, |style| style.visible())
+                                .dropdown_menu(move |this, _window, _cx| {
+                                    let sidebar = sidebar.clone();
+
+                                    if pinned {
+                                        this.item(PopupMenuItem::new("Unpin").on_click(
+                                            move |_event, _window, cx| {
+                                                if let Err(error) =
+                                                    sidebar.update(cx, |sidebar, cx| {
+                                                        sidebar.unpin_room(room_id, cx);
+                                                    })
+                                                {
+                                                    log::error!("Failed to unpin room: {error}");
+                                                }
+                                            },
+                                        ))
+                                    } else {
+                                        this.item(PopupMenuItem::new("Pin").on_click(
+                                            move |_event, _window, cx| {
+                                                if let Err(error) =
+                                                    sidebar.update(cx, |sidebar, cx| {
+                                                        sidebar.pin_room(room_id, cx);
+                                                    })
+                                                {
+                                                    log::error!("Failed to pin room: {error}");
+                                                }
+                                            },
+                                        ))
+                                    }
+                                });
+
                         RoomEntry::new(index)
                             .name(name)
                             .avatar(avatar)
@@ -262,6 +304,7 @@ impl Sidebar {
                             .kind(kind)
                             .created_at(created_at)
                             .depth(*depth)
+                            .trailing(trailing)
                             .on_click(handler)
                             .into_any_element()
                     }

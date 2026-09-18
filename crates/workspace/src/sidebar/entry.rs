@@ -16,6 +16,9 @@ use ui::{Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension, h_flex
 
 use crate::dialogs::screening;
 
+/// Group name callers can target from a `trailing` element to react to row hover.
+pub const ROOM_ENTRY_GROUP: &str = "room-entry";
+
 #[derive(IntoElement)]
 pub struct RoomEntry {
     ix: usize,
@@ -112,6 +115,7 @@ impl RenderOnce for RoomEntry {
 
         h_flex()
             .id(self.ix)
+            .group(ROOM_ENTRY_GROUP)
             .h_8()
             .w_full()
             .pl(px(6. + self.depth as f32 * 14.))

@@ -1,10 +1,9 @@
 # Sidebar tree redesign
 
-Status: steps 1-5 implemented. Search now lives in `panels/search.rs`; the
-sidebar renders the nav rail and the flattened tree. Remaining: step 6 (pin UI),
-step 7 (community rows are already rendered from dummy data, tracked by the
-`TODO(concord)`), optional step 8 (persistence), step 9 (cleanup of the step-6
-dead code).
+Status: steps 1-6 implemented. Search lives in `panels/search.rs`; the sidebar
+renders the nav rail, the flattened tree, and per-row pin/unpin menus. Remaining:
+step 7 (confirm the placeholder community names), optional step 8 (persistence),
+step 9 (remove the unused `TreeRow::selected` and run the final cleanup).
 
 Scope: `crates/workspace/src/sidebar` (`mod.rs`, `entry.rs`, new `tree.rs`),
 new panel shells in `crates/workspace/src/panels/`, and the `Command` wiring in
@@ -264,10 +263,10 @@ Search is now a panel, not a sidebar mode:
 - Pin state: `pinned_rooms: Vec<u64>` in `Sidebar`, order = pin order.
 - UI: hover ellipsis (`IconName::Ellipsis`, `ghost_alt`, `xsmall`, `compact`)
   on each room row, opening a `DropdownMenu` with `Pin` / `Unpin`
-  (`PopupMenuItem::new(...).on_click(...)`). Verify the trigger click does not
-  also fire the row's `emit_room` click; if it does, `cx.stop_propagation()`
-  in the menu trigger's `on_click`. (There is no right-click menu pattern in
-  the codebase yet; a context menu is a follow-up.)
+  (`PopupMenuItem::new(...).on_click(...)`). The ellipsis is a `RoomEntry`
+  trailing element, hidden by default and revealed with `group_hover` against the
+  row's `ROOM_ENTRY_GROUP` group. (There is no right-click menu pattern in the
+  codebase yet; a context menu is a follow-up.)
 - `Pinned` folder is hidden when no pinned room resolves to a live room;
   otherwise expanded by default, showing pinned rooms in pin order.
 - A pinned room remains listed under `Messages`.
@@ -335,8 +334,15 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
   `uniform_list("sidebar-tree")`. `has_search`, `find_focused`, `set_input_focus`
   were dropped because they only existed to switch the sidebar between the room
   list and the search view.
-- [ ] **Step 6 — pin UI.** Build the per-row ellipsis dropdown, wire
-  `pin_room`/`unpin_room`.
+- [x] **Step 6 — pin UI.** Per-row ellipsis (`IconName::Ellipsis`, `ghost_alt`,
+  `xsmall`, `compact`) passed to `RoomEntry::trailing`, revealed on row hover
+  through the `ROOM_ENTRY_GROUP` group name, opening a `DropdownMenu` with
+  Pin/Unpin; the handlers call `pin_room`/`unpin_room` through a
+  `WeakEntity<Sidebar>`. Click propagation: `gpui_base::Popover` registers the
+  trigger's `on_mouse_down` with `cx.stop_propagation()`, and GPUI only fires an
+  element's `on_click` when that element recorded the matching mouse-down, so the
+  row's `emit_room` click does not fire when the menu trigger is clicked. No extra
+  handling was needed.
 - [ ] **Step 7 — community section.** Render dummy entries and hint; add the
   `TODO(concord)` marker. The flattening and rendering landed with step 5
   (`SidebarRow::Community` -> `TreeRow`, dummy data from `dummy_communities()`),
