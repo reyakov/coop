@@ -260,24 +260,22 @@ fn observe(observed: &mut BTreeMap<PublicKey, u64>, author: PublicKey, at_ms: u6
 }
 
 #[cfg(test)]
-mod tests {
-    use concord::cord02::list::{CommunityListEntry, JoinMaterial, Tombstone, build_list_event};
-    use concord::cord02::{CommunityMetadata, ROOT_EPOCH, genesis, open_edition};
+pub(crate) mod fixtures {
+    use concord::cord02::{CommunityGenesis, CommunityMetadata, ROOT_EPOCH};
     use concord::cord04::ParsedEdition;
     use concord::derive::control_signer_group_key;
-    use concord::store::save_state;
-    use nostr_memory::MemoryDatabase;
 
     use super::*;
 
-    const AT_MS: u64 = 1_719_800_000_000;
+    pub const AT_MS: u64 = 1_719_800_000_000;
 
-    fn community(owner: &Keys) -> CommunityState {
+    /// A genesis and the state it folds into, ready for a test database.
+    pub fn community(owner: &Keys) -> (CommunityGenesis, CommunityState) {
         let metadata = CommunityMetadata {
             name: "Room".to_owned(),
             ..Default::default()
         };
-        let genesis = genesis(owner, &metadata, AT_MS / 1000).expect("genesis");
+        let genesis = cord02::genesis(owner, &metadata, AT_MS / 1000).expect("genesis");
         let read = control_group_key(
             &genesis.community_root,
             &genesis.identity.community_id,
@@ -295,11 +293,24 @@ mod tests {
         let editions: Vec<ParsedEdition> = genesis
             .wraps
             .iter()
-            .map(|wrap| open_edition(wrap, &read, &address, true).expect("opens"))
+            .map(|wrap| cord02::open_edition(wrap, &read, &address, true).expect("opens"))
             .collect();
 
-        CommunityState::from_genesis(&genesis, &editions, AT_MS).expect("state")
+        let state = CommunityState::from_genesis(&genesis, &editions, AT_MS).expect("state");
+
+        (genesis, state)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use concord::cord02::ROOT_EPOCH;
+    use concord::cord02::list::{CommunityListEntry, JoinMaterial, Tombstone, build_list_event};
+    use concord::store::save_state;
+    use nostr_memory::MemoryDatabase;
+
+    use super::fixtures::{AT_MS, community};
+    use super::*;
 
     fn material(state: &CommunityState) -> JoinMaterial {
         JoinMaterial {
@@ -332,7 +343,7 @@ mod tests {
     #[test]
     fn every_held_plane_routes_by_its_wrap_author() {
         let owner = Keys::generate();
-        let state = community(&owner);
+        let state = community(&owner).1;
         let planes = planes(&state).expect("planes");
 
         assert_eq!(
@@ -356,7 +367,7 @@ mod tests {
             let keys = Keys::generate();
             let signer = UniversalSigner::new(keys.clone());
             let owner = Keys::generate();
-            let state = community(&owner);
+            let state = community(&owner).1;
 
             // With no list event, every state document is a community.
             let no_list = MemoryDatabase::unbounded();
