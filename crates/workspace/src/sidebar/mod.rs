@@ -12,6 +12,7 @@ use gpui::{
     UniformListScrollHandle, Window, div, px, retain_all, uniform_list,
 };
 use person::PersonRegistry;
+use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
 use theme::{ActiveTheme, TABBAR_HEIGHT};
@@ -49,17 +50,17 @@ pub struct Sidebar {
     pinned_rooms: Vec<u64>,
 
     /// Event subscriptions
-    _subscriptions: SmallVec<[Subscription; 1]>,
+    _subscriptions: SmallVec<[Subscription; 2]>,
 }
 
 impl Sidebar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let settings = AppSettings::global(cx).read(cx).entity().clone();
         let chat = ChatRegistry::global(cx);
 
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
-            // Subscribe for registry new events
             cx.subscribe_in(&chat, window, move |this, _s, event, _window, cx| {
                 if event == &ChatEvent::Ping {
                     this.new_requests = true;
@@ -68,12 +69,16 @@ impl Sidebar {
             }),
         );
 
+        subscriptions.push(cx.observe(&settings, move |this, _settings, cx| {
+            this.restore_state(cx);
+        }));
+
         Self {
             focus_handle: cx.focus_handle(),
             scroll_handle: UniformListScrollHandle::new(),
             new_requests: false,
-            expanded: BTreeSet::from([TreeSection::Community, TreeSection::Messages]),
-            pinned_rooms: Vec::new(),
+            expanded: load_expanded(cx),
+            pinned_rooms: AppSettings::get_pinned_rooms(cx),
             _subscriptions: subscriptions,
         }
     }
@@ -87,6 +92,7 @@ impl Sidebar {
             self.new_requests = false;
         }
 
+        self.save_expanded(cx);
         cx.notify();
     }
 
@@ -94,16 +100,43 @@ impl Sidebar {
         self.expanded.contains(&section)
     }
 
+    fn restore_state(&mut self, cx: &mut Context<Self>) {
+        let pinned_rooms = AppSettings::get_pinned_rooms(cx);
+        let expanded = load_expanded(cx);
+
+        if self.pinned_rooms == pinned_rooms && self.expanded == expanded {
+            return;
+        }
+
+        self.pinned_rooms = pinned_rooms;
+        self.expanded = expanded;
+        cx.notify();
+    }
+
+    fn save_expanded(&self, cx: &mut App) {
+        let keys = self
+            .expanded
+            .iter()
+            .map(|section| section.key().to_string())
+            .collect();
+        AppSettings::update_expanded_sections(Some(keys), cx);
+    }
+
     fn pin_room(&mut self, room_id: u64, cx: &mut Context<Self>) {
         if !self.pinned_rooms.contains(&room_id) {
             self.pinned_rooms.push(room_id);
         }
         self.expanded.insert(TreeSection::Pins);
+
+        AppSettings::update_pinned_rooms(self.pinned_rooms.clone(), cx);
+        self.save_expanded(cx);
         cx.notify();
     }
 
     fn unpin_room(&mut self, room_id: u64, cx: &mut Context<Self>) {
         self.pinned_rooms.retain(|id| *id != room_id);
+
+        AppSettings::update_pinned_rooms(self.pinned_rooms.clone(), cx);
         cx.notify();
     }
 
@@ -441,6 +474,16 @@ fn nav_item(id: &'static str, icon: IconName, label: &'static str, command: Comm
         .on_click(move |_event, _window, cx| {
             cx.dispatch_action(&command);
         })
+}
+
+fn load_expanded(cx: &App) -> BTreeSet<TreeSection> {
+    let Some(keys) = AppSettings::get_expanded_sections(cx) else {
+        return BTreeSet::from([TreeSection::Community, TreeSection::Messages]);
+    };
+
+    keys.iter()
+        .filter_map(|key| TreeSection::from_key(key.as_str()))
+        .collect()
 }
 
 impl Panel for Sidebar {

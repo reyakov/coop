@@ -46,6 +46,8 @@ setting_accessors! {
     pub nip4e: bool,
     pub trusted_relays: Vec<String>,
     pub file_server: Url,
+    pub pinned_rooms: Vec<u64>,
+    pub expanded_sections: Option<Vec<String>>,
 }
 
 /// Signer kind
@@ -130,6 +132,14 @@ pub struct Settings {
 
     /// Server for blossom media attachments
     pub file_server: Url,
+
+    /// Pinned sidebar room ids, in pin order
+    #[serde(default)]
+    pub pinned_rooms: Vec<u64>,
+
+    /// Expanded sidebar tree sections; `None` means the default sections
+    #[serde(default)]
+    pub expanded_sections: Option<Vec<String>>,
 }
 
 impl Default for Settings {
@@ -142,6 +152,8 @@ impl Default for Settings {
             nip4e: false,
             trusted_relays: vec![],
             file_server: Url::parse(DEFAULT_FILE_SERVER).unwrap(),
+            pinned_rooms: vec![],
+            expanded_sections: None,
         }
     }
 }
@@ -169,6 +181,13 @@ impl AppSettings {
     /// Retrieve the global settings instance
     pub fn global(cx: &App) -> Entity<Self> {
         cx.global::<GlobalAppSettings>().0.clone()
+    }
+
+    /// The underlying settings entity, which notifies whenever any field changes.
+    /// Settings load asynchronously, so observers can watch it to pick up values
+    /// that arrive after construction.
+    pub fn entity(&self) -> &Entity<Settings> {
+        &self.inner
     }
 
     /// Set the global settings instance

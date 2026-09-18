@@ -9,7 +9,6 @@ use gpui::{
 use theme::ActiveTheme;
 use ui::{Icon, IconName, Sizable, StyledExt, h_flex};
 
-/// Collapsible tree sections; declaration order is render order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TreeSection {
     Pins,
@@ -34,9 +33,27 @@ impl TreeSection {
             Self::Messages => IconName::Message,
         }
     }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Pins => "pins",
+            Self::Requests => "requests",
+            Self::Community => "community",
+            Self::Messages => "messages",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "pins" => Some(Self::Pins),
+            "requests" => Some(Self::Requests),
+            "community" => Some(Self::Community),
+            "messages" => Some(Self::Messages),
+            _ => None,
+        }
+    }
 }
 
-/// One rendered tree row, in flattened order.
 pub enum SidebarRow {
     Section {
         section: TreeSection,
@@ -57,12 +74,10 @@ pub enum SidebarRow {
     },
 }
 
-/// A community shown under the Community section.
 pub struct CommunityEntry {
     pub name: &'static str,
 }
 
-/// Communities to show until the Concord backend is wired up.
 pub fn dummy_communities() -> &'static [CommunityEntry] {
     // TODO(concord): replace with ConcordRegistry communities, see docs/concord-usage.md.
     &[
@@ -75,7 +90,6 @@ pub fn dummy_communities() -> &'static [CommunityEntry] {
     ]
 }
 
-/// Presentation differences between the rows [`TreeRow`] draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TreeRowKind {
     Section,
@@ -83,7 +97,6 @@ pub enum TreeRowKind {
     Hint,
 }
 
-/// Folder/file row. One element for section headers, community rows and hints.
 #[derive(IntoElement)]
 pub struct TreeRow {
     id: ElementId,
@@ -95,7 +108,6 @@ pub struct TreeRow {
     label: SharedString,
     count: Option<usize>,
     dot: bool,
-    selected: bool,
     #[allow(clippy::type_complexity)]
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
 }
@@ -116,7 +128,6 @@ impl TreeRow {
             label: label.into(),
             count: None,
             dot: false,
-            selected: false,
             on_click: None,
         }
     }
@@ -148,11 +159,6 @@ impl TreeRow {
 
     pub fn dot(mut self) -> Self {
         self.dot = true;
-        self
-    }
-
-    pub fn selected(mut self, selected: bool) -> Self {
-        self.selected = selected;
         self
     }
 
@@ -195,9 +201,6 @@ impl RenderOnce for TreeRow {
                 this.text_xs()
                     .font_normal()
                     .text_color(cx.theme().text_placeholder)
-            })
-            .when(self.selected, |this| {
-                this.bg(cx.theme().ghost_element_selected)
             })
             .when_some(self.caret, |this, caret| {
                 this.child(Icon::new(caret).xsmall().text_color(cx.theme().icon_muted))

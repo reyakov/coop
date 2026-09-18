@@ -1,10 +1,11 @@
 # Sidebar tree redesign
 
-Status: steps 1-7 implemented. Search lives in `panels/search.rs`; the sidebar
+Status: steps 1-9 implemented. Search lives in `panels/search.rs`; the sidebar
 renders the nav rail, the flattened tree, per-row pin/unpin menus, and the
-Community section from placeholder data (`TODO(concord)`). Remaining: optional
-step 8 (persistence), step 9 (remove the unused `TreeRow::selected` and run the
-final cleanup).
+Community section from placeholder data (`TODO(concord)`). Pins and expanded
+sections persist through `settings::Settings`. `cargo check`, `cargo clippy
+--workspace --all-targets` and `rustfmt --check` on the changed files are clean.
+Remaining: the §15 manual QA checklist (needs the running app).
 
 Scope: `crates/workspace/src/sidebar` (`mod.rs`, `entry.rs`, new `tree.rs`),
 new panel shells in `crates/workspace/src/panels/`, and the `Command` wiring in
@@ -108,6 +109,20 @@ pinned_rooms: Vec<u64>, // room ids in pin order
 Defaults: `expanded = {Community, Messages}` (Requests intentionally absent;
 Pins only matters when non-empty and starts expanded).
 
+Both fields persist through `settings::Settings`:
+
+```rust
+#[serde(default)] pinned_rooms: Vec<u64>,
+#[serde(default)] expanded_sections: Option<Vec<String>>,
+```
+
+`expanded_sections` is an `Option` so that an empty list (the user collapsed
+everything) is distinguishable from the field never having been written, which
+keeps the `{Community, Messages}` default. `TreeSection::key()`/`from_key()` map
+the sections to their stable string keys. Because settings load asynchronously,
+`Sidebar` observes the settings entity and re-reads both fields in
+`restore_state` instead of trusting the constructor's read.
+
 New methods:
 
 ```rust
@@ -116,6 +131,7 @@ fn is_expanded(&self, section: TreeSection) -> bool;
 fn pin_room(&mut self, room_id: u64, cx: &mut Context<Self>);
 fn unpin_room(&mut self, room_id: u64, cx: &mut Context<Self>);
 fn is_pinned(&self, room_id: u64) -> bool;
+fn restore_state(&mut self, cx: &mut Context<Self>); // step 8
 fn tree_rows(&self, cx: &App) -> Vec<SidebarRow>; // see §5
 ```
 
@@ -349,14 +365,34 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
   flattening and rendering landed with step 5 (`SidebarRow::Community` ->
   `TreeRow`), so this step added the missing hint branch and confirmed the §10
   placeholder names.
-- [ ] **Step 8 (optional) — persistence.** Add
-  `#[serde(default)] pinned_rooms: Vec<u64>` (and optionally
-  `expanded_sections: Vec<String>`) to `settings::Settings`, register accessors
-  in `setting_accessors!`, and load/save from `Sidebar`. The `#[serde(default)]`
-  attribute is required: `Settings` has no defaults today, so a new field
-  without it breaks parsing of existing `.settings` files.
-- [ ] **Step 9 — cleanup.** `cargo fmt`, remove dead imports/helpers, run
-  clippy.
+- [x] **Step 8 — persistence.** `settings::Settings` gained
+  `#[serde(default)] pinned_rooms: Vec<u64>` and
+  `#[serde(default)] expanded_sections: Option<Vec<String>>`, both registered in
+  `setting_accessors!` (so `AppSettings::get_*`/`update_*` exist). The
+  `#[serde(default)]` attribute is required: `Settings` has no serde defaults, so
+  a new field without it breaks parsing of existing `.settings` files. `Sidebar::new`
+  loads both (falling back to the default sections when the setting is `None`),
+  and `toggle_section`/`pin_room`/`unpin_room` write back through
+  `AppSettings::update_*`; the settings observer already saves on every change, so
+  no explicit file I/O was added. `expanded_sections` is `Option` so that
+  collapsing every folder does not silently revert to the default on restart.
+  Stale pinned ids are still skipped at flatten time rather than pruned on load.
+
+  Settings load asynchronously (a deferred, background file read), so the
+  constructor's read always sees defaults on a cold start. To pick up the loaded
+  values, `AppSettings::entity()` now exposes the inner `Entity<Settings>` (it
+  notifies on every field change) and `Sidebar` observes it, re-reading through
+  `restore_state` and re-rendering only when the values actually differ. Without
+  this the sidebar would render with empty pins until the next unrelated change.
+  The observation is on the inner entity because `AppSettings` itself never
+  notifies its own observers.
+- [x] **Step 9 — cleanup.** Removed `TreeRow::selected` (the field, the builder
+  method, and the `ghost_element_selected` render branch) — it was the only dead
+  code left after step 5. No other unused imports or helpers remained.
+  `cargo clippy --workspace --all-targets` reports zero warnings. Formatting is
+  checked per file with `rustfmt +nightly --check`; `cargo fmt --all` is **not**
+  run, because the repo's committed formatting does not match the installed
+  nightly rustfmt (many pre-existing diffs in unrelated files).
 
 ## 13. Files touched
 
@@ -370,7 +406,7 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
 | `crates/workspace/src/lib.rs` | `Command` variants + `on_command` arms |
 | `crates/ui/src/icon.rs` | New icon variants |
 | `assets/icons/{folder,compass,message}.svg` | New assets |
-| `crates/settings/src/lib.rs` | Optional step 8 only |
+| `crates/settings/src/lib.rs` | Step 8: `pinned_rooms`, `expanded_sections`, accessors, `entity()` |
 
 ## 14. Edge cases
 
@@ -394,8 +430,10 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
 
 ## 15. Validation
 
-- `cargo fmt --check` (workspace `rustfmt.toml`).
-- `cargo check -p workspace` and `cargo clippy -p workspace --all-targets`.
+- `rustfmt +nightly --check` on the changed files (not `cargo fmt --all`: the
+  repo's committed formatting does not match the installed nightly rustfmt, so a
+  workspace-wide check reports many pre-existing diffs).
+- `cargo check --workspace` and `cargo clippy --workspace --all-targets`.
 - Manual QA checklist:
   - Inbox/Browse/Search each open their panel; clicking the same nav item again
     focuses the existing panel instead of duplicating it;
@@ -409,6 +447,8 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
     room; clicking a pinned row opens it;
   - Messages lists ongoing rooms and still opens the screening modal for
     non-ongoing rooms;
+  - pins and expanded/collapsed folders survive an app restart (collapsing every
+    folder also survives, rather than reverting to the default sections);
   - empty states at 0 ongoing and 0 requests.
 - There is no GPUI test infrastructure in the repo (no `#[gpui::test]`
   anywhere), so tests are limited to pure helpers (`TreeSection` defaults, pin
@@ -417,7 +457,8 @@ unused until step 5 consumes them. Run the checks in §15 after each step.
 
 ## 16. Open questions
 
-1. **Persistence.** Persist pins and folder state, or keep them session-local?
+1. **Persistence.** Resolved in step 8: pins and expanded sections persist in
+   `settings::Settings`.
 2. **Row density.** `h_8` vs the current `h_9`; `SIDEBAR_WIDTH` stays 240px for
    now, one indent level fits.
 3. **Community entries.** Preferred dummy names/branding before the real
