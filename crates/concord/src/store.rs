@@ -7,13 +7,14 @@ use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::cord01::{KIND_WRAP_EPHEMERAL, OpenedStream};
+use crate::cord02::list::JoinMaterial;
 use crate::cord02::{
     ChannelMetadata, CommunityGenesis, CommunityMetadata, ControlFold, ROOT_EPOCH,
 };
 use crate::cord03::{self, ChatRumor, plane_keys};
 use crate::cord04::{EntityHead, Floors, ParsedEdition, vsk};
 use crate::derive::control_signer_group_key;
-use crate::{ChannelId, CommunityId, Epoch, GroupKey};
+use crate::{ChannelId, CommunityId, Epoch, GroupKey, decode_hex_32};
 
 static LOCAL_KEYS: LazyLock<Keys> = LazyLock::new(Keys::generate);
 
@@ -140,6 +141,11 @@ pub struct ChannelKeyRef {
     pub name: String,
     pub private: bool,
     pub epoch: Epoch,
+    /// The channel's read secret when the member was granted it.
+    ///
+    /// A public channel derives its key from the `community_root` and carries none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<[u8; 32]>,
 }
 
 /// One local document per community, keyed by `concord/<community_id>`.
@@ -201,6 +207,7 @@ impl CommunityState {
                         name: metadata.name,
                         private: metadata.private,
                         epoch: ROOT_EPOCH,
+                        key: None,
                     });
                 }
                 _ => {}
@@ -228,6 +235,52 @@ impl CommunityState {
             channels,
             relays,
             heads,
+            banned: BTreeSet::new(),
+            dissolved: false,
+            added_at_ms,
+        })
+    }
+
+    pub fn from_join_material(material: &JoinMaterial, added_at_ms: u64) -> Result<Self> {
+        let control_pks = match material.control_pk {
+            Some(address) => BTreeMap::from([(material.root_epoch.0, address)]),
+            None => BTreeMap::new(),
+        };
+
+        let mut channels = Vec::with_capacity(material.channels.len());
+        for grant in &material.channels {
+            let key = match &grant.key {
+                Some(key) => Some(decode_hex_32(key)?),
+                None => None,
+            };
+
+            channels.push(ChannelKeyRef {
+                id: grant.id,
+                name: grant.name.clone(),
+                private: key.is_some(),
+                epoch: grant.epoch,
+                key,
+            });
+        }
+
+        Ok(Self {
+            id: material.community_id,
+            owner: material.owner,
+            owner_salt: decode_hex_32(&material.owner_salt)?,
+            community_root: decode_hex_32(&material.community_root)?,
+            root_epoch: material.root_epoch,
+            control_root: match &material.control_root {
+                Some(root) => Some(decode_hex_32(root)?),
+                None => None,
+            },
+            control_pks,
+            channels,
+            relays: material
+                .relays
+                .iter()
+                .filter_map(|relay| RelayUrl::parse(relay).ok())
+                .collect(),
+            heads: Vec::new(),
             banned: BTreeSet::new(),
             dissolved: false,
             added_at_ms,
@@ -276,6 +329,7 @@ impl CommunityState {
                     name: metadata.name.clone(),
                     private: false,
                     epoch: self.root_epoch,
+                    key: None,
                 }),
                 None => {}
             }
@@ -445,9 +499,10 @@ async fn fetch_page(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Epoch;
     use crate::cord03::{build_message, seal_rumor};
+    use crate::cord05::ChannelGrant;
     use crate::derive::channel_group_key;
+    use crate::{Epoch, Extra};
 
     const SECRET: [u8; 32] = [0x07u8; 32];
     const NEXT_SECRET: [u8; 32] = [0x11u8; 32];
@@ -525,6 +580,89 @@ mod tests {
             contents,
             ["after the rekey", "still before", "before the rekey"]
         );
+    }
+
+    #[test]
+    fn from_join_material_materializes_a_subscribable_state_with_or_without_the_control_root() {
+        let owner = Keys::generate().public_key();
+        let control_pk = Keys::generate().public_key();
+        let staff = ChannelId::from_bytes([0x9c; 32]);
+        let general = ChannelId::from_bytes([0x9d; 32]);
+
+        let material = JoinMaterial {
+            community_id: CommunityId::from_bytes([0x42; 32]),
+            owner,
+            owner_salt: "01".repeat(32),
+            community_root: "02".repeat(32),
+            root_epoch: Epoch(3),
+            control_pk: Some(control_pk),
+            control_root: Some("03".repeat(32)),
+            channels: vec![
+                ChannelGrant {
+                    id: staff,
+                    key: Some("04".repeat(32)),
+                    epoch: Epoch(2),
+                    name: "staff".to_owned(),
+                    extra: Extra::default(),
+                },
+                ChannelGrant {
+                    id: general,
+                    key: None,
+                    epoch: Epoch(0),
+                    name: "general".to_owned(),
+                    extra: Extra::default(),
+                },
+            ],
+            relays: vec!["wss://relay.example".to_owned()],
+            name: "Room".to_owned(),
+            extra: Extra::default(),
+        };
+
+        let state = CommunityState::from_join_material(&material, 7).expect("materializes");
+
+        assert_eq!(state.id, material.community_id);
+        assert_eq!(state.owner, owner);
+        assert_eq!(state.owner_salt, [0x01; 32]);
+        assert_eq!(state.community_root, [0x02; 32]);
+        assert_eq!(state.root_epoch, Epoch(3));
+        assert_eq!(state.control_root, Some([0x03; 32]));
+        assert_eq!(state.control_pks, BTreeMap::from([(3, control_pk)]));
+        assert!(
+            state.heads.is_empty(),
+            "the first control fold fills the heads"
+        );
+        assert!(state.banned.is_empty());
+        assert!(!state.dissolved);
+        assert_eq!(state.relays.len(), 1);
+        assert_eq!(state.added_at_ms, 7);
+
+        // A granted key lands on the channel and makes it private; a grant with
+        // no key is a public channel.
+        let granted = state
+            .channels
+            .iter()
+            .find(|c| c.id == staff)
+            .expect("staff");
+        assert!(granted.private);
+        assert_eq!(granted.key, Some([0x04; 32]));
+        assert_eq!(granted.epoch, Epoch(2));
+        assert_eq!(granted.name, "staff");
+
+        let public = state
+            .channels
+            .iter()
+            .find(|c| c.id == general)
+            .expect("general");
+        assert!(!public.private);
+        assert_eq!(public.key, None);
+
+        // A member who is not staff carries no control_root, but reading needs no
+        // secret: the address rides in the material either way.
+        let mut member = material.clone();
+        member.control_root = None;
+        let state = CommunityState::from_join_material(&member, 7).expect("materializes");
+        assert_eq!(state.control_root, None);
+        assert_eq!(state.control_pks, BTreeMap::from([(3, control_pk)]));
     }
 
     #[test]

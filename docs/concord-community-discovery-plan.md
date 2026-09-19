@@ -94,8 +94,9 @@ Two consequences for coop:
 | 8 | private channel keys ride in join material | `ChannelKeyRef` has no key field |
 
 Divergences 1–4 meant that even if the fetch existed, coop could neither read
-what accordion wrote nor write something accordion could read. **Phase A is
-done**, so 1–4 are resolved; 5–8 remain.
+what accordion wrote nor write something accordion could read. **Phases A and B
+are done**, so 1–4 and 6 are resolved; 5, 7 and 8 remain (8 only in that private
+planes are still not subscribed).
 
 ## Plan
 
@@ -143,7 +144,7 @@ example has five such values, so a strict decoder rejects the worked example;
 Phase C. `MAX_MEMBERSHIPS = 50` is kept for now as a stopgap (see risks): §8 has
 no membership limit, and Phase D's fragmentation is what removes the cap.
 
-### Phase B — materialize a community from join material (pure)
+### Phase B — materialize a community from join material (pure) — DONE
 
 `crates/concord/src/store.rs`, `crates/concord/src/cords/cord02/list.rs`
 
@@ -160,6 +161,25 @@ Tests: a material with and without `control_root`; a private grant's key
 survives; `from_join_material` then `planes()` yields the control `control_pk`
 plus the guestbook and public channels, i.e. a subscription filter that
 addresses real planes.
+
+**As built.** `from_join_material` does not verify `community_id` against
+`owner`/`owner_salt`: the List is signed by the member's own key and encrypted
+to self, and the invite path already validates that binding in
+`CommunityInvite::validate`. `private` on a materialized channel is simply
+`key.is_some()` — the spec's `channels` carry only the Private Channel keys a
+member was granted, so a grant with no key is a public channel. Nothing else
+changed: `from_genesis` and `apply_fold` construct every channel with
+`key: None`, and `planes()` still skips private channels, whose address derives
+from the granted key rather than the `community_root`. Carrying the key is what
+makes subscribing to them possible later; it is not needed to fix discovery.
+
+Two tests. In `concord`, `from_join_material` (with and without `control_root`,
+a granted key surviving, a public grant staying keyless). In `community`,
+`planes()` plus `subscription_filter` over a state built field-by-field (control
++ guestbook + public channel addressed, private skipped) — `JoinMaterial` and
+`ChannelGrant` cannot be constructed from `community` because their `extra`
+field's type is crate-private, so the materialization and the plane derivation
+are each proved where they live.
 
 ### Phase C — fetch the List from relays, then load
 
@@ -230,8 +250,9 @@ rows in the sidebar. This is the first time the path can be exercised at all.
   fragments on write.
 - **Relay selection for the fetch is the difference between finding the account's
   List and not.** NIP-65 write relays + pool, or a user-visible relay setting?
-- **Private channels stay unreadable until `ChannelKeyRef` carries the grant key**
-  (Phase B.2). Public discovery works without it.
+- **Private channels stay unsubscribed until `planes()` derives their address
+  from the granted key** (Phase B gave `ChannelKeyRef` a home for it, but the
+  discovery fix does not need it). Public discovery works regardless.
 - **Two writers, one key.** Once coop publishes `33302`, an account used from
   both accordion and coop has both clients writing the List. §8's
   read-modify-write is what keeps that from losing memberships — it is not

@@ -269,6 +269,69 @@ mod tests {
             .build()
     }
 
+    #[test]
+    fn planes_address_the_control_guestbook_and_only_public_channels() {
+        let owner = Keys::generate().public_key();
+        let control_pk = Keys::generate().public_key();
+        let general = ChannelId::from_bytes([0x9c; 32]);
+
+        let state = CommunityState {
+            id: CommunityId::from_bytes([0x42; 32]),
+            owner,
+            owner_salt: [0x01; 32],
+            community_root: [0x02; 32],
+            root_epoch: Epoch(0),
+            control_root: None,
+            control_pks: BTreeMap::from([(0, control_pk)]),
+            channels: vec![
+                concord::store::ChannelKeyRef {
+                    id: general,
+                    name: "general".to_owned(),
+                    private: false,
+                    epoch: Epoch(0),
+                    key: None,
+                },
+                concord::store::ChannelKeyRef {
+                    id: ChannelId::from_bytes([0x9d; 32]),
+                    name: "staff".to_owned(),
+                    private: true,
+                    epoch: Epoch(0),
+                    key: Some([0x04; 32]),
+                },
+            ],
+            relays: vec![RelayUrl::parse("wss://relay.example").expect("a url")],
+            heads: Vec::new(),
+            banned: BTreeSet::new(),
+            dissolved: false,
+            added_at_ms: 0,
+        };
+
+        let planes = planes(&state).expect("planes");
+
+        // Control at the root epoch, the guestbook, and the public channel. The
+        // private channel is skipped: its address derives from the granted key,
+        // not the community_root.
+        assert_eq!(planes.len(), 3);
+        assert!(planes.iter().any(|plane| plane.address == control_pk));
+        assert!(
+            planes
+                .iter()
+                .any(|plane| matches!(plane.kind, PlaneKind::Guestbook))
+        );
+        assert!(
+            planes
+                .iter()
+                .any(|plane| matches!(plane.kind, PlaneKind::Channel(id, _) if id == general))
+        );
+
+        // The filter author-lists every plane, so the subscription actually
+        // reaches the events the fold reads.
+        let filter = subscription_filter(&planes);
+        let addresses: BTreeSet<PublicKey> = planes.iter().map(|plane| plane.address).collect();
+        assert_eq!(filter.authors, Some(addresses));
+        assert_eq!(filter.kinds, Some(BTreeSet::from([Kind::from(KIND_WRAP)])));
+    }
+
     fn metadata(name: &str, relay: &str) -> cord02::CommunityMetadata {
         cord02::CommunityMetadata {
             name: name.to_owned(),

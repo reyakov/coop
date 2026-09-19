@@ -595,8 +595,9 @@ client.subscribe(filter).with_id(sub_id).await?;
   a NIP-59 gift wrap for the current user.** Concord wraps are kind 1059 too, so
   that handler must route by subscription id before any concord subscription goes
   live, or every stream wrap lands in the DM trash and raises a toast.
-- **No plane key can be persisted yet.** `CommunityState` has nowhere to keep a
-  key a rotation delivered and `ChannelKeyRef` carries no key of its own, so a
-  client can verify a rotation and still lose it on restart — history under a
-  prior root or a prior channel epoch is unreadable until that schema change
-  lands.
+- **Rotation-delivered plane keys cannot be persisted yet.** `CommunityState` has
+  nowhere to keep a key a rotation delivered, so a client can verify a rotation
+  and still lose it on restart — history under a prior root or a prior channel
+  epoch is unreadable until that schema change lands. (A granted private-channel
+  key does now have a home: `ChannelKeyRef.key`, filled by
+  `CommunityState::from_join_material`.)
