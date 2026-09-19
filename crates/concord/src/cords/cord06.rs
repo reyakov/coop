@@ -2,11 +2,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use anyhow::Result;
-use data_encoding::HEXLOWER;
-use nostr::nips::nip44::v2::ConversationKey;
+use data_encoding::{BASE64, HEXLOWER};
 use nostr_sdk::prelude::{
-    AsyncGetPublicKey, AsyncSignEvent, Event, Keys, PublicKey, SecretKey, Tag, Timestamp,
-    UnsignedEvent,
+    AsyncGetPublicKey, AsyncNip44, AsyncSignEvent, Event, PublicKey, Tag, Timestamp, UnsignedEvent,
 };
 use serde::{Deserialize, Serialize};
 
@@ -301,34 +299,48 @@ pub fn blob_locator(
     ))
 }
 
-pub fn build_blob(
-    rotator: &Keys,
+pub async fn build_blob<S>(
+    rotator: &S,
     recipient: &PublicKey,
     scope: RekeyScope,
     epoch: Epoch,
     new_key: &[u8; 32],
     control_pk: Option<&[u8; 32]>,
     control_root: Option<&[u8; 32]>,
-) -> Result<RekeyBlob, RekeyError> {
+) -> Result<RekeyBlob, RekeyError>
+where
+    S: AsyncGetPublicKey + AsyncNip44 + ?Sized,
+{
     let plaintext = encode_blob_plaintext(scope, epoch, new_key, control_pk, control_root)?;
+    let rotator_pk = rotator.get_public_key_async().await.map_err(crypto_error)?;
+
+    let wrapped = rotator
+        .nip44_encrypt_async(recipient, &BASE64.encode(&plaintext))
+        .await
+        .map_err(crypto_error)?;
 
     Ok(RekeyBlob {
-        locator: blob_locator(&rotator.public_key(), recipient, scope, epoch),
-        wrapped: seal_to(rotator.secret_key(), recipient, &plaintext)?,
+        locator: blob_locator(&rotator_pk, recipient, scope, epoch),
+        wrapped,
     })
 }
 
-pub fn open_blob(
-    recipient: &Keys,
+pub async fn open_blob<S>(
+    recipient: &S,
     rotator: &PublicKey,
     scope: RekeyScope,
     epoch: Epoch,
     blob: &RekeyBlob,
     community_id: &CommunityId,
-) -> Result<KeyDelivery, RekeyError> {
-    let conversation =
-        ConversationKey::derive(recipient.secret_key(), rotator).map_err(crypto_error)?;
-    let plaintext = cord01::open_bytes(&conversation, &blob.wrapped)?;
+) -> Result<KeyDelivery, RekeyError>
+where
+    S: AsyncNip44 + ?Sized,
+{
+    let text = recipient
+        .nip44_decrypt_async(rotator, &blob.wrapped)
+        .await
+        .map_err(crypto_error)?;
+    let plaintext = BASE64.decode(text.as_bytes()).map_err(crypto_error)?;
 
     parse_blob_plaintext(&plaintext, scope, epoch, community_id)
 }
@@ -342,15 +354,6 @@ pub fn find_my_blobs<'a>(
 ) -> impl Iterator<Item = &'a RekeyBlob> {
     let wanted = blob_locator(rotator, me, scope, epoch);
     blobs.iter().filter(move |blob| blob.locator == wanted)
-}
-
-fn seal_to(
-    secret: &SecretKey,
-    recipient: &PublicKey,
-    plaintext: &[u8],
-) -> Result<String, RekeyError> {
-    let conversation = ConversationKey::derive(secret, recipient).map_err(crypto_error)?;
-    Ok(cord01::seal_bytes(&conversation, plaintext)?)
 }
 
 #[derive(Debug, Clone)]
@@ -868,6 +871,8 @@ fn crypto_error(error: impl fmt::Display) -> RekeyError {
 mod tests {
     use std::collections::BTreeSet;
 
+    use nostr_sdk::prelude::Keys;
+
     use super::*;
     use crate::cord01::KIND_WRAP;
     use crate::cord02::{
@@ -922,16 +927,16 @@ mod tests {
         let scope = RekeyScope::Channel(channel());
 
         let open = |keys: &Keys, scope: RekeyScope, epoch: Epoch, blob: &RekeyBlob| {
-            open_blob(
+            smol::block_on(open_blob(
                 keys,
                 &rotator.public_key(),
                 scope,
                 epoch,
                 blob,
                 &community_id,
-            )
+            ))
         };
-        let blob = build_blob(
+        let blob = smol::block_on(build_blob(
             &rotator,
             &recipient.public_key(),
             scope,
@@ -939,7 +944,7 @@ mod tests {
             &key,
             None,
             None,
-        )
+        ))
         .expect("builds");
 
         assert_eq!(
@@ -972,7 +977,7 @@ mod tests {
             .to_bytes();
 
         let base = |pk: Option<&[u8; 32]>, root: Option<&[u8; 32]>| {
-            build_blob(
+            smol::block_on(build_blob(
                 &rotator,
                 &recipient.public_key(),
                 RekeyScope::Base,
@@ -980,7 +985,7 @@ mod tests {
                 &key,
                 pk,
                 root,
-            )
+            ))
             .expect("builds")
         };
 
@@ -1053,7 +1058,7 @@ mod tests {
         let community_id = community();
 
         let blob_for = |recipient: &Keys, key: [u8; 32]| {
-            build_blob(
+            smol::block_on(build_blob(
                 &rotator,
                 &recipient.public_key(),
                 scope,
@@ -1061,7 +1066,7 @@ mod tests {
                 &key,
                 None,
                 None,
-            )
+            ))
             .expect("builds")
         };
         let mine = blob_for(&me, [0xAA; 32]);
@@ -1139,14 +1144,14 @@ mod tests {
         .next()
         .expect("located");
         assert_eq!(
-            open_blob(
+            smol::block_on(open_blob(
                 &me,
                 &rotator.public_key(),
                 scope,
                 epoch,
                 located,
                 &community_id
-            )
+            ))
             .expect("opens")
             .new_key,
             [0xAA; 32]
@@ -1423,7 +1428,7 @@ mod tests {
             .map(|_| {
                 let member = Keys::generate();
 
-                build_blob(
+                smol::block_on(build_blob(
                     &rotator,
                     &member.public_key(),
                     scope,
@@ -1431,7 +1436,7 @@ mod tests {
                     &[0xCD; 32],
                     None,
                     None,
-                )
+                ))
                 .expect("builds")
             })
             .collect();

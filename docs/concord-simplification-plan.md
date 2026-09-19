@@ -132,10 +132,10 @@ Account-key sites to migrate:
 | `cord03::seal_rumor` (`cord03.rs:295`) | `author: &Keys` | `author: &S` | `AsyncGetPublicKey + AsyncSignEvent` |
 | `list::build_list_event` (`list.rs:186`) | `keys: &Keys` | `keys: &S` | all three |
 | `list::parse_list_event` (`list.rs:197`) | `keys: &Keys` | `keys: &S` | `AsyncGetPublicKey + AsyncNip44` |
-| `cord05::{build_direct_invite, unwrap_direct_invite}` (`:451,478`) | `inviter`/`recipient: &Keys` | `&S` (stage 3) | build: all three; unwrap: `AsyncNip44` |
+| `cord05::{build_direct_invite, unwrap_direct_invite}` (`:451,478`) | `inviter`/`recipient: &Keys` | **done** | build: all three (`Sized`); unwrap: `AsyncNip44` (`Sized`) |
 | `cord05::{build_invite_list, parse_invite_list}` (`:593,604`) | `keys: &Keys` | **done** | build: all three; parse: `AsyncGetPublicKey + AsyncNip44` |
-| `cord06::build_blob` (`:302`) | `rotator: &Keys` | `rotator: &S` (stage 3) | `AsyncGetPublicKey + AsyncNip44` |
-| `cord06::open_blob` (`:319`) | `recipient: &Keys` | `recipient: &S` (stage 3) | `AsyncNip44` |
+| `cord06::build_blob` (`:302`) | `rotator: &Keys` | **done** | `AsyncGetPublicKey + AsyncNip44` |
+| `cord06::open_blob` (`:319`) | `recipient: &Keys` | **done** | `AsyncNip44` |
 | `cord06::{build_rekey_chunks, seal_dissolved}` (`:602,737`) | actor `&Keys` | **done** | `AsyncGetPublicKey + AsyncSignEvent` |
 
 Leave unchanged: `cord05::{build_bundle_event, build_revocation}`, all
@@ -190,8 +190,8 @@ shared helpers, so the unwired callers had to be migrated in the same pass to
 keep the crate compiling: `cord05::{build_invite_list, parse_invite_list}` and
 `cord06::{build_rekey_chunks, seal_dissolved}` (Phase 3's mechanical part).
 `cord05::{build_direct_invite, unwrap_direct_invite}` and
-`cord06::{build_blob, open_blob}` are untouched — they use the NIP-59 and
-group-key paths, not the migrated helpers — and remain `&Keys` for Phase 3.
+`cord06::{build_blob, open_blob}` were untouched by Phase 1 — they use the NIP-59
+and group-key paths, not the migrated helpers — and were migrated in Phase 3.
 
 ### Phase 2 — app uses the signer — DONE
 
@@ -228,14 +228,28 @@ contract the registry depends on: `create` persists a state `load` returns, the
 subscription filter addresses the genesis wraps, `fold` yields the created
 community, and an inbound control edit folds over it.
 
-### Phase 3 — migrate the remaining unwired writers
+### Phase 3 — migrate the remaining unwired writers — DONE
 
-`cord05` direct invite / invite list, `cord06` blob/rekey/dissolved, when (or
-before) the flows that use them are wired. The helpers already force the
-`cord05` invite-list and `cord06` rekey/dissolved writers to be generic and
-`async` (see Phase 1); what remains is `cord05::{build_direct_invite,
-unwrap_direct_invite}` and `cord06::{build_blob, open_blob}`, plus keeping the
-`Sized` generics (no `&dyn`) for the NIP-59 paths.
+`cord05::{build_direct_invite, unwrap_direct_invite}` and
+`cord06::{build_blob, open_blob}` now take a signer. The NIP-59 pair keeps a
+`Sized` `S` (`AsyncGetPublicKey + AsyncSignEvent + AsyncNip44` to build,
+`AsyncNip44` to unwrap) because the SDK's `GiftWrapBuilder::finalize_async` and
+`UnwrappedGift::from_gift_wrap_async` are `Sized`-bounded. The blob pair is
+`AsyncGetPublicKey + AsyncNip44` to build and `AsyncNip44` to open, with `?Sized`.
+
+The blobs forced one behavior change, because a signer's NIP-44 is text-only
+(`nip44_encrypt_async(public_key, &str)`) while the blob plaintext is a
+fixed-width binary record. `build_blob` now carries that record base64-encoded
+inside the NIP-44 envelope and `open_blob` decodes it again. The record layout,
+the `locator`, and the envelope are unchanged; only the bytes inside the envelope
+differ. There are no golden vectors for blobs and no producer or consumer other
+than these two functions, so the round-trip stays self-consistent; cord06 remains
+unwired and persists nothing.
+
+Validation: `cargo test -p concord` — 46 passed, 0 failed (the 80-blob
+`a_full_send_chunk_stays_within_a_relay_event` size assertion still holds under
+the base64 record). `cargo clippy -p concord --all-targets` and
+`cargo fmt -p concord --check` are clean.
 
 ### Phase 4 — duplication and hygiene (independent, low risk)
 
@@ -282,7 +296,9 @@ Truly unreferenced even by tests (safe candidates, but kept per D1):
 
 - No mass deletion of unwired modules (D1).
 - No changes to frozen HKDF derivations, locators, golden vectors, or `cord01`
-  envelope semantics.
+  envelope semantics. The one exception Phase 3 forced is the blob plaintext
+  encoding (base64 inside the envelope, see Phase 3); the blob record layout and
+  `locator` are untouched.
 - No group-key encryption through the signer.
 - Tests move only alongside the code they cover.
 

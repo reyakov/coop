@@ -98,7 +98,7 @@ let invite = match cord05::parse_bundle_event(&event, &link.link_signer, &invite
 A Direct Invite arrives as a NIP-59 gift wrap addressed to the member:
 
 ```rust
-let (inviter, invite) = cord05::unwrap_direct_invite(&wrap, &my_keys)?;
+let (inviter, invite) = cord05::unwrap_direct_invite(&wrap, &my_keys).await?;
 ```
 
 Either way the invite carries `community_id`, `owner`, `owner_salt`,
@@ -308,7 +308,7 @@ keep it against the token in the member's own Invite List — a local document
 encrypted to self, exactly like the Community List:
 
 ```rust
-let mut list = cord05::parse_invite_list(&my_keys, &event)?;
+let mut list = cord05::parse_invite_list(&my_keys, &event).await?;
 list.entries.push(InviteEntry {
     token: HEXLOWER.encode(&token),
     signer_sk: link_signer.secret_key().to_secret_hex(),
@@ -319,7 +319,7 @@ list.entries.push(InviteEntry {
     expires_at: None,
     extra: Default::default(),
 });
-let event = cord05::build_invite_list(&my_keys, &list)?;      // kind 13303
+let event = cord05::build_invite_list(&my_keys, &list).await?;      // kind 13303
 
 // Retiring is a tombstone, never a deletion: it beats a stale copy terminally.
 list.tombstones.push(InviteTombstone {
@@ -356,12 +356,16 @@ let (control_pk, control_root) = match scope {
     RekeyScope::Channel(_) => (None, None),
 };
 
-let blobs = members
-    .iter()
-    .map(|member| {
-        cord06::build_blob(&my_keys, member, scope, plan.epoch, &new_key, control_pk.as_ref(), control_root)
-    })
-    .collect::<Result<Vec<_>, _>>()?;
+let mut blobs = Vec::with_capacity(members.len());
+
+for member in &members {
+    blobs.push(
+        cord06::build_blob(
+            &my_keys, member, scope, plan.epoch, &new_key, control_pk.as_ref(), control_root,
+        )
+        .await?,
+    );
+}
 
 let rekey_group = cord06::rekey_group(scope, &community_root, &community_id, plan.epoch)?;
 let wraps = cord06::build_rekey_chunks(
@@ -375,7 +379,8 @@ let wraps = cord06::build_rekey_chunks(
     citation,
     false,
     now_secs,
-)?;
+)
+.await?;
 ```
 
 On the receiving side, `cord06::parse_rekey_chunk(&opened)` per wrap, then
@@ -385,11 +390,15 @@ member finds their delivery with `find_my_blobs` / `open_blob`, and adopts the k
 only if the plaintext binds to the scope and epoch they expect and its `prevcommit`
 matches the key they already hold. Two concurrent rotations settle on `fork_winner`.
 
+The blob plaintext is a fixed-width binary record, but a signer's NIP-44 is
+text-only, so `build_blob` carries it base64-encoded inside the envelope.
+`open_blob` mirrors that, so the record layout and the `locator` are unchanged.
+
 Dissolution is owner-only and terminal:
 
 ```rust
 let rumor = cord06::dissolved_tombstone_rumor(owner_pk, &community_id, now_secs);
-let wrap = cord06::seal_dissolved(&rumor, &community_id, &my_keys, now_secs)?;
+let wrap = cord06::seal_dissolved(&rumor, &community_id, &my_keys, now_secs).await?;
 
 // A receiver seals the community read-only on sight.
 if cord06::verify_dissolved(&wrap, &identity) {
@@ -534,9 +543,13 @@ client.subscribe(filter).with_id(sub_id).await?;
   address changes (join, channel added, rekey folded). GPUI integration above is
   the shape to build, not code that exists.
 - **Account-key writers take any signer, not `&Keys`.** `genesis`,
-  `ControlWriter`, the guestbook and chat `seal_rumor`s and the `list` builders are
-  `async` and generic over the SDK's `AsyncGetPublicKey` / `AsyncSignEvent` /
-  `AsyncNip44` traits, so a `Keys` and an app `UniversalSigner` both work.
+  `ControlWriter`, the guestbook and chat `seal_rumor`s, the `list` builders, and
+  the `cord05` invite writers (`build_direct_invite` / `unwrap_direct_invite`,
+  `build_invite_list` / `parse_invite_list`) and `cord06` blob writers
+  (`build_blob` / `open_blob`) are `async` and generic over the SDK's
+  `AsyncGetPublicKey` / `AsyncSignEvent` / `AsyncNip44` traits, so a `Keys` and an
+  app `UniversalSigner` both work. The NIP-59 paths (`build_direct_invite`,
+  `unwrap_direct_invite`) stay `Sized` because the SDK's gift-wrap helpers are.
   Group-key and locally-held-secret writers (`cord01` wrap functions,
   `cord05::build_bundle_event`, `store`) still take the raw key material they
   genuinely need.
