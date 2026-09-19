@@ -1,8 +1,8 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AbsoluteLength, AnyElement, App, Bounds, Div, Hsla, InteractiveElement, Interactivity,
-    IntoElement, ObjectFit, ParentElement, PathBuilder, Pixels, Point, RenderOnce, SharedString,
-    StyleRefinement, Styled, StyledImage, Window, canvas, div, img, point, px,
+    AbsoluteLength, AnyElement, App, Bounds, Div, Hsla, ImageSource, InteractiveElement,
+    Interactivity, IntoElement, ObjectFit, ParentElement, PathBuilder, Pixels, Point, RenderOnce,
+    SharedString, StyleRefinement, Styled, StyledImage, Window, canvas, div, img, point, px,
 };
 use theme::ActiveTheme;
 
@@ -373,7 +373,7 @@ fn generated_avatar(seed: Option<&str>, size: Pixels) -> AnyElement {
 #[derive(IntoElement)]
 pub struct Avatar {
     base: Div,
-    picture: Option<SharedString>,
+    picture: Option<ImageSource>,
     grayscale: bool,
     seed: Option<SharedString>,
     style: StyleRefinement,
@@ -385,9 +385,18 @@ pub struct Avatar {
 impl Avatar {
     /// Creates an avatar for an entity whose profile picture may be missing.
     ///
-    /// Use [`Avatar::seed`] to choose the generated pixel avatar rendered when
-    /// `picture` is `None`.
+    /// Use [`Avatar::seed`] to choose the generated
+    /// pixel avatar rendered when `picture` is `None`.
     pub fn new(picture: Option<SharedString>) -> Self {
+        Self::from_picture(picture.map(ImageSource::from))
+    }
+
+    /// Creates an avatar from an already-resolved source.
+    pub fn from_source(picture: impl Into<ImageSource>) -> Self {
+        Self::from_picture(Some(picture.into()))
+    }
+
+    fn from_picture(picture: Option<ImageSource>) -> Self {
         Avatar {
             base: div(),
             picture,

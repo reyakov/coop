@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
 use anyhow::Result;
-use concord::cord02::ControlFold;
+use concord::cord02::{ControlFold, ImageRef};
 use concord::store::{ChannelKeyRef, CommunityState};
 use concord::{ChannelId, CommunityId, Epoch};
 use gpui::{AppContext, Context, EventEmitter, Task};
@@ -45,8 +46,11 @@ pub struct Community {
     state: CommunityState,
     control: ControlFold,
     members: BTreeSet<PublicKey>,
+    icon: Option<PathBuf>,
+    icon_ref: Option<ImageRef>,
     dirty: bool,
     refresh_task: Option<Task<Result<()>>>,
+    icon_task: Option<Task<Result<()>>>,
 }
 
 impl EventEmitter<CommunityEvent> for Community {}
@@ -57,8 +61,11 @@ impl Community {
             state,
             control: ControlFold::default(),
             members: BTreeSet::new(),
+            icon: None,
+            icon_ref: None,
             dirty: false,
             refresh_task: None,
+            icon_task: None,
         }
     }
 
@@ -71,14 +78,23 @@ impl Community {
     }
 
     pub fn name(&self) -> String {
-        match &self.control.community {
-            Some(metadata) => metadata.name.clone(),
-            None => self.state.id.to_hex(),
+        if let Some(metadata) = &self.control.community {
+            return metadata.name.clone();
         }
+
+        self.state
+            .name
+            .clone()
+            .unwrap_or_else(|| self.state.id.to_hex())
     }
 
     pub fn control(&self) -> &ControlFold {
         &self.control
+    }
+
+    /// The community's icon, once downloaded and decrypted into a cache file.
+    pub fn icon(&self) -> Option<PathBuf> {
+        self.icon.clone()
     }
 
     pub fn members(&self) -> &BTreeSet<PublicKey> {
@@ -121,6 +137,7 @@ impl Community {
                 self.state = snapshot.state;
                 self.control = snapshot.control;
                 self.members = snapshot.members;
+                self.load_icon(cx);
                 cx.emit(CommunityEvent::Updated(self.state.id));
                 cx.notify();
             }
@@ -132,5 +149,38 @@ impl Community {
             self.dirty = false;
             self.refresh(cx);
         }
+    }
+
+    /// Resolve the folded icon into a local file.
+    fn load_icon(&mut self, cx: &mut Context<Self>) {
+        let icon = self
+            .control
+            .community
+            .as_ref()
+            .and_then(|metadata| metadata.icon.clone());
+
+        if self.icon_ref == icon {
+            return;
+        }
+
+        self.icon_ref = icon.clone();
+        self.icon = None;
+
+        let Some(icon) = icon else {
+            return;
+        };
+
+        self.icon_task = Some(cx.spawn(async move |this, cx| {
+            match sync::resolve_icon(&icon, cx).await {
+                Ok(path) => {
+                    this.update(cx, |this, cx| {
+                        this.icon = Some(path);
+                        cx.notify();
+                    })?;
+                }
+                Err(error) => log::warn!("community icon: {error}"),
+            }
+            Ok(())
+        }));
     }
 }

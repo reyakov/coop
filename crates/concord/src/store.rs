@@ -154,6 +154,8 @@ pub struct ChannelKeyRef {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommunityState {
     pub id: CommunityId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub owner: PublicKey,
     pub owner_salt: [u8; 32],
     pub community_root: [u8; 32],
@@ -183,6 +185,7 @@ impl CommunityState {
         let mut channels = Vec::new();
         let mut heads = Vec::with_capacity(editions.len());
         let mut relays = Vec::new();
+        let mut name = None;
 
         for edition in editions {
             heads.push(EntityHead {
@@ -201,6 +204,7 @@ impl CommunityState {
                             .iter()
                             .filter_map(|relay| RelayUrl::parse(relay).ok()),
                     );
+                    name = label(&metadata.name);
                 }
                 vsk::CHANNEL_METADATA => {
                     let metadata: ChannelMetadata = serde_json::from_str(&edition.content)?;
@@ -228,6 +232,7 @@ impl CommunityState {
 
         Ok(Self {
             id: genesis.identity.community_id,
+            name,
             owner: genesis.identity.owner,
             owner_salt: genesis.identity.owner_salt,
             community_root: genesis.community_root,
@@ -267,6 +272,7 @@ impl CommunityState {
 
         Ok(Self {
             id: material.community_id,
+            name: label(&material.name),
             owner: material.owner,
             owner_salt: decode_hex_32(&material.owner_salt)?,
             community_root: decode_hex_32(&material.community_root)?,
@@ -310,6 +316,10 @@ impl CommunityState {
                 .iter()
                 .filter_map(|relay| RelayUrl::parse(relay).ok())
                 .collect();
+
+            if let Some(name) = label(&community.name) {
+                self.name = Some(name);
+            }
         }
 
         for (id, metadata) in &fold.channels {
@@ -371,6 +381,11 @@ pub fn list_entry(state: &CommunityState, name: &str) -> CommunityListEntry {
         added_at: state.added_at_ms,
         extra: Extra::default(),
     }
+}
+
+fn label(name: &str) -> Option<String> {
+    let trimmed = name.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 fn state_identifier(id: &CommunityId) -> String {
@@ -710,6 +725,7 @@ mod tests {
 
             let state = CommunityState {
                 id: CommunityId::from_bytes([0x42; 32]),
+                name: Some("Anime and Manga".to_owned()),
                 owner: Keys::generate().public_key(),
                 owner_salt: [0x01; 32],
                 community_root: [0x02; 32],

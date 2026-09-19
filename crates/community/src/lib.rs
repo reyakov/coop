@@ -357,7 +357,6 @@ async fn subscribe(
     relays: &[RelayUrl],
     filter: Filter,
 ) -> Result<()> {
-    log::info!("community {id}: subscribing to {relays:?}");
     client.unsubscribe(id).await?;
 
     for url in relays {

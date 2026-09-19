@@ -404,6 +404,7 @@ impl Sidebar {
                         )
                         .depth(*depth)
                         .avatar(community.id().to_hex())
+                        .picture(community.icon())
                         .into_any_element()
                     }
                     SidebarRow::NewCommunity { depth } => TreeRow::new(

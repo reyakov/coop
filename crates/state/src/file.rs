@@ -318,6 +318,63 @@ pub async fn download_and_decrypt_to_file(
     Err(anyhow!("File download not supported on web"))
 }
 
+/// The cache file a decrypted blob for `plaintext_sha256` is written to.
+#[cfg(not(target_arch = "wasm32"))]
+fn blob_cache_path(plaintext_sha256: &str) -> PathBuf {
+    std::env::temp_dir()
+        .join("coop-blobs")
+        .join(plaintext_sha256)
+}
+
+/// Download an encrypted blob whose pointer carries the *plaintext* hash
+/// and write the decrypted bytes to a content-addressed cache file,
+/// so later renders skip the network.
+///
+/// The cache file carries no extension: `img` sniffs the format from the bytes.
+#[cfg(not(target_arch = "wasm32"))]
+pub async fn download_and_decrypt_to_cache(
+    url: &Url,
+    key: &str,
+    nonce: &str,
+    plaintext_sha256: &str,
+    cx: &AsyncApp,
+) -> Result<PathBuf, Error> {
+    let path = blob_cache_path(plaintext_sha256);
+
+    if smol::fs::metadata(&path).await.is_ok() {
+        return Ok(path);
+    }
+
+    let data = download_and_decrypt(url, key, nonce, None, cx).await?;
+
+    if !sha256_hex(&data).eq_ignore_ascii_case(plaintext_sha256) {
+        bail!("Blob hash mismatch");
+    }
+
+    let Some(parent) = path.parent() else {
+        bail!("Invalid blob cache path");
+    };
+    smol::fs::create_dir_all(parent).await?;
+
+    // Write under a temporary name first, so an interrupted download is never reused
+    let partial = path.with_extension("download");
+    smol::fs::write(&partial, data).await?;
+    smol::fs::rename(&partial, &path).await?;
+
+    Ok(path)
+}
+
+#[cfg(target_arch = "wasm32")]
+pub async fn download_and_decrypt_to_cache(
+    _url: &Url,
+    _key: &str,
+    _nonce: &str,
+    _plaintext_sha256: &str,
+    _cx: &AsyncApp,
+) -> Result<PathBuf, Error> {
+    Err(anyhow!("Blob download not supported on web"))
+}
+
 fn tag_value<'a>(tags: &'a Tags, name: &str) -> Option<&'a str> {
     tags.iter()
         .find(|tag| tag.kind() == name)

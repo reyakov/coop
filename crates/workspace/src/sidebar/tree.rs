@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use chat::Room;
@@ -8,7 +9,7 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
 use theme::ActiveTheme;
-use ui::avatar::PixelAvatar;
+use ui::avatar::{Avatar, PixelAvatar};
 use ui::{Icon, IconName, Sizable, StyledExt, h_flex};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -94,6 +95,7 @@ pub struct TreeRow {
     caret: Option<IconName>,
     icon: Option<IconName>,
     avatar: Option<SharedString>,
+    picture: Option<PathBuf>,
     label: SharedString,
     count: Option<usize>,
     dot: bool,
@@ -114,6 +116,7 @@ impl TreeRow {
             caret: None,
             icon: None,
             avatar: None,
+            picture: None,
             label: label.into(),
             count: None,
             dot: false,
@@ -142,6 +145,12 @@ impl TreeRow {
         self
     }
 
+    /// Shows `picture` instead of the generated avatar.
+    pub fn picture(mut self, picture: Option<PathBuf>) -> Self {
+        self.picture = picture;
+        self
+    }
+
     pub fn count(mut self, count: usize) -> Self {
         self.count = Some(count);
         self
@@ -164,10 +173,20 @@ impl TreeRow {
 impl RenderOnce for TreeRow {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let indent = px(6. + self.depth as f32 * 14.);
-        let avatar_seed = self.avatar;
         let is_section = self.kind == TreeRowKind::Section;
         let is_community = self.kind == TreeRowKind::Community;
         let is_hint = self.kind == TreeRowKind::Hint;
+
+        let avatar = match (self.avatar, self.picture) {
+            (seed, Some(picture)) => Some(
+                Avatar::from_source(picture)
+                    .when_some(seed, |avatar, seed| avatar.seed(seed))
+                    .xsmall()
+                    .into_any_element(),
+            ),
+            (Some(seed), None) => Some(PixelAvatar::new(seed).xsmall().into_any_element()),
+            (None, None) => None,
+        };
 
         h_flex()
             .id(self.id)
@@ -189,9 +208,7 @@ impl RenderOnce for TreeRow {
             .when_some(self.icon, |this, icon| {
                 this.child(Icon::new(icon).small().text_color(cx.theme().icon_muted))
             })
-            .when_some(avatar_seed, |this, seed| {
-                this.child(PixelAvatar::new(seed).xsmall())
-            })
+            .when_some(avatar, |this, avatar| this.child(avatar))
             .child(
                 h_flex()
                     .gap_1()

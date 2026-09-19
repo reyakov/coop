@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use concord::cord01::KIND_WRAP;
 use concord::cord02::list::{CommunityList, KIND_COMMUNITY_LIST};
-use concord::cord02::{self, ControlFold};
+use concord::cord02::{self, ControlFold, ImageRef};
 use concord::cord04::AuthorityCitation;
 use concord::cord04::roles::{Permissions, citation_ok};
 use concord::derive::{
@@ -11,6 +12,7 @@ use concord::derive::{
 };
 use concord::store::{self, CommunityState};
 use concord::{ChannelId, CommunityId, Epoch, GroupKey};
+use gpui::AsyncApp;
 use nostr_sdk::prelude::*;
 use state::UniversalSigner;
 
@@ -38,6 +40,15 @@ pub fn planes(state: &CommunityState) -> Result<Vec<Plane>> {
         planes.push(Plane {
             kind: PlaneKind::Control(epoch),
             address: *address,
+            group,
+        });
+    }
+
+    if state.control_pks.is_empty() {
+        let group = control_group_key(&state.community_root, &state.id, state.root_epoch)?;
+        planes.push(Plane {
+            kind: PlaneKind::Control(state.root_epoch),
+            address: group.pk(),
             group,
         });
     }
@@ -83,6 +94,12 @@ pub fn community_of(subscription_id: &SubscriptionId) -> Option<CommunityId> {
         .strip_prefix(store::STATE_PREFIX)?
         .parse()
         .ok()
+}
+
+/// Download and decrypt a community icon into a content-addressed cache file.
+pub async fn resolve_icon(icon: &ImageRef, cx: &AsyncApp) -> Result<PathBuf> {
+    let url = Url::parse(&icon.url).context("community icon url")?;
+    state::download_and_decrypt_to_cache(&url, &icon.key, &icon.nonce, &icon.hash, cx).await
 }
 
 #[derive(Debug, Clone)]
@@ -317,6 +334,10 @@ fn refresh(mut held: CommunityState, fresh: CommunityState) -> CommunityState {
         held.control_root = fresh.control_root;
     }
 
+    if let Some(name) = fresh.name {
+        held.name = Some(name);
+    }
+
     for (epoch, address) in fresh.control_pks {
         held.control_pks.insert(epoch, address);
     }
@@ -517,6 +538,7 @@ mod tests {
 
         let state = CommunityState {
             id: CommunityId::from_bytes([0x42; 32]),
+            name: Some("Anime and Manga".to_owned()),
             owner,
             owner_salt: [0x01; 32],
             community_root: [0x02; 32],
@@ -548,9 +570,6 @@ mod tests {
 
         let planes = planes(&state).expect("planes");
 
-        // Control at the root epoch, the guestbook, and the public channel. The
-        // private channel is skipped: its address derives from the granted key,
-        // not the community_root.
         assert_eq!(planes.len(), 3);
         assert!(planes.iter().any(|plane| plane.address == control_pk));
         assert!(
@@ -580,6 +599,7 @@ mod tests {
     fn held(id: CommunityId, control_pk: PublicKey) -> CommunityState {
         CommunityState {
             id,
+            name: Some("Anime and Manga".to_owned()),
             owner: Keys::generate().public_key(),
             owner_salt: [0x01; 32],
             community_root: [0x02; 32],
