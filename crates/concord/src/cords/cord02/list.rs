@@ -183,25 +183,32 @@ pub fn merge(held: CommunityList, incoming: CommunityList) -> CommunityList {
     }
 }
 
-pub fn build_list_event(keys: &Keys, list: &CommunityList) -> Result<Event, ListError> {
+pub async fn build_list_event<S>(keys: &S, list: &CommunityList) -> Result<Event, ListError>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
+{
     list.fits()?;
 
     let json = serde_json::to_string(list).map_err(json_error)?;
-    let content = cord01::seal_to_self(keys, json.as_bytes())?;
+    let content = cord01::seal_to_self(keys, &json).await?;
 
     EventBuilder::new(Kind::Custom(KIND_COMMUNITY_LIST), content)
-        .finalize(keys)
+        .finalize_async(keys)
+        .await
         .map_err(crypto_error)
 }
 
-pub fn parse_list_event(keys: &Keys, event: &Event) -> Result<CommunityList, ListError> {
+pub async fn parse_list_event<S>(keys: &S, event: &Event) -> Result<CommunityList, ListError>
+where
+    S: AsyncGetPublicKey + AsyncNip44 + ?Sized,
+{
     if event.kind.as_u16() != KIND_COMMUNITY_LIST {
         return Err(ListError::Kind(event.kind.as_u16()));
     }
 
-    let json = cord01::open_to_self(keys, &event.content)?;
+    let json = cord01::open_to_self(keys, &event.content).await?;
 
-    serde_json::from_slice(&json).map_err(json_error)
+    serde_json::from_str(&json).map_err(json_error)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -419,18 +426,21 @@ mod tests {
             extra: Extra::default(),
         };
 
-        let event = build_list_event(&me, &mine).expect("builds");
+        let event = smol::block_on(build_list_event(&me, &mine)).expect("builds");
         assert_eq!(event.kind, Kind::Custom(KIND_COMMUNITY_LIST));
-        assert_eq!(parse_list_event(&me, &event).expect("parses"), mine);
+        assert_eq!(
+            smol::block_on(parse_list_event(&me, &event)).expect("parses"),
+            mine
+        );
         assert!(
-            !parse_list_event(&me, &event)
+            !smol::block_on(parse_list_event(&me, &event))
                 .expect("parses")
                 .is_live(&id(0x33))
         );
 
         // Only the member's own keys open it, and an unreadable list is "no news".
         let stranger = Keys::generate();
-        assert!(parse_list_event(&stranger, &event).is_err());
+        assert!(smol::block_on(parse_list_event(&stranger, &event)).is_err());
 
         // Unknown fields survive the round trip, so a republish cannot wipe them.
         let mut held = mine.clone();
@@ -440,8 +450,11 @@ mod tests {
             .current
             .extra
             .insert("held_roots".to_owned(), serde_json::json!([{"epoch": 1}]));
-        let rebuilt =
-            parse_list_event(&me, &build_list_event(&me, &held).expect("builds")).expect("parses");
+        let rebuilt = smol::block_on(parse_list_event(
+            &me,
+            &smol::block_on(build_list_event(&me, &held)).expect("builds"),
+        ))
+        .expect("parses");
         assert_eq!(rebuilt, held);
 
         // The write gate refuses an over-cap or oversized List before publishing.
@@ -459,7 +472,7 @@ mod tests {
                 .collect(),
         );
         assert!(matches!(
-            build_list_event(&me, &crowded),
+            smol::block_on(build_list_event(&me, &crowded)),
             Err(ListError::TooManyMemberships(n)) if n == MAX_MEMBERSHIPS + 1
         ));
 

@@ -1,0 +1,280 @@
+# Concord backend audit and simplification plan
+
+Audit of `crates/concord`, triggered by `CommunityRegistry` never reaching
+`subscribe`: `sync::load` found zero community state documents. Tracing that
+surfaced two separate things: the app only uses a fraction of the crate, and the
+crate's writers take a concrete `nostr::Keys`, which the app's signer can never
+produce.
+
+Sizes: ~10,500 lines total — ~6,750 production, ~3,750 tests.
+
+## Decisions taken
+
+- **D1 — Keep the unwired protocol surface.** `cord05`/`cord06`/`pins`/paging
+  stay in the tree for future use. No mass deletion. (Findings are recorded in
+  §4 for reference only.)
+- **D2 — Replace `&Keys` with a signer boundary** for account-key operations.
+  Verified feasible against the pinned SDK; design in §2.
+
+---
+
+## 1. `&Keys` cannot be replaced by a public key — but it can be replaced by a signer
+
+The original question was whether functions like `genesis` only need
+`signer.get_public_key_async()`. They do not: they sign.
+
+- `cord02::genesis` (`cords/cord02/mod.rs:117`) → `seal_edition` (`:711`) →
+  `build_seal` (`cord01.rs:217`), which signs the seal (`.finalize(author)`,
+  `cord01.rs:226`), and `wrap_seal_with` (`:247`), which signs the wrap.
+- Self-addressed documents use NIP-44 to self: `seal_to_self`
+  (`cord01.rs:201`) derives a conversation key from `keys.secret_key()`.
+
+A public key can produce neither a Schnorr signature nor an ECDH key, so
+"public-key-only" is impossible. The real defect is the **concrete type**: the
+app holds `state::UniversalSigner` (async, possibly NIP-46), and a `nostr::Keys`
+can never be conjured from it. `docs/concord-usage.md:535-536` already records
+this as a deliberate migration pass.
+
+### What the pinned SDK actually provides
+
+Pinned rev `b230cec` (`nostr` 0.45.4 / `nostr-sdk` 0.45.2):
+
+- There is **no `NostrSigner` trait in this revision.** The async signer surface
+  is three traits, all in the `nostr` crate:
+  - `AsyncGetPublicKey` — `nostr/src/key/public_key.rs:39`
+  - `AsyncSignEvent` — `nostr/src/event/mod.rs:366`
+  - `AsyncNip44` — `nostr/src/nips/nip44/traits.rs:30`
+- `Keys` implements all three (`nostr/src/key/mod.rs:298,309,342`), so tests and
+  local key holders keep working.
+- `UniversalSigner` already implements all three with
+  `Error = UniversalSignerError` (`crates/state/src/signer.rs:148-191`).
+- SDK helpers accept them:
+  - `EventBuilder::finalize_async` — `S: AsyncGetPublicKey + AsyncSignEvent + ?Sized`
+    (`nostr/src/event/builder.rs:171-193`)
+  - `GiftWrapBuilder::finalize_async` — `S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44`
+    (`nostr/src/nips/nip59.rs:334-355`)
+  - `UnwrappedGift::from_gift_wrap_async` — `T: AsyncNip44` (`nip59.rs:84-90`)
+
+So the answer is yes: pass a signer. `UniversalSigner` works as-is.
+
+### Per-function bounds, not a bundle
+
+Each function should request only the capabilities it uses. The SDK itself is
+designed this way (`UnsignedEvent::finalize_async` takes only `AsyncSignEvent`,
+`EventBuilder::finalize_async` takes `AsyncGetPublicKey + AsyncSignEvent`,
+NIP-59 takes all three).
+
+| Operation | Bounds |
+| --- | --- |
+| Sign a seal/edition/rekey wrap, author already known | `AsyncSignEvent` |
+| Build an event where the author comes from the signer | `AsyncGetPublicKey + AsyncSignEvent` |
+| To-self documents (Community List, Invite List) | `AsyncGetPublicKey + AsyncNip44`, plus `AsyncSignEvent` when the document is itself an event |
+| Decrypt-only (`parse_list_event`, `unwrap_direct_invite`) | `AsyncNip44` |
+| Rekey blob encrypt (`build_blob`) | `AsyncGetPublicKey + AsyncNip44` (no signing) |
+| Rekey blob open (`open_blob`) | `AsyncNip44` |
+| Direct invite build (`GiftWrapBuilder`) | all three |
+
+Use generics (`S: AsyncSignEvent + ?Sized`), never `&dyn`: the traits carry
+associated `Error` types, so `dyn AsyncSignEvent` would force the concrete error
+at every call site (`dyn AsyncSignEvent<Error = UniversalSignerError>`),
+defeating the abstraction. The SDK uses generics throughout for this reason.
+
+Do **not** define a supertrait bundle
+`trait Signer: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 {}`: all three
+supertraits declare an associated `Error`, so `Self::Error` becomes ambiguous,
+and the bundle forces NIP-44 onto purely-signing callers (and vice versa).
+
+Inside concord, replace `builder.finalize(&keys)` with
+`builder.finalize_async(signer).await`. `finalize_async` fetches the signer's
+public key and uses it as the event author, exactly as `finalize` did, so the
+bytes are unchanged for every caller that passes a matching signer.
+
+We deliberately **do not** pre-check the author against `rumor.pubkey` inside
+`build_seal`. The seal's author is the signer's own public key, matching the old
+`finalize` semantics; a signer that does not match the rumor is still caught by
+`open_wrap_at` as `AuthorMismatch` (`cord01.rs:328`). Pre-checking would also
+make it impossible to construct the hostile seals the cord suite relies on as
+test vectors (`cord01.rs` `hostile_wraps_are_dropped_in_order`).
+
+If the repeated `<S as ...>::Error: Error + Send + Sync + 'static` bounds
+become too noisy, the only stable-Rust way to shorten them is an owned
+error-erased trait (as the app already does with
+`crates/state/src/signer.rs:64-138`). That trades precision for brevity; keep
+per-function bounds unless the noise proves unmanageable.
+
+### What must NOT go through the signer
+
+- **Group-key NIP-44.** `cord01::{seal_bytes, open_bytes, wrap_seal,
+  wrap_seal_with, rewrap_seal}` encrypt under a `ConversationKey` derived from
+  HKDF group secrets. `AsyncNip44` can only ECDH against a public key, so group
+  encryption stays on `ConversationKey` / `GroupKey::keys()`.
+- **Wrap signatures.** Wraps are signed by the derived group signer key
+  (`GroupKey::keys()`), not the account.
+- **Locally held raw secrets.** `cord05::{build_bundle_event, build_revocation}`
+  take a generated `link_signer` whose secret the app stores as
+  `signer_sk` (`docs/concord-usage.md:306-321`). `&Keys` is correct there; the
+  app has the secret itself.
+- **Local database artifacts.** `store::{cache_rumor, save_state}` sign with the
+  internal random `LOCAL_KEYS` (`store.rs:18`). No user signer involved.
+
+### Call-site inventory
+
+Account-key sites to migrate:
+
+| Site | Today | After | Bounds |
+| --- | --- | --- | --- |
+| `cord02::genesis` (`cord02/mod.rs:117`) | `owner: &Keys` | `owner: &S` | `AsyncGetPublicKey + AsyncSignEvent` |
+| `ControlWriter::{publish, set_*}` (`cord02/mod.rs:214-425`) | `keys: &Keys` | `keys: &S` | `AsyncGetPublicKey + AsyncSignEvent` |
+| `seal_edition` (`cord02/mod.rs:711`, internal) | `owner: &Keys` | `owner: &S` | `AsyncGetPublicKey + AsyncSignEvent` |
+| `cord01::build_seal` (`cord01.rs:217`) | `author: &Keys` | `author: &S` | `AsyncGetPublicKey + AsyncSignEvent` |
+| `cord01::{seal_to_self, open_to_self}` (`:201,209`) | `keys: &Keys` | `&S`, async | `AsyncGetPublicKey + AsyncNip44` |
+| `guestbook::seal_rumor` (`guestbook.rs:186`) | `author: &Keys` | `author: &S` | `AsyncGetPublicKey + AsyncSignEvent` |
+| `cord03::seal_rumor` (`cord03.rs:295`) | `author: &Keys` | `author: &S` | `AsyncGetPublicKey + AsyncSignEvent` |
+| `list::build_list_event` (`list.rs:186`) | `keys: &Keys` | `keys: &S` | all three |
+| `list::parse_list_event` (`list.rs:197`) | `keys: &Keys` | `keys: &S` | `AsyncGetPublicKey + AsyncNip44` |
+| `cord05::{build_direct_invite, unwrap_direct_invite}` (`:451,478`) | `inviter`/`recipient: &Keys` | `&S` (stage 3) | build: all three; unwrap: `AsyncNip44` |
+| `cord05::{build_invite_list, parse_invite_list}` (`:593,604`) | `keys: &Keys` | **done** | build: all three; parse: `AsyncGetPublicKey + AsyncNip44` |
+| `cord06::build_blob` (`:302`) | `rotator: &Keys` | `rotator: &S` (stage 3) | `AsyncGetPublicKey + AsyncNip44` |
+| `cord06::open_blob` (`:319`) | `recipient: &Keys` | `recipient: &S` (stage 3) | `AsyncNip44` |
+| `cord06::{build_rekey_chunks, seal_dissolved}` (`:602,737`) | actor `&Keys` | **done** | `AsyncGetPublicKey + AsyncSignEvent` |
+
+Leave unchanged: `cord05::{build_bundle_event, build_revocation}`, all
+`cord01` wrap functions, `GroupKey::keys()`, `store::LOCAL_KEYS`.
+
+### Async ripple and tests
+
+Every migrated function becomes `async`. `smol` is already a dev-dependency of
+concord (`crates/concord/Cargo.toml:21-23`), so affected `#[test]`s become
+`smol::block_on(...)` wrappers. The app's call sites are already async
+background tasks.
+
+### Known constraints
+
+- `GiftWrapBuilder::finalize_async` and `UnwrappedGift::from_gift_wrap_async`
+  are generic over `S: Sized` (no `?Sized`), so those functions must stay
+  generic, never `&dyn`.
+- Every converted `S::Error` must be `Error + Send + Sync + 'static` for the
+  SDK helpers' `Error::other` (`nostr/src/error.rs:100-105`) and for
+  `anyhow`; `Keys::AsyncGetPublicKey::Error = Infallible`,
+  `Keys::AsyncSignEvent::Error = nostr::Error`, `UniversalSignerError`
+  (`crates/state/src/signer.rs:10-32`) all qualify.
+- `AsyncGetPublicKey` is worth requiring alongside `AsyncSignEvent` wherever the
+  author is embedded in the payload: `sign_event` signs the id of the given
+  unsigned event without rewriting its pubkey, so a mismatched signer is only
+  caught later by signature verification.
+
+---
+
+## 2. Migration plan
+
+### Phase 1 — replace `&Keys` with per-function signer bounds (no behavior change) — DONE
+
+1. No new module: change the signatures listed in the inventory table to
+   generics over the SDK traits (`S: AsyncGetPublicKey + AsyncSignEvent`,
+   `S: AsyncSignEvent`, `S: AsyncGetPublicKey + AsyncNip44`, or `S: AsyncNip44`).
+2. Migrate the live path only: `cord01::build_seal`, `cord01::{seal_to_self,
+   open_to_self}`, `seal_edition`, `genesis`, `ControlWriter`, `guestbook::
+   seal_rumor`, `cord03::seal_rumor`, `list::{build,parse}_list_event`.
+3. Update `docs/concord-usage.md` examples to take a signer.
+4. Update concord tests to `smol::block_on`; `&Keys` keeps working because it
+   implements all three traits.
+
+Validation: `cargo test -p concord` — 46 passed, 0 failed. The one behavior
+change from the plan sketch is the dropped up-front author check in §1.
+`cord01::{seal_to_self, open_to_self}` now take `&str` and return `String`
+(NIP-44 is UTF-8 text), so the `list` and invite-list callers read the plaintext
+with `serde_json::from_str`.
+
+**Unplanned but forced:** `cord01::{build_seal, seal_to_self, open_to_self}` are
+shared helpers, so the unwired callers had to be migrated in the same pass to
+keep the crate compiling: `cord05::{build_invite_list, parse_invite_list}` and
+`cord06::{build_rekey_chunks, seal_dissolved}` (Phase 3's mechanical part).
+`cord05::{build_direct_invite, unwrap_direct_invite}` and
+`cord06::{build_blob, open_blob}` are untouched — they use the NIP-59 and
+group-key paths, not the migrated helpers — and remain `&Keys` for Phase 3.
+
+### Phase 2 — app uses the signer
+
+1. `CommunityRegistry::create(&signer, …)` works with `UniversalSigner` directly
+   — no secret exposure. This is the change that makes `subscribe` fire.
+2. Remove the app-side reimplementation of `list::parse_list_event`
+   (`crates/community/src/sync.rs:154-156`) now that it accepts a signer.
+
+### Phase 3 — migrate the remaining unwired writers
+
+`cord05` direct invite / invite list, `cord06` blob/rekey/dissolved, when (or
+before) the flows that use them are wired. The helpers already force the
+`cord05` invite-list and `cord06` rekey/dissolved writers to be generic and
+`async` (see Phase 1); what remains is `cord05::{build_direct_invite,
+unwrap_direct_invite}` and `cord06::{build_blob, open_blob}`, plus keeping the
+`Sized` generics (no `&dyn`) for the NIP-59 paths.
+
+### Phase 4 — duplication and hygiene (independent, low risk)
+
+1. Add `store::load_states(client)` and delete the app-side state-document scan
+   (`crates/community/src/sync.rs:100-137`).
+2. Export the `concord/` state prefix from concord; delete the app-side copies
+   (`store.rs:26`, `sync.rs:15-16`).
+3. Collapse the duplicated tag parsers (`cord03.rs:614-654` vs
+   `guestbook.rs:496-530`) and the identical `ChatError`/`GuestbookError`
+   enums.
+4. Remove never-varied parameters where the change is local: `banned_at` from
+   `complete_memberlist` (doc admits "empty today"), `cache_rumor -> Result<()>`
+   once nothing reads the bool, `snapshot_authority`/`ephemeral`/`query_rumors
+   (until)` if no scheduled flow needs them.
+5. Tighten visibility of internal-only `pub` items in `cord04`
+   (`edition_hash`, `fold`, `FoldResult`, `bootstrap_head`, `HeadSelection`,
+   `parse_banlist`, `Role::parse`, `Grant::parse`).
+6. Fix doc drift: `backfill` arity (`docs/concord-usage.md:212`), `save_state`
+   parameter (`:487`), `init` signature (`:431-432`), and refresh the "Not wired
+   up yet" section (`:528-545`) once Phase 2 lands.
+
+---
+
+## 3. Retained-by-decision surface (reference only)
+
+Per D1 these stay, but they should be understood as unwired, not live:
+
+| Module | Approx. prod LOC | App use |
+| --- | --- | --- |
+| `cord06` rotation/refounding/dissolution | ~850 | none |
+| `cord05` invites/links/direct/list | ~650 | none (types only, via unused `list::join_material`) |
+| `cord04::pins` | ~550 | none |
+| `cord03` write path + `fold` + `plane_keys` | ~340 | only `open` / `expiration_of` |
+| guestbook / list write paths | ~240 | `open`, `coalesce`, `complete_memberlist`, `is_live` |
+| `store` paging / purge / query / load_state | ~180 | `cache_rumor`, `save_state` |
+
+Truly unreferenced even by tests (safe candidates, but kept per D1):
+`CommunityInvite::expired`, `GroupKey::pk_hex`, `From<[u8; 32]>` impls,
+`CommunityRoles::{roles, is_empty}`.
+
+---
+
+## 4. Non-goals
+
+- No mass deletion of unwired modules (D1).
+- No changes to frozen HKDF derivations, locators, golden vectors, or `cord01`
+  envelope semantics.
+- No group-key encryption through the signer.
+- Tests move only alongside the code they cover.
+
+## 5. Validation
+
+- `cargo test -p concord` after each phase; `cargo test --workspace` before
+  landing.
+- Phase 1 is behavior-preserving: the existing cord test suite is the oracle.
+- Phase 2 adds the app-level test: seed a `CommunityState` via
+  `store::save_state`, drive `CommunityRegistry`, assert a subscription is made
+  and an inbound wrap folds into the community.
+
+## 6. Immediate unblock
+
+Two options, both app-side:
+
+1. Smallest (no concord change): expose the local `Keys` the account path
+   already constructs (`crates/state/src/lib.rs:254`) and add
+   `CommunityRegistry::create` around it.
+2. Clean (needs Phase 1): `CommunityRegistry::create(&UniversalSigner, …)` with
+   no secret exposure, working for NIP-46 accounts too.
+
+Option 2 is the reason to do Phase 1.

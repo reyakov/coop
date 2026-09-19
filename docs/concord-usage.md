@@ -47,7 +47,7 @@ use concord::cord02::{self, CommunityMetadata};
 use concord::store::{self, CommunityState, save_state};
 
 let metadata = CommunityMetadata { name: "Room".into(), ..Default::default() };
-let minted = cord02::genesis(&owner_keys, &metadata, now_secs)?;
+let minted = cord02::genesis(&owner_keys, &metadata, now_secs).await?;
 
 // minted.identity    — community_id, owner, owner_salt (verify() recomputes it)
 // minted.wraps       — the two owner-signed genesis editions, already sealed
@@ -114,7 +114,7 @@ use concord::cord02::guestbook;
 
 let guestbook = guestbook_group_key(&invite.community_root, &invite.community_id, invite.root_epoch)?;
 let rumor = cord02::guestbook::build_join(my_pk, Some((creator_npub, label)), now_ms);
-let (wrap, _) = cord02::guestbook::seal_rumor(&rumor, &guestbook, &my_keys)?;
+let (wrap, _) = cord02::guestbook::seal_rumor(&rumor, &guestbook, &my_keys).await?;
 client.send_event(&wrap).to(&relays).await?;
 ```
 
@@ -159,7 +159,7 @@ use concord::derive::channel_group_key;
 
 let plane = channel_group_key(&community_root, &channel, epoch)?;   // public channel
 let rumor = build_message(my_pk, &channel, epoch, text, None, at_ms, timer);
-let (wrap, wrap_key) = cord03::seal_rumor(&rumor, &plane, &my_keys, false)?;
+let (wrap, wrap_key) = cord03::seal_rumor(&rumor, &plane, &my_keys, false).await?;
 client.send_event(&wrap).to(&relays).await?;
 ```
 
@@ -253,7 +253,7 @@ let writer = ControlWriter { author: my_pk, read: read.clone(), signer: signer.c
 let head = control.floors.get(entity).cloned();
 
 let (wrap, new_head) = writer.set_community_metadata(
-    &my_keys, &community_id, &metadata, head.as_ref(), citation, now_secs)?;
+    &my_keys, &community_id, &metadata, head.as_ref(), citation, now_secs).await?;
 ```
 
 `citation` is the `vac` the actor acts under — `None` only for the owner. Build it
@@ -405,12 +405,12 @@ A member's own memberships, synced across their devices:
 use concord::cord02::list;
 
 let material = cord02::list::join_material(&invite, staff.then_some(&control_root));
-let mut mine = cord02::list::parse_list_event(&my_keys, &event)?;
+let mut mine = cord02::list::parse_list_event(&my_keys, &event).await?;
 mine = cord02::list::merge(mine, cord02::list::CommunityList {
     entries: vec![cord02::list::CommunityListEntry { community_id, seed: material.clone(), current: material, added_at: now_ms, extra: Default::default() }],
     ..Default::default()
 });
-let event = cord02::list::build_list_event(&my_keys, &mine)?;      // kind 13302, NIP-44 to self
+let event = cord02::list::build_list_event(&my_keys, &mine).await?;      // kind 13302, NIP-44 to self
 ```
 
 `is_live(&id)` answers joined-versus-left: a tombstone is terminal until a
@@ -493,8 +493,9 @@ self.consumer = Some(cx.spawn(async move |this, cx| {
 - Do the first load in `cx.defer_in(window, ...)` so `init` returns before the
   first relay request.
 - NIP-46 signing is async: call `signer.get_public_key_async()` /
-  `sign_event_async` inside the background task. The builders still take
-  `&Keys`, so run them where device keys are available.
+  `sign_event_async` inside the background task. Every account-key writer takes
+  any signer (`Keys` or the app's `UniversalSigner`) and is `async`, so `await`
+  it there rather than requiring device keys.
 
 ### Subscriptions
 
@@ -532,8 +533,13 @@ client.subscribe(filter).with_id(sub_id).await?;
   the plane whose address it carries, and rebuilding a subscription when a plane's
   address changes (join, channel added, rekey folded). GPUI integration above is
   the shape to build, not code that exists.
-- **Every writer takes `&Keys`, not a `NostrSigner`.** NIP-46 is one deliberate
-  pass over the builders, not a per-call patch.
+- **Account-key writers take any signer, not `&Keys`.** `genesis`,
+  `ControlWriter`, the guestbook and chat `seal_rumor`s and the `list` builders are
+  `async` and generic over the SDK's `AsyncGetPublicKey` / `AsyncSignEvent` /
+  `AsyncNip44` traits, so a `Keys` and an app `UniversalSigner` both work.
+  Group-key and locally-held-secret writers (`cord01` wrap functions,
+  `cord05::build_bundle_event`, `store`) still take the raw key material they
+  genuinely need.
 - **`crates/chat/src/lib.rs::handle_notifications` treats every kind 1059 event as
   a NIP-59 gift wrap for the current user.** Concord wraps are kind 1059 too, so
   that handler must route by subscription id before any concord subscription goes

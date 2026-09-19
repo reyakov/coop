@@ -183,18 +183,21 @@ pub fn build_snapshot_chunks(
         .collect()
 }
 
-pub fn seal_rumor(
+pub async fn seal_rumor<S>(
     rumor: &UnsignedEvent,
     group: &GroupKey,
-    author: &Keys,
-) -> Result<(Event, Keys), GuestbookError> {
+    author: &S,
+) -> Result<(Event, Keys), GuestbookError>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+{
     let kind = rumor.kind.as_u16();
 
     if !is_guestbook_kind(kind) {
         return Err(GuestbookError::UnknownKind(kind));
     }
 
-    let seal = build_seal(rumor, SealForm::Encrypted, group, author)?;
+    let seal = build_seal(rumor, SealForm::Encrypted, group, author).await?;
 
     Ok(wrap_seal(&seal, group, KIND_WRAP, rumor.created_at, &[])?)
 }
@@ -556,7 +559,9 @@ mod tests {
     }
 
     fn publish(rumor: &UnsignedEvent, author: &Keys) -> GuestbookRumor {
-        let wrap = seal_rumor(rumor, &group(), author).expect("seals").0;
+        let wrap = smol::block_on(seal_rumor(rumor, &group(), author))
+            .expect("seals")
+            .0;
 
         open(&wrap, &group()).expect("opens").1
     }
@@ -826,7 +831,9 @@ mod tests {
         );
         assert!(matches!(
             open(
-                &seal_rumor(&bad_ms, &group(), &member).expect("seals").0,
+                &smol::block_on(seal_rumor(&bad_ms, &group(), &member))
+                    .expect("seals")
+                    .0,
                 &group()
             ),
             Err(GuestbookError::Stream(StreamError::BadMs))
@@ -835,7 +842,9 @@ mod tests {
         let bad_verb = build_rumor_ms(KIND_JOIN_LEAVE, member.public_key(), "maybe", vec![], AT);
         assert!(matches!(
             open(
-                &seal_rumor(&bad_verb, &group(), &member).expect("seals").0,
+                &smol::block_on(seal_rumor(&bad_verb, &group(), &member))
+                    .expect("seals")
+                    .0,
                 &group()
             ),
             Err(GuestbookError::BadTag(TAG_CONTENT))
@@ -854,7 +863,7 @@ mod tests {
         );
         assert!(matches!(
             open(
-                &seal_rumor(&ambiguous, &group(), &moderator)
+                &smol::block_on(seal_rumor(&ambiguous, &group(), &moderator))
                     .expect("seals")
                     .0,
                 &group()
@@ -876,7 +885,9 @@ mod tests {
             );
             assert!(matches!(
                 open(
-                    &seal_rumor(&rumor, &group(), &moderator).expect("seals").0,
+                    &smol::block_on(seal_rumor(&rumor, &group(), &moderator))
+                        .expect("seals")
+                        .0,
                     &group()
                 ),
                 Err(GuestbookError::BadTag(TAG_SNAP))

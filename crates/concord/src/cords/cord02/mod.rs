@@ -4,7 +4,9 @@ pub mod list;
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, bail};
-use nostr_sdk::prelude::{Event, Keys, PublicKey, Timestamp, UnsignedEvent};
+use nostr_sdk::prelude::{
+    AsyncGetPublicKey, AsyncSignEvent, Event, PublicKey, Timestamp, UnsignedEvent,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::cord01::{KIND_WRAP, SealForm, build_seal, open_wrap_at, wrap_seal_with};
@@ -114,17 +116,24 @@ pub struct CommunityGenesis {
     pub wraps: Vec<Event>,
 }
 
-pub fn genesis(
-    owner: &Keys,
+pub async fn genesis<S>(
+    owner: &S,
     metadata: &CommunityMetadata,
     at_secs: u64,
-) -> Result<CommunityGenesis> {
+) -> Result<CommunityGenesis>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+{
     let metadata_content = encode_metadata(metadata)?;
     let owner_salt = random_32()?;
+    let owner_key = owner
+        .get_public_key_async()
+        .await
+        .map_err(|error| anyhow::anyhow!("signer: {error}"))?;
 
     let identity = CommunityIdentity {
-        community_id: community_id_of(&owner.public_key().to_bytes(), &owner_salt),
-        owner: owner.public_key(),
+        community_id: community_id_of(&owner_key.to_bytes(), &owner_salt),
+        owner: owner_key,
         owner_salt,
     };
 
@@ -167,7 +176,7 @@ pub fn genesis(
     let mut wraps = Vec::with_capacity(editions.len());
 
     for edition in &editions {
-        wraps.push(seal_edition(edition, owner, &read, &signer, at_secs)?);
+        wraps.push(seal_edition(edition, owner, &read, &signer, at_secs).await?);
     }
 
     Ok(CommunityGenesis {
@@ -211,12 +220,15 @@ pub struct Edition<'a> {
 }
 
 impl ControlWriter {
-    pub fn publish(
+    pub async fn publish<S>(
         &self,
-        keys: &Keys,
+        keys: &S,
         edition: Edition<'_>,
         at_secs: u64,
-    ) -> Result<(Event, EntityHead)> {
+    ) -> Result<(Event, EntityHead)>
+    where
+        S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+    {
         let rumor = build_edition(EditionFields {
             author: self.author,
             subkind: edition.subkind,
@@ -231,20 +243,23 @@ impl ControlWriter {
         });
 
         let parsed = parse_edition(&rumor)?;
-        let wrap = seal_edition(&rumor, keys, &self.read, &self.signer, at_secs)?;
+        let wrap = seal_edition(&rumor, keys, &self.read, &self.signer, at_secs).await?;
 
         Ok((wrap, EntityHead::from(&parsed)))
     }
 
-    pub fn set_community_metadata(
+    pub async fn set_community_metadata<S>(
         &self,
-        keys: &Keys,
+        keys: &S,
         community_id: &CommunityId,
         metadata: &CommunityMetadata,
         head: Option<&EntityHead>,
         citation: Option<AuthorityCitation>,
         at_secs: u64,
-    ) -> Result<(Event, EntityHead)> {
+    ) -> Result<(Event, EntityHead)>
+    where
+        S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+    {
         let content = encode_metadata(metadata)?;
 
         self.publish(
@@ -258,17 +273,21 @@ impl ControlWriter {
             },
             at_secs,
         )
+        .await
     }
 
-    pub fn set_channel_metadata(
+    pub async fn set_channel_metadata<S>(
         &self,
-        keys: &Keys,
+        keys: &S,
         channel: &ChannelId,
         metadata: &ChannelMetadata,
         head: Option<&EntityHead>,
         citation: Option<AuthorityCitation>,
         at_secs: u64,
-    ) -> Result<(Event, EntityHead)> {
+    ) -> Result<(Event, EntityHead)>
+    where
+        S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+    {
         if metadata.name.len() > MAX_NAME_BYTES {
             bail!("channel name exceeds {MAX_NAME_BYTES} bytes");
         }
@@ -286,16 +305,20 @@ impl ControlWriter {
             },
             at_secs,
         )
+        .await
     }
 
-    pub fn set_role(
+    pub async fn set_role<S>(
         &self,
-        keys: &Keys,
+        keys: &S,
         role: &Role,
         head: Option<&EntityHead>,
         citation: Option<AuthorityCitation>,
         at_secs: u64,
-    ) -> Result<(Event, EntityHead)> {
+    ) -> Result<(Event, EntityHead)>
+    where
+        S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+    {
         if role.name.len() > MAX_NAME_BYTES {
             bail!("role name exceeds {MAX_NAME_BYTES} bytes");
         }
@@ -313,17 +336,21 @@ impl ControlWriter {
             },
             at_secs,
         )
+        .await
     }
 
-    pub fn set_grant(
+    pub async fn set_grant<S>(
         &self,
-        keys: &Keys,
+        keys: &S,
         community_id: &CommunityId,
         grant: &Grant,
         head: Option<&EntityHead>,
         citation: Option<AuthorityCitation>,
         at_secs: u64,
-    ) -> Result<(Event, EntityHead)> {
+    ) -> Result<(Event, EntityHead)>
+    where
+        S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+    {
         let content = grant.to_content()?;
 
         self.publish(
@@ -337,17 +364,21 @@ impl ControlWriter {
             },
             at_secs,
         )
+        .await
     }
 
-    pub fn set_banlist(
+    pub async fn set_banlist<S>(
         &self,
-        keys: &Keys,
+        keys: &S,
         community_id: &CommunityId,
         banned: &BTreeSet<PublicKey>,
         head: Option<&EntityHead>,
         citation: Option<AuthorityCitation>,
         at_secs: u64,
-    ) -> Result<(Event, EntityHead)> {
+    ) -> Result<(Event, EntityHead)>
+    where
+        S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+    {
         if banned.len() > MAX_BANLIST {
             bail!("banlist exceeds {MAX_BANLIST} entries");
         }
@@ -366,19 +397,23 @@ impl ControlWriter {
             },
             at_secs,
         )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn set_registry(
+    pub async fn set_registry<S>(
         &self,
-        keys: &Keys,
+        keys: &S,
         community_id: &CommunityId,
         creator: &PublicKey,
         links: &[PublicKey],
         head: Option<&EntityHead>,
         citation: Option<AuthorityCitation>,
         at_secs: u64,
-    ) -> Result<(Event, EntityHead)> {
+    ) -> Result<(Event, EntityHead)>
+    where
+        S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+    {
         let entries: Vec<String> = links
             .iter()
             .take(MAX_REGISTRY_LINKS)
@@ -397,20 +432,24 @@ impl ControlWriter {
             },
             at_secs,
         )
+        .await
     }
 
     /// The whole Pin List, in whichever of CORD-04 §7's two forms the Channel calls for.
     #[allow(clippy::too_many_arguments)]
-    pub fn set_pin_list(
+    pub async fn set_pin_list<S>(
         &self,
-        keys: &Keys,
+        keys: &S,
         community_id: &CommunityId,
         channel: &ChannelId,
         content: &str,
         head: Option<&EntityHead>,
         citation: Option<AuthorityCitation>,
         at_secs: u64,
-    ) -> Result<(Event, EntityHead)> {
+    ) -> Result<(Event, EntityHead)>
+    where
+        S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+    {
         self.publish(
             keys,
             Edition {
@@ -422,6 +461,7 @@ impl ControlWriter {
             },
             at_secs,
         )
+        .await
     }
 }
 
@@ -708,14 +748,17 @@ fn authorized_head<'a>(
     selection.head.map(|index| authorized[index])
 }
 
-fn seal_edition(
+async fn seal_edition<S>(
     edition: &UnsignedEvent,
-    owner: &Keys,
+    owner: &S,
     read: &GroupKey,
     signer: &GroupKey,
     at_secs: u64,
-) -> Result<Event> {
-    let seal = build_seal(edition, SealForm::Plaintext, read, owner)?;
+) -> Result<Event>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+{
+    let seal = build_seal(edition, SealForm::Plaintext, read, owner).await?;
 
     let (wrap, _) = wrap_seal_with(
         &seal,
@@ -731,6 +774,8 @@ fn seal_edition(
 
 #[cfg(test)]
 mod tests {
+    use nostr_sdk::prelude::Keys;
+
     use super::*;
     use crate::cord03::{self, build_message, seal_rumor};
     use crate::cord04::pins;
@@ -768,7 +813,7 @@ mod tests {
     #[test]
     fn metadata_and_channel_edits_reach_a_second_client() {
         let owner = Keys::generate();
-        let minted = genesis(&owner, &metadata("coop"), AT).expect("mints");
+        let minted = smol::block_on(genesis(&owner, &metadata("coop"), AT)).expect("mints");
         let community_id = minted.identity.community_id;
         let owner_pk = owner.public_key();
         let (read, signer) = holder(&minted);
@@ -797,33 +842,31 @@ mod tests {
             .get(minted.channel_id.as_bytes())
             .expect("head");
 
-        let (community_wrap, _) = writer
-            .set_community_metadata(
-                &owner,
-                &community_id,
-                &CommunityMetadata {
-                    relays: vec!["wss://relay.example".to_owned()],
-                    ..metadata("coop two")
-                },
-                Some(community_head),
-                None,
-                AT + 1,
-            )
-            .expect("publishes");
-        let (channel_wrap, _) = writer
-            .set_channel_metadata(
-                &owner,
-                &minted.channel_id,
-                &ChannelMetadata {
-                    name: "lobby".to_owned(),
-                    private: false,
-                    ..ChannelMetadata::default()
-                },
-                Some(channel_head),
-                None,
-                AT + 2,
-            )
-            .expect("publishes");
+        let (community_wrap, _) = smol::block_on(writer.set_community_metadata(
+            &owner,
+            &community_id,
+            &CommunityMetadata {
+                relays: vec!["wss://relay.example".to_owned()],
+                ..metadata("coop two")
+            },
+            Some(community_head),
+            None,
+            AT + 1,
+        ))
+        .expect("publishes");
+        let (channel_wrap, _) = smol::block_on(writer.set_channel_metadata(
+            &owner,
+            &minted.channel_id,
+            &ChannelMetadata {
+                name: "lobby".to_owned(),
+                private: false,
+                ..ChannelMetadata::default()
+            },
+            Some(channel_head),
+            None,
+            AT + 2,
+        ))
+        .expect("publishes");
 
         let mut edited = genesis_editions.clone();
         edited.extend(open_all(
@@ -875,7 +918,7 @@ mod tests {
     fn a_delegated_member_edits_metadata_only_under_its_own_grant() {
         let owner = Keys::generate();
         let member = Keys::generate();
-        let minted = genesis(&owner, &metadata("coop"), AT).expect("mints");
+        let minted = smol::block_on(genesis(&owner, &metadata("coop"), AT)).expect("mints");
         let community_id = minted.identity.community_id;
         let owner_pk = owner.public_key();
         let (read, signer) = holder(&minted);
@@ -896,21 +939,20 @@ mod tests {
             extra: Extra::default(),
         };
 
-        let (role_wrap, _) = writer
-            .publish(
-                &owner,
-                Edition {
-                    subkind: vsk::ROLE,
-                    entity: *role_id.as_bytes(),
-                    content: &role.to_content().expect("serializes"),
-                    head: None,
-                    citation: None,
-                },
-                AT + 1,
-            )
-            .expect("publishes");
-        let (grant_wrap, _) = writer
-            .publish(
+        let (role_wrap, _) = smol::block_on(writer.publish(
+            &owner,
+            Edition {
+                subkind: vsk::ROLE,
+                entity: *role_id.as_bytes(),
+                content: &role.to_content().expect("serializes"),
+                head: None,
+                citation: None,
+            },
+            AT + 1,
+        ))
+        .expect("publishes");
+        let (grant_wrap, _) = smol::block_on(
+            writer.publish(
                 &owner,
                 Edition {
                     subkind: vsk::GRANT,
@@ -927,8 +969,9 @@ mod tests {
                     citation: None,
                 },
                 AT + 2,
-            )
-            .expect("publishes");
+            ),
+        )
+        .expect("publishes");
 
         let mut base = open_all(&minted.wraps, &read, &signer.pk());
         base.extend(open_all(&[role_wrap, grant_wrap], &read, &signer.pk()));
@@ -959,36 +1002,34 @@ mod tests {
         };
         let content = serde_json::to_string(&metadata("coop by mod")).expect("serializes");
 
-        let (uncited, _) = member_writer
-            .publish(
-                &member,
-                Edition {
-                    subkind: vsk::COMMUNITY_METADATA,
-                    entity: *community_id.as_bytes(),
-                    content: &content,
-                    head: Some(head),
-                    citation: None,
-                },
-                AT + 3,
-            )
-            .expect("publishes");
-        let (cited, _) = member_writer
-            .publish(
-                &member,
-                Edition {
-                    subkind: vsk::COMMUNITY_METADATA,
-                    entity: *community_id.as_bytes(),
-                    content: &content,
-                    head: Some(head),
-                    citation: Some(AuthorityCitation {
-                        entity: grant.entity,
-                        version: grant.version,
-                        hash: grant.self_hash,
-                    }),
-                },
-                AT + 4,
-            )
-            .expect("publishes");
+        let (uncited, _) = smol::block_on(member_writer.publish(
+            &member,
+            Edition {
+                subkind: vsk::COMMUNITY_METADATA,
+                entity: *community_id.as_bytes(),
+                content: &content,
+                head: Some(head),
+                citation: None,
+            },
+            AT + 3,
+        ))
+        .expect("publishes");
+        let (cited, _) = smol::block_on(member_writer.publish(
+            &member,
+            Edition {
+                subkind: vsk::COMMUNITY_METADATA,
+                entity: *community_id.as_bytes(),
+                content: &content,
+                head: Some(head),
+                citation: Some(AuthorityCitation {
+                    entity: grant.entity,
+                    version: grant.version,
+                    hash: grant.self_hash,
+                }),
+            },
+            AT + 4,
+        ))
+        .expect("publishes");
 
         // Uncited, the edit claims an authority the member never showed.
         let mut forged = base.clone();
@@ -1023,7 +1064,7 @@ mod tests {
     #[test]
     fn a_pin_list_folds_under_its_coordinate_for_a_second_client() {
         let owner = Keys::generate();
-        let minted = genesis(&owner, &metadata("coop"), AT).expect("mints");
+        let minted = smol::block_on(genesis(&owner, &metadata("coop"), AT)).expect("mints");
         let community_id = minted.identity.community_id;
         let owner_pk = owner.public_key();
         let (read, signer) = holder(&minted);
@@ -1042,7 +1083,7 @@ mod tests {
             AT * 1_000,
             None,
         );
-        let (wrap, _) = seal_rumor(&rumor, &group, &author, false).expect("seals");
+        let (wrap, _) = smol::block_on(seal_rumor(&rumor, &group, &author, false)).expect("seals");
         let opened = cord03::open(&wrap, &group, &channel, ROOT_EPOCH)
             .expect("opens")
             .0;
@@ -1064,17 +1105,16 @@ mod tests {
             read: read.clone(),
             signer: signer.clone(),
         };
-        let (pin_wrap, _) = writer
-            .set_pin_list(
-                &owner,
-                &community_id,
-                &channel,
-                &content,
-                None,
-                None,
-                AT + 1,
-            )
-            .expect("publishes");
+        let (pin_wrap, _) = smol::block_on(writer.set_pin_list(
+            &owner,
+            &community_id,
+            &channel,
+            &content,
+            None,
+            None,
+            AT + 1,
+        ))
+        .expect("publishes");
 
         let mut editions = open_all(&minted.wraps, &read, &signer.pk());
         editions.extend(open_all(&[pin_wrap], &read, &signer.pk()));
@@ -1109,7 +1149,7 @@ mod tests {
     #[test]
     fn the_timer_is_never_guessed_and_the_write_caps_hold() {
         let owner = Keys::generate();
-        let minted = genesis(&owner, &metadata("coop"), AT).expect("mints");
+        let minted = smol::block_on(genesis(&owner, &metadata("coop"), AT)).expect("mints");
         let community_id = minted.identity.community_id;
         let owner_pk = owner.public_key();
         let (read, signer) = holder(&minted);
@@ -1124,10 +1164,16 @@ mod tests {
                 &owner_pk,
                 &community_id,
                 &open_all(
-                    &[writer
-                        .set_community_metadata(&owner, &community_id, metadata, None, None, AT + 1)
-                        .expect("publishes")
-                        .0],
+                    &[smol::block_on(writer.set_community_metadata(
+                        &owner,
+                        &community_id,
+                        metadata,
+                        None,
+                        None,
+                        AT + 1,
+                    ))
+                    .expect("publishes")
+                    .0],
                     &writer.read,
                     &writer.signer.pk(),
                 ),
@@ -1163,8 +1209,7 @@ mod tests {
             .map(|_| Keys::generate().public_key())
             .collect();
         assert!(
-            writer
-                .set_banlist(&owner, &community_id, &banned, None, None, AT + 2)
+            smol::block_on(writer.set_banlist(&owner, &community_id, &banned, None, None, AT + 2))
                 .is_err()
         );
 
@@ -1179,20 +1224,19 @@ mod tests {
         assert!(grant.to_content().is_err());
 
         assert!(
-            writer
-                .set_channel_metadata(
-                    &owner,
-                    &minted.channel_id,
-                    &ChannelMetadata {
-                        name: "x".repeat(MAX_NAME_BYTES + 1),
-                        private: false,
-                        ..ChannelMetadata::default()
-                    },
-                    None,
-                    None,
-                    AT + 3,
-                )
-                .is_err()
+            smol::block_on(writer.set_channel_metadata(
+                &owner,
+                &minted.channel_id,
+                &ChannelMetadata {
+                    name: "x".repeat(MAX_NAME_BYTES + 1),
+                    private: false,
+                    ..ChannelMetadata::default()
+                },
+                None,
+                None,
+                AT + 3,
+            ))
+            .is_err()
         );
     }
 }

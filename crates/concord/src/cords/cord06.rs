@@ -4,7 +4,10 @@ use std::fmt;
 use anyhow::Result;
 use data_encoding::HEXLOWER;
 use nostr::nips::nip44::v2::ConversationKey;
-use nostr_sdk::prelude::{Event, Keys, PublicKey, SecretKey, Tag, Timestamp, UnsignedEvent};
+use nostr_sdk::prelude::{
+    AsyncGetPublicKey, AsyncSignEvent, Event, Keys, PublicKey, SecretKey, Tag, Timestamp,
+    UnsignedEvent,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::cord01::{self, KIND_SEAL_PLAINTEXT, OpenedStream, SealForm, StreamError};
@@ -598,8 +601,8 @@ pub fn build_rekey_rumor(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn build_rekey_chunks(
-    rotator: &Keys,
+pub async fn build_rekey_chunks<S>(
+    rotator: &S,
     group: &GroupKey,
     scope: RekeyScope,
     new_epoch: Epoch,
@@ -609,7 +612,11 @@ pub fn build_rekey_chunks(
     citation: Option<&AuthorityCitation>,
     severed: bool,
     at_secs: u64,
-) -> Result<Vec<Event>, RekeyError> {
+) -> Result<Vec<Event>, RekeyError>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+{
+    let rotator_key = rotator.get_public_key_async().await.map_err(crypto_error)?;
     let mut groups: Vec<&[RekeyBlob]> = blobs.chunks(MAX_REKEY_BLOBS_PER_EVENT).collect();
 
     if groups.is_empty() {
@@ -621,7 +628,7 @@ pub fn build_rekey_chunks(
 
     for (index, group_blobs) in groups.into_iter().enumerate() {
         let rumor = build_rekey_rumor(
-            rotator.public_key(),
+            rotator_key,
             scope,
             new_epoch,
             prev_epoch,
@@ -633,7 +640,7 @@ pub fn build_rekey_chunks(
             at_secs,
         )?;
 
-        let seal = cord01::build_seal(&rumor, SealForm::Encrypted, group, rotator)?;
+        let seal = cord01::build_seal(&rumor, SealForm::Encrypted, group, rotator).await?;
         let (wrap, _) = cord01::wrap_seal(
             &seal,
             group,
@@ -731,14 +738,17 @@ pub fn dissolved_tombstone_rumor(
     )
 }
 
-pub fn seal_dissolved(
+pub async fn seal_dissolved<S>(
     rumor: &UnsignedEvent,
     community_id: &CommunityId,
-    owner: &Keys,
+    owner: &S,
     at_secs: u64,
-) -> Result<Event, RekeyError> {
+) -> Result<Event, RekeyError>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+{
     let group = dissolved_group_key(community_id).map_err(crypto_error)?;
-    let seal = cord01::build_seal(rumor, SealForm::Plaintext, &group, owner)?;
+    let seal = cord01::build_seal(rumor, SealForm::Plaintext, &group, owner).await?;
     let (wrap, _) = cord01::wrap_seal(
         &seal,
         &group,
@@ -1059,7 +1069,7 @@ mod tests {
 
         let group = rekey_group(scope, &ROOT, &community_id, epoch).expect("derives");
         let prior_commit = epoch_key_commitment(Epoch(0), &PRIOR_KEY);
-        let chunks = build_rekey_chunks(
+        let chunks = smol::block_on(build_rekey_chunks(
             &rotator,
             &group,
             scope,
@@ -1070,7 +1080,7 @@ mod tests {
             None,
             false,
             AT,
-        )
+        ))
         .expect("builds");
         assert_eq!(chunks.len(), 1);
 
@@ -1269,26 +1279,26 @@ mod tests {
         content: String,
         at_secs: u64,
     ) -> Event {
-        writer
-            .publish(
-                owner,
-                Edition {
-                    subkind,
-                    entity,
-                    content: &content,
-                    head: None,
-                    citation: None,
-                },
-                at_secs,
-            )
-            .expect("publishes")
-            .0
+        smol::block_on(writer.publish(
+            owner,
+            Edition {
+                subkind,
+                entity,
+                content: &content,
+                head: None,
+                citation: None,
+            },
+            at_secs,
+        ))
+        .expect("publishes")
+        .0
     }
 
     #[test]
     fn a_rotation_needs_the_permission_and_must_strictly_outrank_every_target() {
         let owner = Keys::generate();
-        let minted = genesis(&owner, &CommunityMetadata::default(), AT).expect("mints");
+        let minted =
+            smol::block_on(genesis(&owner, &CommunityMetadata::default(), AT)).expect("mints");
         let community_id = minted.identity.community_id;
         let read =
             control_group_key(&minted.community_root, &community_id, ROOT_EPOCH).expect("derives");
@@ -1426,7 +1436,7 @@ mod tests {
             })
             .collect();
 
-        let chunks = build_rekey_chunks(
+        let chunks = smol::block_on(build_rekey_chunks(
             &rotator,
             &group,
             scope,
@@ -1437,7 +1447,7 @@ mod tests {
             None,
             false,
             AT,
-        )
+        ))
         .expect("builds");
 
         assert_eq!(chunks.len(), 1, "a full send chunk is one event");
@@ -1452,7 +1462,7 @@ mod tests {
             wrapped: "x".to_owned(),
         });
 
-        let chunks = build_rekey_chunks(
+        let chunks = smol::block_on(build_rekey_chunks(
             &rotator,
             &group,
             scope,
@@ -1463,7 +1473,7 @@ mod tests {
             None,
             false,
             AT,
-        )
+        ))
         .expect("builds");
 
         assert_eq!(chunks.len(), 2, "one over the cap splits across two events");
@@ -1485,8 +1495,13 @@ mod tests {
             content: "{}",
             at_secs: AT,
         });
-        let seal =
-            cord01::build_seal(&rumor, SealForm::Plaintext, &prior_read, &owner).expect("seals");
+        let seal = smol::block_on(cord01::build_seal(
+            &rumor,
+            SealForm::Plaintext,
+            &prior_read,
+            &owner,
+        ))
+        .expect("seals");
 
         let refounding = plan_refounding(Epoch(1)).expect("plans");
         let read = refounding.read(&community_id).expect("derives");
@@ -1507,8 +1522,13 @@ mod tests {
         assert_eq!(reopened.author, owner.public_key());
 
         // Only a plaintext seal can be carried forward.
-        let encrypted =
-            cord01::build_seal(&rumor, SealForm::Encrypted, &prior_read, &owner).expect("seals");
+        let encrypted = smol::block_on(cord01::build_seal(
+            &rumor,
+            SealForm::Encrypted,
+            &prior_read,
+            &owner,
+        ))
+        .expect("seals");
         assert!(matches!(
             compact(&[encrypted], &read, &signer, AT + 1),
             Err(RekeyError::Stream(StreamError::NotRewrappable))
@@ -1527,7 +1547,8 @@ mod tests {
         };
 
         let rumor = dissolved_tombstone_rumor(owner.public_key(), &community_id, AT);
-        let wrap = seal_dissolved(&rumor, &community_id, &owner, AT).expect("seals");
+        let wrap =
+            smol::block_on(seal_dissolved(&rumor, &community_id, &owner, AT)).expect("seals");
 
         assert!(verify_dissolved(&wrap, &identity));
         assert_eq!(
@@ -1538,18 +1559,18 @@ mod tests {
         // Anyone holding the community id finds the address, but only the committed
         // owner's signature counts.
         let impostor = Keys::generate();
-        let forged = seal_dissolved(
+        let forged = smol::block_on(seal_dissolved(
             &dissolved_tombstone_rumor(impostor.public_key(), &community_id, AT),
             &community_id,
             &impostor,
             AT,
-        )
+        ))
         .expect("seals");
         assert!(!verify_dissolved(&forged, &identity));
 
         // The spec's all-zero `eid` is refused: it would let one owner's genuine
         // tombstone be re-wrapped at another of their communities and kill it.
-        let zeroed = seal_dissolved(
+        let zeroed = smol::block_on(seal_dissolved(
             &cord01::build_rumor_secs(
                 KIND_CONTROL,
                 owner.public_key(),
@@ -1563,7 +1584,7 @@ mod tests {
             &community_id,
             &owner,
             AT,
-        )
+        ))
         .expect("seals");
         assert!(matches!(
             open_dissolved(&zeroed, &community_id),

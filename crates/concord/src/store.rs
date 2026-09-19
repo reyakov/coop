@@ -461,7 +461,11 @@ mod tests {
                 at_ms,
                 None,
             );
-            relay.insert(seal_rumor(&rumor, &group, &author, false).expect("seals").0);
+            relay.insert(
+                smol::block_on(seal_rumor(&rumor, &group, &author, false))
+                    .expect("seals")
+                    .0,
+            );
         }
 
         let mut seen = BTreeSet::new();

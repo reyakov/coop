@@ -300,9 +300,6 @@ async fn subscribe(
         }
     }
 
-    // Concord wraps share kind 1059 with NIP-59 gift wraps, so an automatic
-    // target sends gossip after the plane authors as if they were DM peers.
-    // The community's own relays are the routing relays, so target them.
     let target = if relays.is_empty() {
         ReqTarget::auto(vec![filter])
     } else {

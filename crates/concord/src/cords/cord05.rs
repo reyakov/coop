@@ -590,25 +590,32 @@ pub fn merge_invite_lists(held: InviteList, incoming: InviteList) -> InviteList 
     }
 }
 
-pub fn build_invite_list(keys: &Keys, list: &InviteList) -> Result<Event, InviteError> {
+pub async fn build_invite_list<S>(keys: &S, list: &InviteList) -> Result<Event, InviteError>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
+{
     list.fits()?;
 
     let json = serde_json::to_string(list).map_err(json_error)?;
-    let content = cord01::seal_to_self(keys, json.as_bytes())?;
+    let content = cord01::seal_to_self(keys, &json).await?;
 
     EventBuilder::new(Kind::Custom(KIND_INVITE_LIST), content)
-        .finalize(keys)
+        .finalize_async(keys)
+        .await
         .map_err(crypto_error)
 }
 
-pub fn parse_invite_list(keys: &Keys, event: &Event) -> Result<InviteList, InviteError> {
+pub async fn parse_invite_list<S>(keys: &S, event: &Event) -> Result<InviteList, InviteError>
+where
+    S: AsyncGetPublicKey + AsyncNip44 + ?Sized,
+{
     if event.kind.as_u16() != KIND_INVITE_LIST {
         return Err(InviteError::Kind(event.kind.as_u16()));
     }
 
-    let json = cord01::open_to_self(keys, &event.content)?;
+    let json = cord01::open_to_self(keys, &event.content).await?;
 
-    serde_json::from_slice(&json).map_err(json_error)
+    serde_json::from_str(&json).map_err(json_error)
 }
 
 /// An entry is immutable once minted, so two copies should agree.

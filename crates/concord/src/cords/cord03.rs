@@ -292,19 +292,22 @@ pub fn build_typing(
 }
 
 /// `ephemeral` picks the 21059 wrap, which relays must not store.
-pub fn seal_rumor(
+pub async fn seal_rumor<S>(
     rumor: &UnsignedEvent,
     group: &GroupKey,
-    author: &Keys,
+    author: &S,
     ephemeral: bool,
-) -> Result<(Event, Keys), ChatError> {
+) -> Result<(Event, Keys), ChatError>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+{
     let kind = rumor.kind.as_u16();
 
     if !is_chat_kind(kind) {
         return Err(ChatError::UnknownKind(kind));
     }
 
-    let seal = build_seal(rumor, SealForm::Encrypted, group, author)?;
+    let seal = build_seal(rumor, SealForm::Encrypted, group, author).await?;
     let wrap_kind = if ephemeral {
         KIND_WRAP_EPHEMERAL
     } else {
@@ -674,7 +677,9 @@ mod tests {
     }
 
     fn sealed(rumor: &UnsignedEvent, group: &GroupKey, author: &Keys) -> Event {
-        seal_rumor(rumor, group, author, false).expect("seals").0
+        smol::block_on(seal_rumor(rumor, group, author, false))
+            .expect("seals")
+            .0
     }
 
     fn read(rumor: &UnsignedEvent, group: &GroupKey, author: &Keys, epoch: Epoch) -> ChatRumor {
@@ -949,7 +954,8 @@ mod tests {
 
         // Chat is encrypted-seal only (CORD-02 §5), and a retired kind is not a
         // chat rumor however well-formed it looks.
-        let seal = build_seal(&plain, SealForm::Plaintext, &group, &alice).expect("seals");
+        let seal =
+            smol::block_on(build_seal(&plain, SealForm::Plaintext, &group, &alice)).expect("seals");
         let (wrap, _) = wrap_seal(
             &seal,
             &group,
@@ -971,7 +977,7 @@ mod tests {
             AT,
         );
         assert!(matches!(
-            seal_rumor(&ghost, &group, &alice, false),
+            smol::block_on(seal_rumor(&ghost, &group, &alice, false)),
             Err(ChatError::UnknownKind(3300))
         ));
 
