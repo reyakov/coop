@@ -6,7 +6,7 @@ use chat::{ChatRegistry, Room, RoomKind};
 use common::DebouncedDelay;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    AnyElement, App, AppContext, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div,
     uniform_list,
 };
@@ -22,7 +22,7 @@ use ui::input::{Input, InputEvent, InputState};
 use ui::notification::Notification;
 use ui::{Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
-use crate::sidebar::RoomEntry;
+use crate::sidebar::{TreeRow, TreeRowKind};
 
 const INPUT_PLACEHOLDER: &str = "Find or start a conversation";
 
@@ -341,13 +341,16 @@ impl SearchPanel {
                     this.select(&pkey_clone, cx);
                 });
 
-                RoomEntry::new(range.start + ix)
-                    .name(profile.name())
-                    .avatar(profile.avatar())
-                    .seed(profile.avatar_seed())
-                    .on_click(handler)
-                    .selected(selected)
-                    .into_any_element()
+                TreeRow::new(
+                    ElementId::NamedInteger("search-result".into(), (range.start + ix) as u64),
+                    TreeRowKind::Room,
+                    profile.name(),
+                )
+                .avatar(profile.avatar_seed())
+                .picture(profile.avatar())
+                .on_click(handler)
+                .selected(selected)
+                .into_any_element()
             })
             .collect()
     }
@@ -379,13 +382,16 @@ impl SearchPanel {
                     this.select(&pkey_clone, cx);
                 });
 
-                RoomEntry::new(range.start + ix)
-                    .name(profile.name().trim())
-                    .avatar(profile.avatar())
-                    .seed(profile.avatar_seed())
-                    .on_click(handler)
-                    .selected(selected)
-                    .into_any_element()
+                TreeRow::new(
+                    ElementId::NamedInteger("contact".into(), (range.start + ix) as u64),
+                    TreeRowKind::Room,
+                    profile.name().trim(),
+                )
+                .avatar(profile.avatar_seed())
+                .picture(profile.avatar())
+                .on_click(handler)
+                .selected(selected)
+                .into_any_element()
             })
             .collect()
     }

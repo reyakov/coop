@@ -6,4 +6,5 @@ pub mod inbox;
 pub mod messaging_relays;
 pub mod profile;
 pub mod relay_list;
+pub mod requests;
 pub mod search;

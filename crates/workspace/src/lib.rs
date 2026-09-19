@@ -28,7 +28,8 @@ use crate::dialogs::import::ImportIdentity;
 use crate::dialogs::restore::RestoreEncryption;
 use crate::dialogs::settings;
 use crate::panels::{
-    backup, browse, contact_list, greeter, inbox, messaging_relays, profile, relay_list, search,
+    backup, browse, contact_list, greeter, inbox, messaging_relays, profile, relay_list, requests,
+    search,
 };
 use crate::sidebar::Sidebar;
 
@@ -60,6 +61,7 @@ enum Command {
     ShowBackup,
     ShowContactList,
     ShowInbox,
+    ShowRequests,
     ShowBrowse,
     ShowSearch,
 }
@@ -303,6 +305,14 @@ impl Workspace {
             }
             Command::ShowInbox => {
                 self.add_panel_to_dock(inbox::init(window, cx), DockPlacement::Center, window, cx);
+            }
+            Command::ShowRequests => {
+                self.add_panel_to_dock(
+                    requests::init(window, cx),
+                    DockPlacement::Center,
+                    window,
+                    cx,
+                );
             }
             Command::ShowBrowse => {
                 self.add_panel_to_dock(browse::init(window, cx), DockPlacement::Center, window, cx);
@@ -723,6 +733,8 @@ impl Render for Workspace {
                             .flex_shrink_0()
                             .h_full()
                             .w(SIDEBAR_WIDTH)
+                            .border_r_1()
+                            .border_color(cx.theme().border_variant)
                             .child(self.sidebar.clone()),
                     )
                     .child(self.dock.clone()),

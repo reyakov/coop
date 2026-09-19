@@ -5,10 +5,10 @@ use std::rc::Rc;
 use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
 use common::TimestampExt;
-use community::{CommunityEvent, CommunityMetadata, CommunityRegistry};
+use community::{CommunityEvent, CommunityRegistry};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
+    AnyElement, App, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
     UniformListScrollHandle, Window, div, px, retain_all, uniform_list,
 };
@@ -19,10 +19,10 @@ use state::NostrRegistry;
 use theme::{ActiveTheme, TABBAR_HEIGHT};
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
-use ui::dock::{Panel, PanelEvent};
+use ui::dock::{ClosePanel, Panel, PanelEvent};
 use ui::indicator::Indicator;
-use ui::input::{Input, InputState};
 use ui::menu::{ContextMenu, DropdownMenu, PopupMenuItem};
+use ui::modal::ModalButtonProps;
 use ui::nav_item::NavItem;
 use ui::scroll::Scrollbar;
 use ui::{
@@ -31,28 +31,22 @@ use ui::{
 };
 
 use crate::Command;
+use crate::dialogs::screening;
 
-mod entry;
 mod tree;
 
-pub(crate) use entry::RoomEntry;
-use tree::{SidebarRow, TreeRow, TreeRowKind, TreeSection};
+use tree::{SidebarRow, TreeSection};
+pub(crate) use tree::{TreeRow, TreeRowKind};
 
-/// Sidebar.
 pub struct Sidebar {
     focus_handle: FocusHandle,
     scroll_handle: UniformListScrollHandle,
-
     /// Whether there are new chat requests
     new_requests: bool,
-
     /// Expanded tree sections
     expanded: BTreeSet<TreeSection>,
-
     /// Pinned room ids, in pin order
     pinned_rooms: Vec<u64>,
-
-    /// Event subscriptions
     _subscriptions: SmallVec<[Subscription; 2]>,
 }
 
@@ -98,10 +92,6 @@ impl Sidebar {
     fn toggle_section(&mut self, section: TreeSection, cx: &mut Context<Self>) {
         if !self.expanded.remove(&section) {
             self.expanded.insert(section);
-        }
-
-        if section == TreeSection::Requests {
-            self.new_requests = false;
         }
 
         self.save_expanded(cx);
@@ -156,36 +146,6 @@ impl Sidebar {
         self.pinned_rooms.contains(&room_id)
     }
 
-    fn new_community(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Community name"));
-
-        window.open_modal(cx, move |this, _window, _cx| {
-            let name_input = name_input.clone();
-
-            this.width(px(380.))
-                .confirm()
-                .title("New community")
-                .child(Input::new(&name_input))
-                .on_ok(move |_event, _window, cx| {
-                    let name = name_input.read(cx).value().trim().to_owned();
-
-                    if name.is_empty() {
-                        return false;
-                    }
-
-                    let metadata = CommunityMetadata {
-                        name,
-                        ..CommunityMetadata::default()
-                    };
-
-                    CommunityRegistry::global(cx)
-                        .update(cx, |registry, cx| registry.create(metadata, cx));
-
-                    true
-                })
-        });
-    }
-
     fn tree_rows(&self, cx: &App) -> Vec<SidebarRow> {
         let chat = ChatRegistry::global(cx);
         let chat = chat.read(cx);
@@ -206,35 +166,11 @@ impl Sidebar {
             });
 
             if self.is_expanded(TreeSection::Pins) {
-                rows.extend(pinned.into_iter().map(|room| SidebarRow::Room {
-                    room,
-                    depth: 1,
-                    pinned: true,
-                }));
-            }
-        }
-
-        let requests = chat.rooms(&RoomKind::Request, cx);
-        rows.push(SidebarRow::Section {
-            section: TreeSection::Requests,
-            count: requests.len(),
-        });
-
-        if self.is_expanded(TreeSection::Requests) {
-            if requests.is_empty() {
-                rows.push(SidebarRow::Hint {
-                    text: "No pending requests".into(),
-                    depth: 1,
-                });
-            } else {
-                rows.extend(requests.into_iter().map(|room| {
-                    let pinned = self.is_pinned(room.read(cx).id);
-                    SidebarRow::Room {
-                        room,
-                        depth: 1,
-                        pinned,
-                    }
-                }));
+                rows.extend(
+                    pinned
+                        .into_iter()
+                        .map(|room| SidebarRow::Room { room, pinned: true }),
+                );
             }
         }
 
@@ -250,21 +186,15 @@ impl Sidebar {
             if communities.is_empty() {
                 rows.push(SidebarRow::Hint {
                     text: "No communities yet".into(),
-                    depth: 1,
                 });
             } else {
                 rows.extend(
                     communities
                         .iter()
                         .cloned()
-                        .map(|community| SidebarRow::Community {
-                            community,
-                            depth: 1,
-                        }),
+                        .map(|community| SidebarRow::Community { community }),
                 );
             }
-
-            rows.push(SidebarRow::NewCommunity { depth: 1 });
         }
 
         let messages = chat.rooms(&RoomKind::Ongoing, cx);
@@ -277,16 +207,11 @@ impl Sidebar {
             if messages.is_empty() {
                 rows.push(SidebarRow::Hint {
                     text: "No conversations yet".into(),
-                    depth: 1,
                 });
             } else {
                 rows.extend(messages.into_iter().map(|room| {
                     let pinned = self.is_pinned(room.read(cx).id);
-                    SidebarRow::Room {
-                        room,
-                        depth: 1,
-                        pinned,
-                    }
+                    SidebarRow::Room { room, pinned }
                 }));
             }
         }
@@ -321,22 +246,13 @@ impl Sidebar {
                         } else {
                             IconName::CaretRight
                         })
-                        .icon(section.icon())
                         .count(*count)
-                        .when(
-                            section == TreeSection::Requests && self.new_requests,
-                            |this| this.dot(),
-                        )
                         .on_click(cx.listener(move |this, _event, _window, cx| {
                             this.toggle_section(section, cx);
                         }))
                         .into_any_element()
                     }
-                    SidebarRow::Room {
-                        room,
-                        depth,
-                        pinned,
-                    } => {
+                    SidebarRow::Room { room, pinned } => {
                         let pinned = *pinned;
                         let room_id = room.read(cx).id;
                         let public_key = room.read(cx).display_member(cx).public_key();
@@ -346,23 +262,42 @@ impl Sidebar {
                         let kind = room.read(cx).kind;
                         let created_at = room.read(cx).created_at.to_ago();
                         let room_clone = room.clone();
+                        let sidebar = cx.entity().downgrade();
+
                         let handler = cx.listener(move |_this, _event, window, cx| {
                             ChatRegistry::global(cx).update(cx, |chat, cx| {
                                 chat.emit_room(&room_clone, window, cx);
                             });
+
+                            if kind != RoomKind::Ongoing && AppSettings::get_screening(cx) {
+                                let screening = screening::init(public_key, window, cx);
+
+                                window.open_modal(cx, move |this, _window, _cx| {
+                                    this.confirm()
+                                        .child(screening.clone())
+                                        .button_props(
+                                            ModalButtonProps::default()
+                                                .cancel_text("Ignore")
+                                                .ok_text("Response"),
+                                        )
+                                        .on_cancel(move |_event, window, cx| {
+                                            window.dispatch_action(Box::new(ClosePanel), cx);
+                                            true
+                                        })
+                                });
+                            }
                         });
 
-                        let entry = RoomEntry::new(index)
-                            .name(name)
-                            .avatar(picture)
-                            .seed(seed)
-                            .public_key(public_key)
-                            .kind(kind)
-                            .created_at(created_at)
-                            .depth(*depth)
-                            .on_click(handler);
+                        let entry = TreeRow::new(
+                            ElementId::NamedInteger("tree-row".into(), index as u64),
+                            TreeRowKind::Room,
+                            name,
+                        )
+                        .avatar(seed)
+                        .picture(picture)
+                        .created_at(created_at)
+                        .on_click(handler);
 
-                        let sidebar = cx.entity().downgrade();
                         ContextMenu::new(
                             ElementId::NamedInteger("room-context-menu".into(), index as u64),
                             entry,
@@ -394,7 +329,7 @@ impl Sidebar {
                         )
                         .into_any_element()
                     }
-                    SidebarRow::Community { community, depth } => {
+                    SidebarRow::Community { community } => {
                         let community = community.read(cx);
 
                         TreeRow::new(
@@ -402,28 +337,15 @@ impl Sidebar {
                             TreeRowKind::Community,
                             community.name(),
                         )
-                        .depth(*depth)
                         .avatar(community.id().to_hex())
                         .picture(community.icon())
                         .into_any_element()
                     }
-                    SidebarRow::NewCommunity { depth } => TreeRow::new(
-                        ElementId::NamedInteger("tree-row".into(), index as u64),
-                        TreeRowKind::Hint,
-                        "New community",
-                    )
-                    .depth(*depth)
-                    .icon(IconName::Plus)
-                    .on_click(cx.listener(|this, _event, window, cx| {
-                        this.new_community(window, cx);
-                    }))
-                    .into_any_element(),
-                    SidebarRow::Hint { text, depth } => TreeRow::new(
+                    SidebarRow::Hint { text } => TreeRow::new(
                         ElementId::NamedInteger("tree-row".into(), index as u64),
                         TreeRowKind::Hint,
                         text.clone(),
                     )
-                    .depth(*depth)
                     .into_any_element(),
                 }
             })
@@ -564,6 +486,7 @@ impl Render for Sidebar {
         let chat = ChatRegistry::global(cx);
         let loading = chat.read(cx).loading() && logged_in;
 
+        let sidebar = cx.entity().downgrade();
         let rows = Rc::new(self.tree_rows(cx));
 
         v_flex()
@@ -581,6 +504,28 @@ impl Render for Sidebar {
                             .on_click(|_event, _window, cx| {
                                 cx.dispatch_action(&Command::ShowInbox)
                             }),
+                    )
+                    .child(
+                        NavItem::new(
+                            "nav-requests",
+                            "Requests",
+                            Icon::new(IconName::Invite).small(),
+                        )
+                        .when(self.new_requests, |this| {
+                            this.suffix(div().size_1().rounded_full().bg(cx.theme().cursor))
+                        })
+                        .on_click({
+                            let sidebar = sidebar.clone();
+                            move |_event, _window, cx| {
+                                if let Err(error) = sidebar.update(cx, |this, cx| {
+                                    this.new_requests = false;
+                                    cx.notify();
+                                }) {
+                                    log::error!("Failed to clear new requests: {error}");
+                                }
+                                cx.dispatch_action(&Command::ShowRequests);
+                            }
+                        }),
                     )
                     .child(
                         NavItem::new("nav-browse", "Browse", Icon::new(IconName::Compass).small())

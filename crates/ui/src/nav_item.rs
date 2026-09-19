@@ -11,11 +11,6 @@ use theme::ActiveTheme;
 use crate::{StyledExt, h_flex};
 
 /// A single navigation entry in a sidebar.
-///
-/// It has an arbitrary leading element, such as an icon or avatar, and a text
-/// label. It can carry an optional trailing suffix, such as a status icon, and
-/// an optional click handler. Rows with a click handler are highlighted on
-/// hover and show a pointer cursor.
 #[allow(clippy::type_complexity)]
 #[derive(IntoElement)]
 pub struct NavItem {
@@ -23,7 +18,6 @@ pub struct NavItem {
     style: StyleRefinement,
     icon: AnyElement,
     label: SharedString,
-    /// Trailing element at the right edge of the row, after the ellipsized label.
     suffix: Option<AnyElement>,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
 }
