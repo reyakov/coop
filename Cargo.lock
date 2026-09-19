@@ -1314,6 +1314,7 @@ name = "concord"
 version = "1.0.2"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chacha20 0.9.1",
  "data-encoding",
  "hkdf",

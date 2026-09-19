@@ -36,6 +36,7 @@ nostr = { git = "https://github.com/rust-nostr/nostr", features = [ "nip59", "ni
 
 # Crypto (NIP-17 encrypted file messages)
 aes-gcm = "0.10"
+base64 = "0.22"
 sha2 = "0.10"
 data-encoding = "2"
 hkdf = "0.12"

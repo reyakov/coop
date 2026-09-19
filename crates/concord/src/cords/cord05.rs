@@ -11,10 +11,10 @@ use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::cord01::{self, NIP44_MAX_PLAINTEXT, StreamError};
-use crate::cord02::list::{canonical, union};
 use crate::cord02::{ImageRef, MAX_RELAYS};
 use crate::cord04::{TAG_SUBKIND, vsk};
 use crate::derive::{TOKEN_LEN, verify_community_id};
+use crate::utils::{canonical, union};
 use crate::{ChannelId, CommunityId, Epoch, Extra, decode_hex_32};
 
 pub const KIND_BUNDLE: u16 = 33301;

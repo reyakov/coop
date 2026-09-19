@@ -413,18 +413,47 @@ A member's own memberships, synced across their devices:
 ```rust
 use concord::cord02::list;
 
-let material = cord02::list::join_material(&invite, staff.then_some(&control_root));
-let mut mine = cord02::list::parse_list_event(&my_keys, &event).await?;
-mine = cord02::list::merge(mine, cord02::list::CommunityList {
-    entries: vec![cord02::list::CommunityListEntry { community_id, seed: material.clone(), current: material, added_at: now_ms, extra: Default::default() }],
-    ..Default::default()
+let material = list::join_material(&invite, staff.then_some(&control_root));
+let mut mine = list::parse_list_event(&my_keys, &event).await?;   // validates the d tag
+mine = list::merge(mine, list::CommunityList {
+    entries: vec![list::CommunityListEntry { community_id, seed: material.clone(), current: material, added_at: now_ms, extra: Default::default() }],
+    ..Default::default()                                          // frags: 1
 });
-let event = cord02::list::build_list_event(&my_keys, &mine).await?;      // kind 13302, NIP-44 to self
+let event = list::build_list_event(&my_keys, &mine, 0).await?;   // kind 33302, d = fragment 0
 ```
 
+Kind `33302` is **addressable and fragmented**: one event per fragment, its `d`
+tag the fragment index in decimal. `frags` in the payload declares how many the
+List has, and `is_complete(held_indices)` answers whether the client has a
+fragment at every index below it. `merge` resolves a `frags` disagreement to the
+larger value. (`13302`, the single-event List, is retired by the spec — a
+replaceable kind cannot fragment.)
+
+The payload's 32-byte values are **unpadded base64url at every depth**, which is
+section-scoped to §8: CORD-05 invites stay hex. The writer re-encodes them on
+every serialization, so its output is always the canonical 43-character spelling;
+the reader also accepts non-zero trailing bits, because the spec's own worked
+example contains them and no reader can tell a mis-encoded named field from a
+correct one. The codec is `utils::base64url` and the wire structs behind the
+List's `Serialize`/`Deserialize` are the only callers, so no other encoding path
+is touched.
+
+Three write-time rules are folded into serialization, so an in-memory document
+and its wire form differ:
+
+- an embedded snapshot omits `community_id` and inherits the entry's;
+- `seed` is omitted when it equals `current`, and its cosmetic fields (`name`,
+  `relays`, each channel's `name`) are overwritten from `current` first, so a
+  rename collapses the snapshots instead of forking them;
+- an entry whose `added_at` does not outrun its tombstone is omitted — the
+  tombstone alone carries the state.
+
 `is_live(&id)` answers joined-versus-left: a tombstone is terminal until a
-strictly newer join outruns it. `fits()` is the write gate — 50 memberships and
-the NIP-44 size cap, both protocol constants.
+strictly newer join outruns it. `fits()` is the write gate: 50 memberships and
+the NIP-44 plaintext cap. The 50 is a stopgap inherited from the retired
+single-event design — §8 has **no membership limit**, its only bound is the
+65,536-byte encoded event, and the real fix is to start a new fragment on write
+(see `docs/concord-community-discovery-plan.md`, Phase D).
 
 ## GPUI integration
 
@@ -545,7 +574,12 @@ client.subscribe(filter).with_id(sub_id).await?;
   re-folds on an inbound wrap. The sidebar observes the registry, logs
   `CommunityEvent::Error` through `log::error!`, and its "New community" row opens
   a name prompt that calls `CommunityRegistry::create`. `create` still persists
-  the genesis locally without publishing it to the metadata's relays.
+  the genesis locally without publishing it to the metadata's relays. Discovery
+  is local-only: `load` reads the state documents already in
+  `client.database()` and never fetches the account's CORD-02 Community List
+  (`33302`) from relays, so a fresh install — or one signing in as an account
+  that joined elsewhere — finds nothing and never subscribes. See
+  `docs/concord-community-discovery-plan.md`.
 - **Account-key writers take any signer, not `&Keys`.** `genesis`,
   `ControlWriter`, the guestbook and chat `seal_rumor`s, the `list` builders, and
   the `cord05` invite writers (`build_direct_invite` / `unwrap_direct_invite`,
