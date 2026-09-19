@@ -73,7 +73,7 @@ let editions: Vec<ParsedEdition> = minted
     .collect::<Result<_, _>>()?;
 
 let mut state = CommunityState::from_genesis(&minted, &editions, added_at_ms)?;
-save_state(database, &state).await?;
+save_state(&client, &state).await?;
 ```
 
 Put the community's relay list into `state.relays` and add those relays to the
@@ -192,7 +192,7 @@ for wrap in &wraps {
     let Ok((opened, rumor)) = cord03::open(wrap, group, &channel, *epoch) else {
         continue;
     };
-    store::cache_rumor(database, &channel, &opened).await?;
+    store::cache_rumor(&client, &channel, &opened).await?;
     rumors.push(rumor);
 }
 
@@ -209,13 +209,13 @@ let messages = fold(&rumors, Timestamp::now(), |actor, citation, author| {
 Relay history pages through the local cache:
 
 ```rust
-let page = store::backfill(client, database, &channel, &held, until, 50).await?;
-let cached = store::query_rumors(database, &channel, None, 50).await?;
+let page = store::backfill(client, &channel, &held, until, 50).await?;
+let cached = store::query_rumors(&client, &channel, None, 50).await?;
 ```
 
 `backfill` walks newest-first across every held epoch, caches what it opens, and
 stops on a short page. `query_rumors` is the read path when the group keys are
-gone. Run `store::purge_expired(database, &channel, now)` on the same cadence as
+gone. Run `store::purge_expired(client, &channel, now)` on the same cadence as
 any other local sweep — the timer is cooperative, so the local store is the
 artifact that has to forget.
 
@@ -275,7 +275,7 @@ let head_content = control.pin_content(&community_id, &channel).unwrap_or("");
 let read = cord04::pins::read_list(head_content, |epoch| channel_group_key(&root, &channel, epoch).ok());
 let content = cord04::pins::publishable(&read, channel_is_private, &plane, epoch)?;
 let (wrap, _) = writer.set_pin_list(
-    &my_keys, &community_id, &channel, &content, head, citation, now_secs)?;
+    &my_keys, &community_id, &channel, &content, head, citation, now_secs).await?;
 ```
 
 Reading is verification: `read_list` decodes either content form (public, or
@@ -428,7 +428,8 @@ the NIP-44 size cap, both protocol constants.
 
 ## GPUI integration
 
-`crates/concord` stays GPUI-free. The UI layer adds a registry global and one
+`crates/concord` stays GPUI-free; the registry and sync engine live in
+`crates/community`. That layer adds a registry global and one
 entity per community, and moves every decrypt, verification, fold and I/O off
 the foreground thread.
 
@@ -437,13 +438,13 @@ the foreground thread.
 Same shape as `ChatRegistry`:
 
 ```rust
-pub fn init(window: &mut Window, cx: &mut App) {
-    ConcordRegistry::set_global(cx.new(|cx| ConcordRegistry::new(window, cx)), cx);
+pub fn init(cx: &mut App) {
+    CommunityRegistry::set_global(cx.new(CommunityRegistry::new), cx);
 }
 
-impl ConcordRegistry {
+impl CommunityRegistry {
     pub fn global(cx: &App) -> Entity<Self> {
-        cx.global::<GlobalConcordRegistry>().0.clone()
+        cx.global::<GlobalCommunityRegistry>().0.clone()
     }
 }
 ```
@@ -452,8 +453,8 @@ Call it after `cord03::init` in `desktop/src/main.rs` and `web/src/lib.rs`, and
 subscribe to `NostrRegistry` for `SignerChanged` so the communities reset with
 the account.
 
-- `ConcordRegistry` holds `communities: Vec<Entity<Community>>`, an index by
-  `CommunityId`, and `tasks: SmallVec<[Task<Result<(), Error>>; 2]>`.
+- `CommunityRegistry` holds `communities: Vec<Entity<Community>>`, an index by
+  `CommunityId`, and `tasks: SmallVec<[Task<Result<()>>; 2]>`.
 - `Community` owns one `CommunityState`, the last `ControlFold`, the member list
   and the channel list. Views render `Entity<Community>`; no protocol state
   lives in a view.
@@ -468,7 +469,7 @@ A background task never touches an entity. It sends results through a bounded
 
 ```rust
 let (signal_tx, signal_rx) = flume::bounded::<Signal>(256);
-let database = client.database().clone();
+let client = client.clone();
 
 // Background: open, verify, fold — no entities.
 self.ingress = Some(cx.background_spawn(async move {
@@ -477,7 +478,7 @@ self.ingress = Some(cx.background_spawn(async move {
             continue;
         };
         let (opened, rumor) = cord03::open(wrap, &plane.group, &plane.channel, plane.epoch)?;
-        store::cache_rumor(database.as_ref(), &plane.channel, &opened).await?;
+        store::cache_rumor(&client, &plane.channel, &opened).await?;
         signal_tx.send_async(Signal::Chat { channel: plane.channel, rumor }).await?;
     }
     Ok(())
@@ -492,8 +493,8 @@ self.consumer = Some(cx.spawn(async move |this, cx| {
 }));
 ```
 
-- `client.database()` is a `&Arc<dyn NostrDatabase>` and `store::save_state`
-  wants `&dyn NostrDatabase`, so clone the `Arc` and pass `database.as_ref()`.
+- Every store function takes the `&Client` and reaches the database through
+  `client.database()`, so clone the `Client` into the background task.
 - Keep long-lived tasks in fields — dropping a `Task` cancels it. Assign `None`
   to an `Option<Task<_>>` before respawning it; a signer change replaces both
   the listener and the consumer.
@@ -537,11 +538,13 @@ client.subscribe(filter).with_id(sub_id).await?;
 
 ## Not wired up yet
 
-- **No registry and no sync engine.** `crates/concord` has no subscriptions, no
-  `init`, and no `Entity<Community>`; the UI owns subscribing, routing a wrap to
-  the plane whose address it carries, and rebuilding a subscription when a plane's
-  address changes (join, channel added, rekey folded). GPUI integration above is
-  the shape to build, not code that exists.
+- **`crates/concord` stays protocol-only; the registry lives in
+  `crates/community`.** `concord` has no subscriptions, no `init`, and no
+  `Entity<Community>`; `community::CommunityRegistry` owns one `Entity<Community>`
+  per state document, subscribes when a community's plane set changes, and
+  re-folds on an inbound wrap. Nothing observes `CommunityEvent` yet, and
+  `CommunityRegistry::create` persists the genesis locally without publishing it
+  to the metadata's relays.
 - **Account-key writers take any signer, not `&Keys`.** `genesis`,
   `ControlWriter`, the guestbook and chat `seal_rumor`s, the `list` builders, and
   the `cord05` invite writers (`build_direct_invite` / `unwrap_direct_invite`,

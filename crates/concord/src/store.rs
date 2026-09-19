@@ -23,7 +23,8 @@ const MARK_TAG: SingleLetterTag = SingleLetterTag::LOWERCASE_T;
 const MARK_VALUE: &str = "concord";
 const WRAP_TAG: &str = "e";
 const KIND_TAG: &str = "k";
-const STATE_PREFIX: &str = "concord/";
+/// The `concord/` namespace for locally-keyed documents.
+pub const STATE_PREFIX: &str = "concord/";
 
 /// An already-expired rumor is refused at ingest. Returns whether it was kept.
 pub async fn cache_rumor(
@@ -91,7 +92,7 @@ pub async fn purge_expired(client: &Client, channel: &ChannelId, now: Timestamp)
 }
 
 pub async fn query_rumors(
-    database: &dyn NostrDatabase,
+    client: &Client,
     channel: &ChannelId,
     until: Option<Timestamp>,
     limit: usize,
@@ -106,7 +107,7 @@ pub async fn query_rumors(
     }
 
     let mut newest: BTreeMap<String, Event> = BTreeMap::new();
-    for event in database.query(filter).await? {
+    for event in client.database().query(filter).await? {
         let Some(rumor_id) = event.tags.identifier() else {
             continue;
         };
@@ -297,19 +298,52 @@ pub async fn save_state(client: &Client, state: &CommunityState) -> Result<()> {
     Ok(())
 }
 
-pub async fn load_state<D>(database: &D, id: &CommunityId) -> Result<Option<CommunityState>>
-where
-    D: NostrDatabase + ?Sized,
-{
+pub async fn load_state(client: &Client, id: &CommunityId) -> Result<Option<CommunityState>> {
     let filter = Filter::new()
         .kind(Kind::ApplicationSpecificData)
         .identifier(state_identifier(id))
         .limit(1);
 
-    match database.query(filter).await?.into_iter().next() {
+    match client.database().query(filter).await?.into_iter().next() {
         Some(event) => Ok(Some(serde_json::from_str(&event.content)?)),
         None => Ok(None),
     }
+}
+
+/// The newest state document per community carried in the local database.
+pub async fn load_states(client: &Client) -> Result<Vec<CommunityState>> {
+    let filter = Filter::new().kind(Kind::ApplicationSpecificData);
+    let mut newest: BTreeMap<CommunityId, Event> = BTreeMap::new();
+
+    for event in client.database().query(filter).await? {
+        let Some(id) = state_document_of(&event) else {
+            continue;
+        };
+
+        match newest.get(&id) {
+            Some(existing) if existing.created_at >= event.created_at => {}
+            _ => {
+                newest.insert(id, event);
+            }
+        }
+    }
+
+    let mut states = Vec::with_capacity(newest.len());
+
+    for event in newest.into_values() {
+        match serde_json::from_str::<CommunityState>(&event.content) {
+            Ok(state) => states.push(state),
+            Err(error) => log::warn!("ignoring malformed community state {}: {error}", event.id),
+        }
+    }
+
+    Ok(states)
+}
+
+fn state_document_of(event: &Event) -> Option<CommunityId> {
+    let identifier = event.tags.identifier()?;
+    let hex = identifier.strip_prefix(STATE_PREFIX)?;
+    hex.parse().ok()
 }
 
 pub async fn backfill(
@@ -491,5 +525,44 @@ mod tests {
             contents,
             ["after the rekey", "still before", "before the rekey"]
         );
+    }
+
+    #[test]
+    fn load_states_reads_one_document_per_community_and_ignores_other_documents() {
+        smol::block_on(async {
+            let client = ClientBuilder::default()
+                .database(nostr_memory::MemoryDatabase::unbounded())
+                .build();
+
+            let state = CommunityState {
+                id: CommunityId::from_bytes([0x42; 32]),
+                owner: Keys::generate().public_key(),
+                owner_salt: [0x01; 32],
+                community_root: [0x02; 32],
+                root_epoch: Epoch(0),
+                control_root: None,
+                control_pks: BTreeMap::new(),
+                channels: Vec::new(),
+                relays: Vec::new(),
+                heads: Vec::new(),
+                banned: BTreeSet::new(),
+                dissolved: false,
+                added_at_ms: 7,
+            };
+
+            save_state(&client, &state).await.expect("saves");
+
+            // A cached rumor is also an application-specific document, but not a
+            // state document, so the prefix keeps it out of the state scan.
+            let other = EventBuilder::new(Kind::ApplicationSpecificData, "{}")
+                .tags([Tag::identifier("deadbeef")])
+                .finalize(&*LOCAL_KEYS)
+                .expect("builds");
+            client.database().save_event(&other).await.expect("saves");
+
+            let loaded = load_states(&client).await.expect("loads");
+
+            assert_eq!(loaded, vec![state]);
+        });
     }
 }

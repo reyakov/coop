@@ -1,18 +1,16 @@
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
-use std::fmt;
 
 use anyhow::Result;
 use nostr_sdk::prelude::*;
 
 use crate::cord01::{
-    KIND_WRAP, KIND_WRAP_EPHEMERAL, OpenedStream, SealForm, StreamError, build_rumor_ms,
-    build_seal, channel_binding_tags, check_channel_binding, open_wrap, resolve_ms_strict,
-    wrap_seal,
+    KIND_WRAP, KIND_WRAP_EPHEMERAL, OpenedStream, SealForm, build_rumor_ms, build_seal,
+    channel_binding_tags, check_channel_binding, open_wrap, resolve_ms_strict, wrap_seal,
 };
-use crate::cord04::{
-    AuthorityCitation, TAG_CITATION, canonical_decimal, citation_from, citation_tag,
-};
+use crate::cord04::{AuthorityCitation, canonical_decimal, citation_tag};
+pub use crate::cords::rumor::RumorError as ChatError;
+use crate::cords::rumor::{optional_citation, pubkey, tag, value};
 use crate::derive::channel_group_key;
 use crate::{ChannelId, Epoch, GroupKey, decode_hex_32};
 
@@ -35,42 +33,6 @@ const TAG_ROOT_AUTHOR: &str = "P";
 const TAG_TARGET_AUTHOR: &str = "p";
 const TAG_EXPIRATION: &str = "expiration";
 const TAG_TIMER: &str = "timer";
-
-#[derive(Debug)]
-pub enum ChatError {
-    Stream(StreamError),
-    NotEncryptedSealed,
-    UnknownKind(u16),
-    MissingTag(&'static str),
-    DuplicateTag(&'static str),
-    BadTag(&'static str),
-    /// Neither a delete nor a timer notice may be erased by the policy it carries.
-    ExemptExpiration,
-}
-
-impl fmt::Display for ChatError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ChatError::Stream(error) => write!(f, "stream: {error}"),
-            ChatError::NotEncryptedSealed => write!(f, "chat rumor must ride an encrypted seal"),
-            ChatError::UnknownKind(kind) => write!(f, "not a chat rumor kind: {kind}"),
-            ChatError::MissingTag(name) => write!(f, "missing chat tag: {name}"),
-            ChatError::DuplicateTag(name) => write!(f, "duplicate chat tag: {name}"),
-            ChatError::BadTag(name) => write!(f, "malformed chat tag: {name}"),
-            ChatError::ExemptExpiration => {
-                write!(f, "a delete or timer notice must not carry an expiration")
-            }
-        }
-    }
-}
-
-impl std::error::Error for ChatError {}
-
-impl From<StreamError> for ChatError {
-    fn from(error: StreamError) -> Self {
-        ChatError::Stream(error)
-    }
-}
 
 /// A chat event another chat event refers to: a quote, a comment's parent, a reaction's target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -579,16 +541,6 @@ fn optional_kind(rumor: &UnsignedEvent, name: &'static str) -> Result<Option<u16
         .map_err(|_| ChatError::BadTag(name))
 }
 
-fn optional_citation(rumor: &UnsignedEvent) -> Result<Option<AuthorityCitation>, ChatError> {
-    let Some(fields) = tag(rumor, TAG_CITATION)? else {
-        return Ok(None);
-    };
-
-    citation_from(fields)
-        .map(Some)
-        .ok_or(ChatError::BadTag(TAG_CITATION))
-}
-
 pub fn expiration_of(rumor: &UnsignedEvent) -> Result<Option<Timestamp>, ChatError> {
     let Some(fields) = tag(rumor, TAG_EXPIRATION)? else {
         return Ok(None);
@@ -614,51 +566,16 @@ fn reply_tag(name: &str, reply: &ReplyRef) -> Tag {
     )
 }
 
-fn tag<'a>(
-    rumor: &'a UnsignedEvent,
-    name: &'static str,
-) -> Result<Option<&'a [String]>, ChatError> {
-    let mut found: Option<&[String]> = None;
-
-    for candidate in rumor.tags.iter() {
-        let fields = candidate.as_slice();
-
-        if fields.first().map(String::as_str) != Some(name) {
-            continue;
-        }
-
-        if found.is_some() {
-            return Err(ChatError::DuplicateTag(name));
-        }
-
-        found = Some(fields);
-    }
-
-    Ok(found)
-}
-
-fn value<'a>(fields: &'a [String], name: &'static str) -> Result<&'a str, ChatError> {
-    fields
-        .get(1)
-        .map(String::as_str)
-        .ok_or(ChatError::BadTag(name))
-}
-
 fn hex_id(fields: &[String], name: &'static str) -> Result<EventId, ChatError> {
     let bytes = decode_hex_32(value(fields, name)?).map_err(|_| ChatError::BadTag(name))?;
 
     EventId::from_slice(&bytes).map_err(|_| ChatError::BadTag(name))
 }
 
-fn pubkey(hex: &str, name: &'static str) -> Result<PublicKey, ChatError> {
-    let bytes = decode_hex_32(hex).map_err(|_| ChatError::BadTag(name))?;
-
-    PublicKey::from_slice(&bytes).map_err(|_| ChatError::BadTag(name))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cord01::StreamError;
 
     const SECRET: [u8; 32] = [0x2du8; 32];
     const AT: u64 = 1_700_000_000_417;

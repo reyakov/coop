@@ -251,25 +251,36 @@ Validation: `cargo test -p concord` — 46 passed, 0 failed (the 80-blob
 the base64 record). `cargo clippy -p concord --all-targets` and
 `cargo fmt -p concord --check` are clean.
 
-### Phase 4 — duplication and hygiene (independent, low risk)
+### Phase 4 — duplication and hygiene (independent, low risk) — DONE
 
-1. Add `store::load_states(client)` and delete the app-side state-document scan
-   (`crates/community/src/sync.rs:100-137`).
-2. Export the `concord/` state prefix from concord; delete the app-side copies
-   (`store.rs:26`, `sync.rs:15-16`).
-3. Collapse the duplicated tag parsers (`cord03.rs:614-654` vs
-   `guestbook.rs:496-530`) and the identical `ChatError`/`GuestbookError`
-   enums.
-4. Remove never-varied parameters where the change is local: `banned_at` from
-   `complete_memberlist` (doc admits "empty today"), `cache_rumor -> Result<()>`
-   once nothing reads the bool, `snapshot_authority`/`ephemeral`/`query_rumors
-   (until)` if no scheduled flow needs them.
-5. Tighten visibility of internal-only `pub` items in `cord04`
-   (`edition_hash`, `fold`, `FoldResult`, `bootstrap_head`, `HeadSelection`,
-   `parse_banlist`, `Role::parse`, `Grant::parse`).
-6. Fix doc drift: `backfill` arity (`docs/concord-usage.md:212`), `save_state`
-   parameter (`:487`), `init` signature (`:431-432`), and refresh the "Not wired
-   up yet" section (`:528-545`) once Phase 2 lands.
+1. DONE — `store::load_states(client)` added (with a direct `store` test), the
+   app-side state-document scan in `sync::load` is gone.
+2. DONE — `store::STATE_PREFIX` is public; the app-side `concord/` literals are
+   gone, and subscription ids reuse the exported prefix.
+3. DONE — the shared rumor tag readers and error live in a new `cords::rumor`
+   module (`RumorError`, `tag`, `required`, `value`, `pubkey`,
+   `optional_citation`), re-exported as `cord03::ChatError` and
+   `cord02::guestbook::GuestbookError`. `cord06` keeps its own narrower
+   `RekeyError`, which the plan scoped out.
+4. RETAINED — none of the "never-varied parameters" were removed. Each is
+   load-bearing for a flow the fold or a writer already implements (D1):
+   - `complete_memberlist`'s `banned_at` is read by the fold and is exercised
+     with a non-empty map by `join_leave_kick_and_snapshot_converge_to_one_memberlist`;
+     `docs/concord-usage.md` already promises to fill it once the banlist head's
+     timestamp is plumbed through.
+   - `cache_rumor -> Result<bool>` is read by `backfill` to drop expired rumors.
+   - `coalesce`'s `snapshot_authority` gates which snapshots apply; passing
+     `None` today is a policy, not a dead parameter.
+   - `seal_rumor(ephemeral)` and the `until` cursors on `backfill`/`query_rumors`
+     select protocol modes and paging.
+5. DONE — tightened `cord04` visibility: `edition_hash`, `fold`, `FoldResult`,
+   `bootstrap_head`, `parse_banlist`, `Role::parse` and `Grant::parse` are no
+   longer `pub`. `HeadSelection` stays `pub` because the public `fold_head`
+   returns it.
+6. DONE — doc drift fixed: the store takes `&Client` throughout (including
+   `load_state`/`load_states`/`query_rumors`, not just the writers), `backfill`
+   arity, `set_pin_list`'s missing `.await`, the GPUI `init` signature and
+   registry names, and the "Not wired up yet" registry bullet.
 
 ---
 
@@ -284,7 +295,7 @@ Per D1 these stay, but they should be understood as unwired, not live:
 | `cord04::pins` | ~550 | none |
 | `cord03` write path + `fold` + `plane_keys` | ~340 | only `open` / `expiration_of` |
 | guestbook / list write paths | ~240 | `open`, `coalesce`, `complete_memberlist`, `is_live` |
-| `store` paging / purge / query / load_state | ~180 | `cache_rumor`, `save_state` |
+| `store` paging / purge / query / load_state(s) | ~180 | `cache_rumor`, `save_state`, `load_states` |
 
 Truly unreferenced even by tests (safe candidates, but kept per D1):
 `CommunityInvite::expired`, `GroupKey::pk_hex`, `From<[u8; 32]>` impls,
@@ -310,6 +321,9 @@ Truly unreferenced even by tests (safe candidates, but kept per D1):
 - Phase 2 adds the app-level test: seed a `CommunityState` via
   `store::save_state`, drive `CommunityRegistry`, assert a subscription is made
   and an inbound wrap folds into the community.
+- Phase 4: `cargo test -p concord -p community` (47 + 1 passed),
+  `cargo clippy -p concord -p community --all-targets`, and
+  `cargo fmt -p concord -p community --check` are all clean.
 
 ## 6. Immediate unblock
 

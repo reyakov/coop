@@ -80,7 +80,7 @@ pub struct CommunityEntry {
 }
 
 pub fn dummy_communities() -> &'static [CommunityEntry] {
-    // TODO(concord): replace with ConcordRegistry communities, see docs/concord-usage.md.
+    // TODO(concord): replace with CommunityRegistry communities, see docs/concord-usage.md.
     &[
         CommunityEntry {
             name: "Coop Contributors",

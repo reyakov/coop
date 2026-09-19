@@ -107,8 +107,9 @@ impl CommunityRegistry {
     /// Create a community owned by the current account and begin tracking it.
     pub fn create(&mut self, metadata: CommunityMetadata, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
+        let current_user = nostr.read(cx).current_user();
 
-        if nostr.read(cx).current_user().is_none() {
+        if current_user.is_none() {
             cx.emit(CommunityEvent::Error(
                 "cannot create a community without an account".to_owned(),
             ));

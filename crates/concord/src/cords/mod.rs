@@ -1,3 +1,5 @@
+mod rumor;
+
 pub mod cord01;
 pub mod cord02;
 pub mod cord03;

@@ -1318,6 +1318,7 @@ dependencies = [
  "data-encoding",
  "hkdf",
  "hmac 0.12.1",
+ "log",
  "nostr",
  "nostr-memory",
  "nostr-sdk",

@@ -14,9 +14,6 @@ use concord::{ChannelId, CommunityId, Epoch, GroupKey};
 use nostr_sdk::prelude::*;
 use state::UniversalSigner;
 
-const SUBSCRIPTION_PREFIX: &str = "concord/";
-const STATE_PREFIX: &str = "concord/";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PlaneKind {
     Control(Epoch),
@@ -77,13 +74,13 @@ pub fn subscription_filter(planes: &[Plane]) -> Filter {
 }
 
 pub fn subscription_id(id: &CommunityId) -> SubscriptionId {
-    SubscriptionId::new(format!("{SUBSCRIPTION_PREFIX}{}", id.to_hex()))
+    SubscriptionId::new(format!("{}{}", store::STATE_PREFIX, id.to_hex()))
 }
 
 pub fn community_of(subscription_id: &SubscriptionId) -> Option<CommunityId> {
     subscription_id
         .as_str()
-        .strip_prefix(SUBSCRIPTION_PREFIX)?
+        .strip_prefix(store::STATE_PREFIX)?
         .parse()
         .ok()
 }
@@ -130,42 +127,13 @@ pub async fn load(
     signer: &UniversalSigner,
     self_pk: PublicKey,
 ) -> Result<Vec<CommunityState>> {
-    let filter = Filter::new().kind(Kind::ApplicationSpecificData);
-    let mut newest: BTreeMap<CommunityId, Event> = BTreeMap::new();
-
-    for event in client.database().query(filter).await? {
-        let Some(id) = state_document_of(&event) else {
-            continue;
-        };
-
-        match newest.get(&id) {
-            Some(existing) if existing.created_at >= event.created_at => {}
-            _ => {
-                newest.insert(id, event);
-            }
-        }
-    }
-
-    let mut states = Vec::with_capacity(newest.len());
-
-    for event in newest.into_values() {
-        match serde_json::from_str::<CommunityState>(&event.content) {
-            Ok(state) => states.push(state),
-            Err(error) => log::warn!("ignoring malformed community state {}: {error}", event.id),
-        }
-    }
+    let mut states = store::load_states(client).await?;
 
     if let Some(list) = load_list(client, signer, self_pk).await? {
         states.retain(|state| list.is_live(&state.id));
     }
 
     Ok(states)
-}
-
-fn state_document_of(event: &Event) -> Option<CommunityId> {
-    let identifier = event.tags.identifier()?;
-    let hex = identifier.strip_prefix(STATE_PREFIX)?;
-    hex.parse().ok()
 }
 
 async fn load_list(

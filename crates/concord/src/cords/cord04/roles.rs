@@ -100,7 +100,7 @@ pub struct Role {
 }
 
 impl Role {
-    pub fn parse(content: &str) -> Option<Self> {
+    fn parse(content: &str) -> Option<Self> {
         serde_json::from_str(content).ok()
     }
 
@@ -122,7 +122,7 @@ pub struct Grant {
 }
 
 impl Grant {
-    pub fn parse(content: &str) -> Option<Self> {
+    fn parse(content: &str) -> Option<Self> {
         serde_json::from_str(content).ok()
     }
 
@@ -135,7 +135,7 @@ impl Grant {
     }
 }
 
-pub fn parse_banlist(content: &str) -> Option<Vec<PublicKey>> {
+fn parse_banlist(content: &str) -> Option<Vec<PublicKey>> {
     let entries: Vec<String> = serde_json::from_str(content).ok()?;
     let mut banned = Vec::with_capacity(entries.len());
 

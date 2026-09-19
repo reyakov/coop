@@ -1,18 +1,16 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 
 use anyhow::Result;
 use data_encoding::HEXLOWER;
 use nostr_sdk::prelude::*;
 
 use crate::cord01::{
-    KIND_WRAP, OpenedStream, SealForm, StreamError, build_rumor_ms, build_seal, open_wrap,
-    wrap_seal,
+    KIND_WRAP, OpenedStream, SealForm, build_rumor_ms, build_seal, open_wrap, wrap_seal,
 };
-use crate::cord04::{
-    AuthorityCitation, TAG_CITATION, canonical_decimal, citation_from, citation_tag,
-};
+use crate::cord04::{AuthorityCitation, canonical_decimal, citation_tag};
+pub use crate::cords::rumor::RumorError as GuestbookError;
+use crate::cords::rumor::{optional_citation, pubkey, required, value};
 use crate::{GroupKey, decode_hex_32};
 
 pub const KIND_JOIN_LEAVE: u16 = 3306;
@@ -28,41 +26,6 @@ const TAG_SNAP: &str = "snap";
 const TAG_CONTENT: &str = "content";
 const CONTENT_JOIN: &str = "join";
 const CONTENT_LEAVE: &str = "leave";
-
-#[derive(Debug)]
-pub enum GuestbookError {
-    Stream(StreamError),
-    NotEncryptedSealed,
-    UnknownKind(u16),
-    MissingTag(&'static str),
-    DuplicateTag(&'static str),
-    BadTag(&'static str),
-}
-
-impl fmt::Display for GuestbookError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            GuestbookError::Stream(error) => write!(f, "stream: {error}"),
-            GuestbookError::NotEncryptedSealed => {
-                write!(f, "guestbook rumor must ride an encrypted seal")
-            }
-            GuestbookError::UnknownKind(kind) => {
-                write!(f, "not a guestbook rumor kind: {kind}")
-            }
-            GuestbookError::MissingTag(name) => write!(f, "missing guestbook tag: {name}"),
-            GuestbookError::DuplicateTag(name) => write!(f, "duplicate guestbook tag: {name}"),
-            GuestbookError::BadTag(name) => write!(f, "malformed guestbook tag: {name}"),
-        }
-    }
-}
-
-impl std::error::Error for GuestbookError {}
-
-impl From<StreamError> for GuestbookError {
-    fn from(error: StreamError) -> Self {
-        GuestbookError::Stream(error)
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuestbookEntry {
@@ -469,73 +432,21 @@ fn snapshot_of(rumor: &UnsignedEvent) -> Result<([u8; 32], (u32, u32)), Guestboo
     Ok((snapshot_id, (index, total)))
 }
 
-fn optional_citation(rumor: &UnsignedEvent) -> Result<Option<AuthorityCitation>, GuestbookError> {
-    let Some(fields) = tag(rumor, TAG_CITATION)? else {
-        return Ok(None);
-    };
-
-    citation_from(fields)
-        .map(Some)
-        .ok_or(GuestbookError::BadTag(TAG_CITATION))
-}
-
 fn decimal(raw: &str) -> Result<u32, GuestbookError> {
     canonical_decimal(raw)
         .and_then(|value| u32::try_from(value).ok())
         .ok_or(GuestbookError::BadTag(TAG_SNAP))
 }
 
-fn required<'a>(
-    rumor: &'a UnsignedEvent,
-    name: &'static str,
-) -> Result<&'a [String], GuestbookError> {
-    tag(rumor, name)?.ok_or(GuestbookError::MissingTag(name))
-}
-
 fn tagged_pubkey(rumor: &UnsignedEvent, name: &'static str) -> Result<PublicKey, GuestbookError> {
     pubkey(value(required(rumor, name)?, name)?, name)
-}
-
-fn tag<'a>(
-    rumor: &'a UnsignedEvent,
-    name: &'static str,
-) -> Result<Option<&'a [String]>, GuestbookError> {
-    let mut found: Option<&[String]> = None;
-
-    for candidate in rumor.tags.iter() {
-        let fields = candidate.as_slice();
-
-        if fields.first().map(String::as_str) != Some(name) {
-            continue;
-        }
-
-        if found.is_some() {
-            return Err(GuestbookError::DuplicateTag(name));
-        }
-
-        found = Some(fields);
-    }
-
-    Ok(found)
-}
-
-fn value<'a>(fields: &'a [String], name: &'static str) -> Result<&'a str, GuestbookError> {
-    fields
-        .get(1)
-        .map(String::as_str)
-        .ok_or(GuestbookError::BadTag(name))
-}
-
-fn pubkey(hex: &str, name: &'static str) -> Result<PublicKey, GuestbookError> {
-    let bytes = decode_hex_32(hex).map_err(|_| GuestbookError::BadTag(name))?;
-
-    PublicKey::from_slice(&bytes).map_err(|_| GuestbookError::BadTag(name))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cord01::build_rumor_secs;
+    use crate::cord01::{StreamError, build_rumor_secs};
+    use crate::cord04::TAG_CITATION;
     use crate::derive::guestbook_group_key;
     use crate::{CommunityId, Epoch};
 
