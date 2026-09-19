@@ -79,6 +79,12 @@ save_state(&client, &state).await?;
 Put the community's relay list into `state.relays` and add those relays to the
 client explicitly — coop's client is a gossip client with no background refresh.
 
+Creating is not finished until the membership is announced. The two writes are
+independent and both best-effort: the genesis wraps go to the community's
+relays, and the membership goes to the account's own Community List (below), so a
+new device — or another client — can find the community without an invite.
+`crates/community`'s `sync::create` performs both.
+
 ## Joining
 
 An invite link resolves to a bundle:
@@ -413,14 +419,28 @@ A member's own memberships, synced across their devices:
 ```rust
 use concord::cord02::list;
 
-let material = list::join_material(&invite, staff.then_some(&control_root));
-let mut mine = list::parse_list_event(&my_keys, &event).await?;   // validates the d tag
-mine = list::merge(mine, list::CommunityList {
-    entries: vec![list::CommunityListEntry { community_id, seed: material.clone(), current: material, added_at: now_ms, extra: Default::default() }],
-    ..Default::default()                                          // frags: 1
-});
-let event = list::build_list_event(&my_keys, &mine, 0).await?;   // kind 33302, d = fragment 0
+let entry = concord::store::list_entry(&state, &metadata.name);  // state → §8 material
+let held = list::parse_list_event(&my_keys, &event).await?;       // validates the d tag
+let mine = held.joined(entry);                                    // community_id-keyed union
+let event = list::build_list_event(&my_keys, &mine, 0, now_secs).await?;  // kind 33302, d = 0
+client.send_event(&event).to_nip65().await?;                      // account's own write relays
 ```
+
+The publish needs no separate database write: `send_event` persists the event
+locally *before* it resolves targets, so the fragment is available to the
+`concord/list` read path even if every relay is unreachable.
+
+`join_material(&invite, control_root)` makes the §8 material from a CORD-05
+invite; `store::list_entry(state, name)` makes it from a `CommunityState`, and is
+what a write path uses after a create, join or rename. `joined` and `tombstoned`
+are the two mutations: both are `community_id`-keyed unions, so neither an append
+nor a leave can lose a membership the other writer has.
+
+The entry is signed by the member's real key and sealed to that same key
+(`seal_to_self`), so only the member's devices read it — a stranger's
+`parse_list_event` fails rather than returning a partial list. Publishing goes to
+the member's **NIP-65 write relays**, the same set the `concord/list`
+subscription resolves for its `author` filter.
 
 Kind `33302` is **addressable and fragmented**: one event per fragment, its `d`
 tag the fragment index in decimal. `frags` in the payload declares how many the
@@ -452,8 +472,11 @@ and its wire form differ:
 strictly newer join outruns it. `fits()` is the write gate: 50 memberships and
 the NIP-44 plaintext cap. The 50 is a stopgap inherited from the retired
 single-event design — §8 has **no membership limit**, its only bound is the
-65,536-byte encoded event, and the real fix is to start a new fragment on write
-(see `docs/concord-community-discovery-plan.md`, Phase D).
+65,536-byte encoded event, and the real fix is to start a new fragment on write.
+Until that lands, an append onto a List that already spans more than one fragment
+is refused rather than performed against a partial read, because placing a new
+membership needs a repack. The community stays local (`load` keeps a membership
+the List never mentions) and the write is deferred with a warning.
 
 Discovery is a **subscription, not a fetch**: subscribe with
 `Filter::new().kind(Kind::Custom(KIND_COMMUNITY_LIST)).author(my_pk)` and read the
@@ -581,8 +604,10 @@ client.subscribe(filter).with_id(sub_id).await?;
   per state document, subscribes when a community's plane set changes, and
   re-folds on an inbound wrap. The sidebar observes the registry, logs
   `CommunityEvent::Error` through `log::error!`, and its "New community" row opens
-  a name prompt that calls `CommunityRegistry::create`. `create` still persists
-  the genesis locally without publishing it to the metadata's relays. Discovery
+  a name prompt that calls `CommunityRegistry::create`. `create` persists the
+  genesis locally, publishes the wraps to the community's relays, and records the
+  membership in the account's Community List — all best-effort, so a relay that is
+  down warns without losing the community. Discovery
   subscribes to the account's CORD-02 Community List (`33302`) under the
   `concord/list` subscription id and reads the fragments back out of
   `client.database()` — the SDK persists a relay's event before notifying, so the
@@ -590,7 +615,8 @@ client.subscribe(filter).with_id(sub_id).await?;
   materializes a community from each live List entry (`from_join_material`) and
   keeps any state document the List does not mention, so a fresh install — or one
   signing in as an account that joined elsewhere — finds its communities. See
-  `docs/concord-community-discovery-plan.md`.
+  `docs/concord-community-discovery-plan.md` (including its note on the retired
+  `13302` the current reference client still writes).
 - **Account-key writers take any signer, not `&Keys`.** `genesis`,
   `ControlWriter`, the guestbook and chat `seal_rumor`s, the `list` builders, and
   the `cord05` invite writers (`build_direct_invite` / `unwrap_direct_invite`,

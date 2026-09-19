@@ -132,6 +132,30 @@ impl CommunityList {
         (0..self.frags).all(|index| held.contains(&index))
     }
 
+    pub fn joined(&self, entry: CommunityListEntry) -> CommunityList {
+        merge(
+            self.clone(),
+            CommunityList {
+                entries: vec![entry],
+                ..Default::default()
+            },
+        )
+    }
+
+    pub fn tombstoned(&self, community_id: CommunityId, removed_at: u64) -> CommunityList {
+        merge(
+            self.clone(),
+            CommunityList {
+                tombstones: vec![Tombstone {
+                    community_id,
+                    removed_at,
+                    extra: Extra::default(),
+                }],
+                ..Default::default()
+            },
+        )
+    }
+
     pub fn fits(&self) -> Result<(), ListError> {
         if self.entries.len() > MAX_MEMBERSHIPS {
             return Err(ListError::TooManyMemberships(self.entries.len()));
@@ -207,6 +231,7 @@ pub async fn build_list_event<S>(
     signer: &S,
     list: &CommunityList,
     fragment: u64,
+    at_secs: u64,
 ) -> Result<Event, ListError>
 where
     S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
@@ -218,6 +243,7 @@ where
 
     EventBuilder::new(Kind::Custom(KIND_COMMUNITY_LIST), content)
         .tag(Tag::identifier(fragment.to_string()))
+        .custom_created_at(Timestamp::from_secs(at_secs))
         .finalize_async(signer)
         .await
         .map_err(crypto_error)
@@ -816,7 +842,7 @@ mod tests {
             ..Default::default()
         };
 
-        let event = smol::block_on(build_list_event(&me, &mine, 1)).expect("builds");
+        let event = smol::block_on(build_list_event(&me, &mine, 1, AT_SECS)).expect("builds");
         assert_eq!(event.kind, Kind::Custom(KIND_COMMUNITY_LIST));
         assert_eq!(fragment_index(&event).expect("a fragment index"), 1);
         assert_eq!(
@@ -858,7 +884,7 @@ mod tests {
             .insert("read_key".to_owned(), serde_json::json!("aa".repeat(32)));
         let rebuilt = smol::block_on(parse_list_event(
             &me,
-            &smol::block_on(build_list_event(&me, &held, 0)).expect("builds"),
+            &smol::block_on(build_list_event(&me, &held, 0, AT_SECS)).expect("builds"),
         ))
         .expect("parses");
         assert_eq!(rebuilt, held);
@@ -878,7 +904,7 @@ mod tests {
                 .collect(),
         );
         assert!(matches!(
-            smol::block_on(build_list_event(&me, &crowded, 0)),
+            smol::block_on(build_list_event(&me, &crowded, 0, AT_SECS)),
             Err(ListError::TooManyMemberships(n)) if n == MAX_MEMBERSHIPS + 1
         ));
 
@@ -1019,4 +1045,5 @@ mod tests {
     }
 
     const AT: u64 = 1_719_800_000_000;
+    const AT_SECS: u64 = AT / 1000;
 }

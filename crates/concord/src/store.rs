@@ -3,18 +3,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 use anyhow::{Result, anyhow};
+use data_encoding::HEXLOWER;
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::cord01::{KIND_WRAP_EPHEMERAL, OpenedStream};
-use crate::cord02::list::JoinMaterial;
+use crate::cord02::list::{CommunityListEntry, JoinMaterial};
 use crate::cord02::{
     ChannelMetadata, CommunityGenesis, CommunityMetadata, ControlFold, ROOT_EPOCH,
 };
 use crate::cord03::{self, ChatRumor, plane_keys};
 use crate::cord04::{EntityHead, Floors, ParsedEdition, vsk};
+use crate::cord05::ChannelGrant;
 use crate::derive::control_signer_group_key;
-use crate::{ChannelId, CommunityId, Epoch, GroupKey, decode_hex_32};
+use crate::{ChannelId, CommunityId, Epoch, Extra, GroupKey, decode_hex_32};
 
 static LOCAL_KEYS: LazyLock<Keys> = LazyLock::new(Keys::generate);
 
@@ -334,6 +336,40 @@ impl CommunityState {
                 None => {}
             }
         }
+    }
+}
+
+pub fn list_entry(state: &CommunityState, name: &str) -> CommunityListEntry {
+    let material = JoinMaterial {
+        community_id: state.id,
+        owner: state.owner,
+        owner_salt: HEXLOWER.encode(&state.owner_salt),
+        community_root: HEXLOWER.encode(&state.community_root),
+        root_epoch: state.root_epoch,
+        control_pk: state.control_pks.get(&state.root_epoch.0).copied(),
+        control_root: state.control_root.map(|root| HEXLOWER.encode(&root)),
+        channels: state
+            .channels
+            .iter()
+            .map(|channel| ChannelGrant {
+                id: channel.id,
+                key: channel.key.map(|key| HEXLOWER.encode(&key)),
+                epoch: channel.epoch,
+                name: channel.name.clone(),
+                extra: Extra::default(),
+            })
+            .collect(),
+        relays: state.relays.iter().map(RelayUrl::to_string).collect(),
+        name: name.to_owned(),
+        extra: Extra::default(),
+    };
+
+    CommunityListEntry {
+        community_id: state.id,
+        seed: material.clone(),
+        current: material,
+        added_at: state.added_at_ms,
+        extra: Extra::default(),
     }
 }
 
