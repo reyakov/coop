@@ -27,6 +27,7 @@ impl Global for GlobalCommunityRegistry {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Signal {
     Event(CommunityId),
+    List,
 }
 
 impl EventEmitter<CommunityEvent> for CommunityRegistry {}
@@ -67,6 +68,7 @@ impl CommunityRegistry {
             if event.signer_changed() {
                 this.reset(cx);
                 this.handle_notifications(cx);
+                this.subscribe_list(cx);
                 this.load(cx);
             }
         }));
@@ -76,6 +78,7 @@ impl CommunityRegistry {
                 .update(cx, |this, cx| {
                     this.handle_notifications(cx);
                     if nostr.read(cx).current_user().is_some() {
+                        this.subscribe_list(cx);
                         this.load(cx);
                     }
                 })
@@ -161,6 +164,25 @@ impl CommunityRegistry {
         self.index.clear();
         self.synced.clear();
         cx.notify();
+    }
+
+    /// Subscribe to the account's community list.
+    fn subscribe_list(&mut self, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let signer = nostr.read(cx).signer();
+        let client = nostr.read(cx).client();
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let self_pk = signer.get_public_key_async().await?;
+
+            if let Err(error) = sync::subscribe_list(&client, self_pk).await {
+                this.update(cx, |_this, cx| {
+                    cx.emit(CommunityEvent::Error(error.to_string()));
+                })?;
+            }
+
+            Ok(())
+        }));
     }
 
     /// Discover the account's communities in the local database.
@@ -298,6 +320,11 @@ impl CommunityRegistry {
                     continue;
                 };
 
+                if sync::is_list_subscription(&subscription_id) {
+                    tx.send_async(Signal::List).await?;
+                    continue;
+                }
+
                 if event.kind != Kind::from(KIND_WRAP) {
                     continue;
                 }
@@ -313,10 +340,12 @@ impl CommunityRegistry {
         }));
 
         self.signal_consumer = Some(cx.spawn(async move |this, cx| {
-            while let Ok(Signal::Event(id)) = rx.recv_async().await {
-                this.update(cx, |this, cx| this.refresh(id, cx))?;
+            while let Ok(signal) = rx.recv_async().await {
+                match signal {
+                    Signal::Event(id) => this.update(cx, |this, cx| this.refresh(id, cx))?,
+                    Signal::List => this.update(cx, |this, cx| this.load(cx))?,
+                }
             }
-
             Ok(())
         }));
     }

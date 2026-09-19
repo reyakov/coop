@@ -121,21 +121,135 @@ where
     Ok(state)
 }
 
-/// Discovers the current account's communities from the local database.
+/// The subscription id carrying the account's own Community List.
+pub const LIST_SUBSCRIPTION: &str = "concord/list";
+
+pub fn list_subscription_id() -> SubscriptionId {
+    SubscriptionId::new(LIST_SUBSCRIPTION)
+}
+
+pub fn is_list_subscription(id: &SubscriptionId) -> bool {
+    id.as_str() == LIST_SUBSCRIPTION
+}
+
+/// Subscribes to the account's community list.
+pub async fn subscribe_list(client: &Client, self_pk: PublicKey) -> Result<()> {
+    let id = list_subscription_id();
+    client.unsubscribe(&id).await?;
+
+    let filter = Filter::new()
+        .kind(Kind::Custom(KIND_COMMUNITY_LIST))
+        .author(self_pk);
+
+    let output = client
+        .subscribe(ReqTarget::auto(vec![filter]))
+        .with_id(id)
+        .await?;
+
+    if !output.failed.is_empty() {
+        log::warn!(
+            "community list: {} relay(s) rejected the subscription",
+            output.failed.len()
+        );
+    }
+
+    Ok(())
+}
+
+/// Discovers the current account's communities: every live membership the List
+/// carries, plus any locally-held membership the List does not mention.
+///
+/// A held membership is dropped only when the List carries a tombstone at least
+/// as new as it, because absence from the List is never a fact (§8).
 pub async fn load(
     client: &Client,
     signer: &UniversalSigner,
     self_pk: PublicKey,
 ) -> Result<Vec<CommunityState>> {
-    let mut states = store::load_states(client).await?;
+    let list = match load_list(client, signer, self_pk).await? {
+        Some(list) => list,
+        None => return store::load_states(client).await,
+    };
 
-    if let Some(list) = load_list(client, signer, self_pk).await? {
-        states.retain(|state| list.is_live(&state.id));
+    let mut held: BTreeMap<CommunityId, CommunityState> = store::load_states(client)
+        .await?
+        .into_iter()
+        .map(|state| (state.id, state))
+        .collect();
+
+    held.retain(|id, state| !retired(&list, id, state.added_at_ms));
+
+    for entry in &list.entries {
+        if !list.is_live(&entry.community_id) {
+            continue;
+        }
+
+        let fresh = match CommunityState::from_join_material(&entry.current, entry.added_at) {
+            Ok(fresh) => fresh,
+            Err(error) => {
+                log::warn!(
+                    "ignoring unreadable community {} from the list: {error}",
+                    entry.community_id.to_hex()
+                );
+                continue;
+            }
+        };
+
+        let state = match held.remove(&entry.community_id) {
+            Some(materialized) => refresh(materialized, fresh),
+            None => fresh,
+        };
+
+        store::save_state(client, &state).await?;
+        held.insert(entry.community_id, state);
     }
 
-    Ok(states)
+    Ok(held.into_values().collect())
 }
 
+fn retired(list: &CommunityList, id: &CommunityId, added_at_ms: u64) -> bool {
+    list.tombstones
+        .iter()
+        .find(|tombstone| tombstone.community_id == *id)
+        .is_some_and(|tombstone| tombstone.removed_at >= added_at_ms)
+}
+
+fn refresh(mut held: CommunityState, fresh: CommunityState) -> CommunityState {
+    held.owner = fresh.owner;
+    held.owner_salt = fresh.owner_salt;
+    held.community_root = fresh.community_root;
+    held.root_epoch = fresh.root_epoch;
+    held.added_at_ms = fresh.added_at_ms;
+
+    if fresh.control_root.is_some() {
+        held.control_root = fresh.control_root;
+    }
+
+    for (epoch, address) in fresh.control_pks {
+        held.control_pks.insert(epoch, address);
+    }
+
+    held.relays = fresh.relays;
+
+    for channel in fresh.channels {
+        match held.channels.iter_mut().find(|held| held.id == channel.id) {
+            Some(held) => {
+                held.name = channel.name;
+                held.epoch = channel.epoch;
+
+                if channel.private {
+                    held.private = true;
+                    held.key = channel.key;
+                }
+            }
+            None => held.channels.push(channel),
+        }
+    }
+
+    held
+}
+
+/// Every fragment of the account's list in the local database, merged.
 async fn load_list(
     client: &Client,
     signer: &UniversalSigner,
@@ -143,14 +257,40 @@ async fn load_list(
 ) -> Result<Option<CommunityList>> {
     let filter = Filter::new()
         .kind(Kind::Custom(KIND_COMMUNITY_LIST))
-        .author(self_pk)
-        .limit(1);
+        .author(self_pk);
 
-    let Some(event) = client.database().query(filter).await?.into_iter().next() else {
-        return Ok(None);
-    };
+    let mut newest: BTreeMap<u64, Event> = BTreeMap::new();
 
-    Ok(Some(cord02::list::parse_list_event(signer, &event).await?))
+    for event in client.database().query(filter).await? {
+        let Ok(index) = cord02::list::fragment_index(&event) else {
+            continue;
+        };
+
+        match newest.get(&index) {
+            Some(existing) if existing.created_at >= event.created_at => {}
+            _ => {
+                newest.insert(index, event);
+            }
+        }
+    }
+
+    let mut merged: Option<CommunityList> = None;
+
+    for event in newest.into_values() {
+        match cord02::list::parse_list_event(signer, &event).await {
+            Ok(list) => {
+                merged = Some(match merged {
+                    Some(held) => cord02::list::merge(held, list),
+                    None => list,
+                });
+            }
+            Err(error) => {
+                log::warn!("ignoring unreadable community list {}: {error}", event.id);
+            }
+        }
+    }
+
+    Ok(merged)
 }
 
 /// Rebuilds a community from the wraps already in the local database.

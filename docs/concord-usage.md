@@ -455,6 +455,14 @@ single-event design — §8 has **no membership limit**, its only bound is the
 65,536-byte encoded event, and the real fix is to start a new fragment on write
 (see `docs/concord-community-discovery-plan.md`, Phase D).
 
+Discovery is a **subscription, not a fetch**: subscribe with
+`Filter::new().kind(Kind::Custom(KIND_COMMUNITY_LIST)).author(my_pk)` and read the
+fragments back out of `client.database()`. The client persists a relay's event
+before it notifies, so a subscription plus a database read loses nothing and
+needs no explicit save. Parse each event with `parse_list_event`, keep the newest
+per `fragment_index`, and `merge` them — reading an incomplete List is safe, since
+a missing fragment is only news not yet heard.
+
 ## GPUI integration
 
 `crates/concord` stays GPUI-free; the registry and sync engine live in
@@ -575,10 +583,13 @@ client.subscribe(filter).with_id(sub_id).await?;
   `CommunityEvent::Error` through `log::error!`, and its "New community" row opens
   a name prompt that calls `CommunityRegistry::create`. `create` still persists
   the genesis locally without publishing it to the metadata's relays. Discovery
-  is local-only: `load` reads the state documents already in
-  `client.database()` and never fetches the account's CORD-02 Community List
-  (`33302`) from relays, so a fresh install — or one signing in as an account
-  that joined elsewhere — finds nothing and never subscribes. See
+  subscribes to the account's CORD-02 Community List (`33302`) under the
+  `concord/list` subscription id and reads the fragments back out of
+  `client.database()` — the SDK persists a relay's event before notifying, so the
+  read is always current. A `concord/list` notification re-runs `load`, which
+  materializes a community from each live List entry (`from_join_material`) and
+  keeps any state document the List does not mention, so a fresh install — or one
+  signing in as an account that joined elsewhere — finds its communities. See
   `docs/concord-community-discovery-plan.md`.
 - **Account-key writers take any signer, not `&Keys`.** `genesis`,
   `ControlWriter`, the guestbook and chat `seal_rumor`s, the `list` builders, and

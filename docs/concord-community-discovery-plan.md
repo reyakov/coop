@@ -76,7 +76,7 @@ Two consequences for coop:
    per-process `LOCAL_KEYS`, and never leave the machine. No equivalent exists
    anywhere in the spec. It is a local cache and must never be treated as the
    discovery source.
-2. **Discovery is: fetch my `33302` from relays → materialize a community from
+2. **Discovery is: subscribe to my `33302` → materialize a community from
    `current` join material → subscribe to its planes → fold.** The fold produces
    the authoritative state; the List only supplies the keys to start.
 
@@ -88,15 +88,15 @@ Two consequences for coop:
 | 2 | one event per fragment, `d` = index, `frags` declared | no `frags`, single event, `d` unused, `load_list` `.limit(1)` |
 | 3 | 32-byte values unpadded base64url at any depth | hex: `JoinMaterial.owner`/`control_root` (`PublicKey`/`String`), `CommunityId` serde, `ChannelGrant.key` |
 | 4 | `seed` omitted when equal to `current`; embedded snapshot omits `community_id`; `seed`'s cosmetic fields rewritten from `current` | both snapshots always serialized verbatim; `community_id` always present |
-| 5 | fetch from relays | local database only |
+| 5 | fetch from relays | local database only — **fixed in Phase C** |
 | 6 | materialize `CommunityState` from join material | no such path; only `CommunityState::from_genesis` |
 | 7 | publish the List on create/join (read-modify-write) | `build_list_event` is referenced only by tests and docs |
 | 8 | private channel keys ride in join material | `ChannelKeyRef` has no key field |
 
 Divergences 1–4 meant that even if the fetch existed, coop could neither read
-what accordion wrote nor write something accordion could read. **Phases A and B
-are done**, so 1–4 and 6 are resolved; 5, 7 and 8 remain (8 only in that private
-planes are still not subscribed).
+what accordion wrote nor write something accordion could read. **Phases A, B and
+C are done**, so 1–6 are resolved; 7 and 8 remain (8 only in that private planes
+are still not subscribed).
 
 ## Plan
 
@@ -181,35 +181,55 @@ a granted key surviving, a public grant staying keyless). In `community`,
 field's type is crate-private, so the materialization and the plane derivation
 are each proved where they live.
 
-### Phase C — fetch the List from relays, then load
+### Phase C — the List drives `load` — DONE
 
-`crates/community/src/sync.rs`
+`crates/community/src/sync.rs`, `crates/community/src/lib.rs`
 
-1. `load` becomes:
-   - resolve where to ask: the account's NIP-65 write relays (kind `10002`) plus
-     the pool's connected relays. If only the app's bootstrap relays are queried,
-     a List published by another client (e.g. accordion on `relay.damus.io` /
-     `nos.lol`) will simply not be found.
-   - `client.fetch_events(Filter::new().kind(33302).author(self_pk))` — one
-     filter returns every fragment. Fetched events are persisted by the client
-     (`nostr-sdk/src/relay/inner.rs:1291`), so the database read stays valid.
-   - merge fragments → `CommunityList`.
-   - for each entry whose `is_live(&id)`: if a state document exists, keep its
-     `heads` (the fold's authority) and refresh relays/keys from `current`;
-     otherwise `from_join_material(..)`.
-   - `store::save_state` each result so the next `load` is warm.
-2. `load_list` keeps reading `client.database()` — after the fetch it is
-   populated. It must stop using `.limit(1)`.
-3. Drop the `states.retain(..)` shape: the List is now the *source* of states,
-   not just a filter over local ones. A local state whose membership is
-   tombstoned is still dropped, but a List entry with no local state now
-   produces one.
+1. `subscribe_list(client, self_pk)` subscribes to `Kind::Custom(33302)`
+   `author(self_pk)` under a dedicated `concord/list` subscription id, using
+   `ReqTarget::auto`. With gossip enabled, `auto` breaks the filter down by
+   author, so it queries the account's NIP-65 write relays and adds/connects
+   them itself — bootstrap relays alone would miss a List published elsewhere.
+2. `CommunityRegistry` calls `subscribe_list` once per signer (signer change and
+   the initial defer). It is deliberately **not** called from `load`:
+   re-subscribing on every List event would re-deliver the List and loop. `reset`
+   does not unsubscribe it either — `subscribe_list` replaces the subscription
+   itself, and a `reset`-issued unsubscribe could race the replacement and cancel
+   discovery.
+3. The notification listener routes a `concord/list` event to a new `Signal::List`,
+   whose consumer re-runs `load`. Community planes keep using `Signal::Event(id)`.
+4. `load_list` reads every `33302` event by `self_pk` from the database, keeps the
+   newest event per fragment index, decrypts and `merge`s them. `.limit(1)` is gone.
+   An incomplete List is read normally — a missing fragment is news not yet heard.
+5. `load` unions two sources: every live List entry (materialized with
+   `from_join_material`, or refreshed if a state document already exists) and every
+   held local state the List does not mention. A held membership is dropped only
+   when a tombstone outranks its `added_at_ms`; absence from the List is never a
+   fact. Each list-derived state is `save_state`d, so the next `load` is warm.
+6. `refresh(held, fresh)` keeps the fold's authority (`heads`, `banned`,
+   `dissolved`) and the control planes it learned, and takes the List's identity,
+   relays, and channel keys. Channels are merged by id rather than replaced, so a
+   public channel the fold discovered is not shed by a List snapshot that predates
+   it.
 
-Tests (no network, `nostr-memory`): a `33302` fragment written by the account is
-discovered with **no** state document present; a tombstoned id is dropped; a
-missing fragment leaves the rest usable. A `nostr_sdk::local_relay::LocalRelay`
-(in-process relay, public in this pinned revision) can drive the real
-fetch/subscribe path end to end.
+**As built, deviating from the sketch above.** The plan called for
+`client.fetch_events(..)`; the SDK's own recommendation is to keep the request
+path on a subscription and read the database. This is safer than it sounds: a
+relay's event is persisted at `nostr-sdk/src/relay/inner.rs:1291` **before** the
+notification is emitted, so a subscription plus a database read loses nothing and
+needs no explicit save. The subscription is set up with `ReqTarget::auto` rather
+than a hand-built NIP-65 relay map, because gossip already resolves the author's
+write relays and connects them on demand.
+
+Tests (no network): a fragment in the database with **no** state document
+materializes a community and writes one; a tombstone at `u64::MAX` drops a held
+membership; a two-fragment List with only fragment 0 delivered still yields its
+membership; a held membership the List never mentions is kept alongside the
+discovered one; `refresh` keeps `heads`/`banned`/`dissolved` and both control
+planes while taking the List's keys; and the `concord/list` id is not read as a
+community subscription. Fragment events are built with `build_list_event` from a
+§8 JSON payload, so the test exercises the real decrypt-and-merge path without a
+relay.
 
 ### Phase D — publish
 
@@ -234,7 +254,9 @@ rows in the sidebar. This is the first time the path can be exercised at all.
 - `cargo test -p concord` (A, B), `cargo test -p community` (B, C, D).
 - `cargo clippy --workspace --all-targets`, `cargo fmt --all -- --check`.
 - A is provable against the spec's worked example, so it needs no relay.
-- C is provable with `nostr-memory` + `LocalRelay`, so it needs no network.
+- C is provable with `nostr-memory`: fragments are built with `build_list_event`
+  and saved as the subscription would have, then `load` reads them. No relay,
+  no `LocalRelay`.
 - E is the only step that needs real relays.
 
 ## Risks and open decisions
@@ -248,8 +270,11 @@ rows in the sidebar. This is the first time the path can be exercised at all.
   NIP-44 plaintext, which understates that by roughly a third, so the count cap is
   kept as a conservative stopgap until Phase D measures the built event and
   fragments on write.
-- **Relay selection for the fetch is the difference between finding the account's
-  List and not.** NIP-65 write relays + pool, or a user-visible relay setting?
+- **Relay selection is the difference between finding the account's List and
+  not.** Resolved in Phase C by `ReqTarget::auto`, whose gossip path resolves the
+  filter's author to their NIP-65 write relays and connects them. A List
+  published only to relays with no NIP-65 entry is still unreachable; that is a
+  user-visible relay setting if it ever bites.
 - **Private channels stay unsubscribed until `planes()` derives their address
   from the granted key** (Phase B gave `ChannelKeyRef` a home for it, but the
   discovery fix does not need it). Public discovery works regardless.
