@@ -76,24 +76,19 @@ pub fn planes(state: &CommunityState) -> Result<Vec<Plane>> {
     Ok(planes)
 }
 
-/// One `Filter` covering every held plane. The address is the event author,
-/// not a `p` tag: a Concord wrap's `p` tag carries a random ephemeral key.
 pub fn subscription_filter(planes: &[Plane]) -> Filter {
     Filter::new()
         .kinds([Kind::from(KIND_WRAP)])
         .authors(planes.iter().map(|plane| plane.address))
 }
 
+/// The subscription id carrying a community's planes.
 pub fn subscription_id(id: &CommunityId) -> SubscriptionId {
-    SubscriptionId::new(format!("{}{}", store::STATE_PREFIX, id.to_hex()))
+    SubscriptionId::new(id.to_hex())
 }
 
 pub fn community_of(subscription_id: &SubscriptionId) -> Option<CommunityId> {
-    subscription_id
-        .as_str()
-        .strip_prefix(store::STATE_PREFIX)?
-        .parse()
-        .ok()
+    subscription_id.as_str().parse().ok()
 }
 
 /// Download and decrypt a community icon into a content-addressed cache file.
@@ -903,5 +898,14 @@ mod tests {
         assert!(is_list_subscription(&list_subscription_id()));
         assert!(community_of(&list_subscription_id()).is_none());
         assert_eq!(community_of(&subscription_id(&id)), Some(id));
+    }
+
+    /// A relay answers a longer REQ with `invalid subscription id length` but
+    /// `subscribe` still reports success, so an over-long id fails silently.
+    #[test]
+    fn a_community_subscription_id_fits_the_nip01_cap() {
+        let id = CommunityId::from_bytes([0x42; 32]);
+
+        assert!(subscription_id(&id).as_str().len() <= 64);
     }
 }
