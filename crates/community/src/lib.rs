@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use concord::CommunityId;
 use concord::cord01::KIND_WRAP;
+use concord::cord02::CommunityMetadata;
 use concord::store::CommunityState;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 use nostr_sdk::prelude::*;
@@ -101,6 +102,37 @@ impl CommunityRegistry {
 
     pub fn community(&self, id: &CommunityId) -> Option<Entity<Community>> {
         self.index.get(id).cloned()
+    }
+
+    /// Create a community owned by the current account and begin tracking it.
+    pub fn create(&mut self, metadata: CommunityMetadata, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+
+        if nostr.read(cx).current_user().is_none() {
+            cx.emit(CommunityEvent::Error(
+                "cannot create a community without an account".to_owned(),
+            ));
+            return;
+        }
+
+        let signer = nostr.read(cx).signer();
+        let client = nostr.read(cx).client();
+
+        let task =
+            cx.background_spawn(async move { sync::create(&client, &signer, &metadata).await });
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            match task.await {
+                Ok(_state) => this.update(cx, |this, cx| this.load(cx))?,
+                Err(error) => {
+                    this.update(cx, |_this, cx| {
+                        cx.emit(CommunityEvent::Error(error.to_string()));
+                    })?;
+                }
+            }
+
+            Ok(())
+        }));
     }
 
     /// Forget the current account and cancel everything in flight.

@@ -193,12 +193,40 @@ keep the crate compiling: `cord05::{build_invite_list, parse_invite_list}` and
 `cord06::{build_blob, open_blob}` are untouched — they use the NIP-59 and
 group-key paths, not the migrated helpers — and remain `&Keys` for Phase 3.
 
-### Phase 2 — app uses the signer
+### Phase 2 — app uses the signer — DONE
 
-1. `CommunityRegistry::create(&signer, …)` works with `UniversalSigner` directly
-   — no secret exposure. This is the change that makes `subscribe` fire.
-2. Remove the app-side reimplementation of `list::parse_list_event`
-   (`crates/community/src/sync.rs:154-156`) now that it accepts a signer.
+1. `sync::create(client, signer, metadata)` (`crates/community/src/sync.rs`) runs
+   `cord02::genesis`, opens the genesis editions, persists the state with
+   `store::save_state`, and also stores the genesis wraps so the control plane
+   folds locally. It is generic over `S: AsyncGetPublicKey + AsyncSignEvent + ?Sized`
+   (the bounds `genesis` needs and no more, per D2); the app passes its
+   `UniversalSigner`, so no secret material is exposed and NIP-46 accounts work
+   too.
+   `CommunityRegistry::create(metadata, cx)` (`crates/community/src/lib.rs`) is
+   the GPUI wrapper: it refuses when no account is signed in, otherwise runs the
+   task off-thread and refreshes tracking, so `sync::load` now returns one state
+   and `subscribe` finally fires.
+2. The app-side reimplementation of `list::parse_list_event`
+   (`crates/community/src/sync.rs:154-156`) is deleted; `load_list` calls the
+   real `cord02::list::parse_list_event`.
+3. Relays in the metadata are persisted but the genesis is **not** published yet;
+   `create` is local-only. Wiring genesis/broadcast through the relay pool is the
+   next app step, not part of this phase.
+
+Validation: `cargo test -p community` (1 passed), `cargo test -p concord`
+(46 passed), `cargo clippy -p community --all-targets`, `cargo fmt -p community
+--check`, and `cargo check --workspace --all-targets` are all clean.
+
+**Deviation from the plan sketch:** the planned "drive `CommunityRegistry`" test
+is instead a `sync`-layer test, `sync::tests::
+creating_a_community_persists_a_state_that_subscribes_and_folds`. A GPUI-level
+test cannot construct a `NostrRegistry` — it opens LMDB at `config_dir()` and
+connects bootstrap relays in `NostrRegistry::new`, which is private and not
+injectable — so the test drives a `Client` on an in-memory database
+(`nostr-memory`, already a dev-dependency) directly. It asserts the whole
+contract the registry depends on: `create` persists a state `load` returns, the
+subscription filter addresses the genesis wraps, `fold` yields the created
+community, and an inbound control edit folds over it.
 
 ### Phase 3 — migrate the remaining unwired writers
 
@@ -269,12 +297,5 @@ Truly unreferenced even by tests (safe candidates, but kept per D1):
 
 ## 6. Immediate unblock
 
-Two options, both app-side:
-
-1. Smallest (no concord change): expose the local `Keys` the account path
-   already constructs (`crates/state/src/lib.rs:254`) and add
-   `CommunityRegistry::create` around it.
-2. Clean (needs Phase 1): `CommunityRegistry::create(&UniversalSigner, …)` with
-   no secret exposure, working for NIP-46 accounts too.
-
-Option 2 is the reason to do Phase 1.
+Option 2 (the clean path, using `UniversalSigner`) landed in Phase 2. Option 1
+(exposing the local `Keys` from `crates/state/src/lib.rs:254`) is obsolete.

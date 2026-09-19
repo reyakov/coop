@@ -6,7 +6,9 @@ use concord::cord02::list::{CommunityList, KIND_COMMUNITY_LIST};
 use concord::cord02::{self, ControlFold};
 use concord::cord04::AuthorityCitation;
 use concord::cord04::roles::{Permissions, citation_ok};
-use concord::derive::{channel_group_key, control_group_key, guestbook_group_key};
+use concord::derive::{
+    channel_group_key, control_group_key, control_signer_group_key, guestbook_group_key,
+};
 use concord::store::{self, CommunityState};
 use concord::{ChannelId, CommunityId, Epoch, GroupKey};
 use nostr_sdk::prelude::*;
@@ -93,6 +95,35 @@ pub struct Snapshot {
     pub members: BTreeSet<PublicKey>,
 }
 
+/// Mints a community owned by `signer` and persists it locally.
+pub async fn create<S>(
+    client: &Client,
+    signer: &S,
+    metadata: &cord02::CommunityMetadata,
+) -> Result<CommunityState>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+{
+    let at_secs = Timestamp::now().as_secs();
+    let genesis = cord02::genesis(signer, metadata, at_secs).await?;
+    let id = genesis.identity.community_id;
+
+    let read = control_group_key(&genesis.community_root, &id, cord02::ROOT_EPOCH)?;
+    let address = control_signer_group_key(&genesis.control_root, &id, cord02::ROOT_EPOCH)?.pk();
+
+    let mut editions = Vec::with_capacity(genesis.wraps.len());
+
+    for wrap in &genesis.wraps {
+        editions.push(cord02::open_edition(wrap, &read, &address, true)?);
+        client.database().save_event(wrap).await?;
+    }
+
+    let state = CommunityState::from_genesis(&genesis, &editions, at_secs.saturating_mul(1000))?;
+    store::save_state(client, &state).await?;
+
+    Ok(state)
+}
+
 /// Discovers the current account's communities from the local database.
 pub async fn load(
     client: &Client,
@@ -151,9 +182,7 @@ async fn load_list(
         return Ok(None);
     };
 
-    let json = signer.nip44_decrypt_async(&self_pk, &event.content).await?;
-
-    Ok(Some(serde_json::from_str(&json)?))
+    Ok(Some(cord02::list::parse_list_event(signer, &event).await?))
 }
 
 /// Rebuilds a community from the wraps already in the local database.
@@ -258,4 +287,116 @@ fn observe(observed: &mut BTreeMap<PublicKey, u64>, author: PublicKey, at_ms: u6
         .entry(author)
         .and_modify(|seen| *seen = (*seen).max(at_ms))
         .or_insert(at_ms);
+}
+
+#[cfg(test)]
+mod tests {
+    use nostr_memory::MemoryDatabase;
+
+    use super::*;
+
+    fn client() -> Client {
+        ClientBuilder::default()
+            .database(MemoryDatabase::unbounded())
+            .build()
+    }
+
+    fn metadata(name: &str, relay: &str) -> cord02::CommunityMetadata {
+        cord02::CommunityMetadata {
+            name: name.to_owned(),
+            relays: vec![relay.to_owned()],
+            ..cord02::CommunityMetadata::default()
+        }
+    }
+
+    /// What `CommunityRegistry` needs from a created community: a state document
+    /// `load` finds, a control plane the subscription filter actually addresses,
+    /// and a fold that survives an inbound control edit.
+    #[test]
+    fn creating_a_community_persists_a_state_that_subscribes_and_folds() {
+        smol::block_on(async {
+            let client = client();
+            let keys = Keys::generate();
+            let signer = UniversalSigner::new(keys.clone());
+
+            let created = create(&client, &signer, &metadata("coop", "wss://relay.example"))
+                .await
+                .expect("creates");
+
+            let loaded = load(&client, &signer, keys.public_key())
+                .await
+                .expect("loads");
+            assert_eq!(loaded, vec![created.clone()]);
+
+            // The subscription filter must address the genesis wraps, or the registry
+            // would listen to a plane nothing is ever published on.
+            let planes = planes(&created).expect("planes");
+            let wraps = client
+                .database()
+                .query(subscription_filter(&planes))
+                .await
+                .expect("queries");
+            assert_eq!(wraps.len(), created.heads.len());
+            assert!(wraps.iter().all(|wrap| wrap.kind == Kind::from(KIND_WRAP)));
+
+            let snapshot = fold(&client, &created)
+                .await
+                .expect("folds")
+                .expect("a control plane");
+            assert_eq!(snapshot.state.channels.len(), 1);
+            assert_eq!(snapshot.members, BTreeSet::from([keys.public_key()]));
+            assert_eq!(
+                snapshot
+                    .control
+                    .community
+                    .as_ref()
+                    .map(|metadata| metadata.name.as_str()),
+                Some("coop")
+            );
+
+            // An inbound control edit made by the owner folds over the created state.
+            let community_head = created
+                .heads
+                .iter()
+                .find(|head| head.entity == *created.id.as_bytes())
+                .expect("a community head");
+            let writer = cord02::ControlWriter {
+                author: created.owner,
+                read: control_group_key(&created.community_root, &created.id, cord02::ROOT_EPOCH)
+                    .expect("a reading key"),
+                signer: control_signer_group_key(
+                    &created.control_root.expect("a control root"),
+                    &created.id,
+                    cord02::ROOT_EPOCH,
+                )
+                .expect("a signing key"),
+            };
+
+            let (wrap, _) = writer
+                .set_community_metadata(
+                    &keys,
+                    &created.id,
+                    &metadata("coop two", "wss://relay.example"),
+                    Some(community_head),
+                    None,
+                    Timestamp::now().as_secs() + 1,
+                )
+                .await
+                .expect("publishes");
+            client.database().save_event(&wrap).await.expect("saves");
+
+            let updated = fold(&client, &created)
+                .await
+                .expect("folds")
+                .expect("a control plane");
+            assert_eq!(
+                updated
+                    .control
+                    .community
+                    .as_ref()
+                    .map(|metadata| metadata.name.as_str()),
+                Some("coop two")
+            );
+        });
+    }
 }
