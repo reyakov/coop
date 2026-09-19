@@ -70,6 +70,13 @@ impl Community {
         &self.state
     }
 
+    pub fn name(&self) -> String {
+        match &self.control.community {
+            Some(metadata) => metadata.name.clone(),
+            None => self.state.id.to_hex(),
+        }
+    }
+
     pub fn control(&self) -> &ControlFold {
         &self.control
     }

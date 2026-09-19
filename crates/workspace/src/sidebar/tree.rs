@@ -1,6 +1,7 @@
 use std::rc::Rc;
 
 use chat::Room;
+use community::Community;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, ClickEvent, ElementId, Entity, InteractiveElement, IntoElement, ParentElement, RenderOnce,
@@ -66,29 +67,16 @@ pub enum SidebarRow {
         pinned: bool,
     },
     Community {
-        entry: &'static CommunityEntry,
+        community: Entity<Community>,
+        depth: u8,
+    },
+    NewCommunity {
         depth: u8,
     },
     Hint {
         text: SharedString,
         depth: u8,
     },
-}
-
-pub struct CommunityEntry {
-    pub name: &'static str,
-}
-
-pub fn dummy_communities() -> &'static [CommunityEntry] {
-    // TODO(concord): replace with CommunityRegistry communities, see docs/concord-usage.md.
-    &[
-        CommunityEntry {
-            name: "Coop Contributors",
-        },
-        CommunityEntry {
-            name: "Nostr Design",
-        },
-    ]
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

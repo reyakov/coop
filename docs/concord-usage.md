@@ -542,9 +542,10 @@ client.subscribe(filter).with_id(sub_id).await?;
   `crates/community`.** `concord` has no subscriptions, no `init`, and no
   `Entity<Community>`; `community::CommunityRegistry` owns one `Entity<Community>`
   per state document, subscribes when a community's plane set changes, and
-  re-folds on an inbound wrap. Nothing observes `CommunityEvent` yet, and
-  `CommunityRegistry::create` persists the genesis locally without publishing it
-  to the metadata's relays.
+  re-folds on an inbound wrap. The sidebar observes the registry, logs
+  `CommunityEvent::Error` through `log::error!`, and its "New community" row opens
+  a name prompt that calls `CommunityRegistry::create`. `create` still persists
+  the genesis locally without publishing it to the metadata's relays.
 - **Account-key writers take any signer, not `&Keys`.** `genesis`,
   `ControlWriter`, the guestbook and chat `seal_rumor`s, the `list` builders, and
   the `cord05` invite writers (`build_direct_invite` / `unwrap_direct_invite`,

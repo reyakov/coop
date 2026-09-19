@@ -5,9 +5,10 @@ use std::rc::Rc;
 use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
 use common::TimestampExt;
+use community::{CommunityEvent, CommunityMetadata, CommunityRegistry};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
+    AnyElement, App, AppContext, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
     UniformListScrollHandle, Window, div, px, retain_all, uniform_list,
 };
@@ -20,12 +21,13 @@ use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
 use ui::indicator::Indicator;
+use ui::input::{Input, InputState};
 use ui::menu::{ContextMenu, DropdownMenu, PopupMenuItem};
 use ui::nav_item::NavItem;
 use ui::scroll::Scrollbar;
 use ui::{
-    Icon, IconName, Sizable, StyledExt, TRAFFIC_LIGHT_PADDING, h_flex, title_bar_drag_handlers,
-    v_flex,
+    Icon, IconName, Sizable, StyledExt, TRAFFIC_LIGHT_PADDING, WindowExtension, h_flex,
+    title_bar_drag_handlers, v_flex,
 };
 
 use crate::Command;
@@ -34,7 +36,7 @@ mod entry;
 mod tree;
 
 pub(crate) use entry::RoomEntry;
-use tree::{SidebarRow, TreeRow, TreeRowKind, TreeSection, dummy_communities};
+use tree::{SidebarRow, TreeRow, TreeRowKind, TreeSection};
 
 /// Sidebar.
 pub struct Sidebar {
@@ -58,6 +60,7 @@ impl Sidebar {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let settings = AppSettings::global(cx).read(cx).entity().clone();
         let chat = ChatRegistry::global(cx);
+        let communities = CommunityRegistry::global(cx);
 
         let mut subscriptions = smallvec![];
 
@@ -73,6 +76,14 @@ impl Sidebar {
         subscriptions.push(cx.observe(&settings, move |this, _settings, cx| {
             this.restore_state(cx);
         }));
+
+        subscriptions.push(
+            cx.subscribe(&communities, |_this, _communities, event, _cx| {
+                if let CommunityEvent::Error(error) = event {
+                    log::error!("community: {error}");
+                }
+            }),
+        );
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -145,6 +156,36 @@ impl Sidebar {
         self.pinned_rooms.contains(&room_id)
     }
 
+    fn new_community(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("Community name"));
+
+        window.open_modal(cx, move |this, _window, _cx| {
+            let name_input = name_input.clone();
+
+            this.width(px(380.))
+                .confirm()
+                .title("New community")
+                .child(Input::new(&name_input))
+                .on_ok(move |_event, _window, cx| {
+                    let name = name_input.read(cx).value().trim().to_owned();
+
+                    if name.is_empty() {
+                        return false;
+                    }
+
+                    let metadata = CommunityMetadata {
+                        name,
+                        ..CommunityMetadata::default()
+                    };
+
+                    CommunityRegistry::global(cx)
+                        .update(cx, |registry, cx| registry.create(metadata, cx));
+
+                    true
+                })
+        });
+    }
+
     fn tree_rows(&self, cx: &App) -> Vec<SidebarRow> {
         let chat = ChatRegistry::global(cx);
         let chat = chat.read(cx);
@@ -197,7 +238,9 @@ impl Sidebar {
             }
         }
 
-        let communities = dummy_communities();
+        let registry = CommunityRegistry::global(cx);
+        let communities = registry.read(cx).communities();
+
         rows.push(SidebarRow::Section {
             section: TreeSection::Community,
             count: communities.len(),
@@ -213,9 +256,15 @@ impl Sidebar {
                 rows.extend(
                     communities
                         .iter()
-                        .map(|entry| SidebarRow::Community { entry, depth: 1 }),
+                        .cloned()
+                        .map(|community| SidebarRow::Community {
+                            community,
+                            depth: 1,
+                        }),
                 );
             }
+
+            rows.push(SidebarRow::NewCommunity { depth: 1 });
         }
 
         let messages = chat.rooms(&RoomKind::Ongoing, cx);
@@ -345,13 +394,28 @@ impl Sidebar {
                         )
                         .into_any_element()
                     }
-                    SidebarRow::Community { entry, depth } => TreeRow::new(
+                    SidebarRow::Community { community, depth } => {
+                        let community = community.read(cx);
+
+                        TreeRow::new(
+                            ElementId::NamedInteger("tree-row".into(), index as u64),
+                            TreeRowKind::Community,
+                            community.name(),
+                        )
+                        .depth(*depth)
+                        .avatar(community.id().to_hex())
+                        .into_any_element()
+                    }
+                    SidebarRow::NewCommunity { depth } => TreeRow::new(
                         ElementId::NamedInteger("tree-row".into(), index as u64),
-                        TreeRowKind::Community,
-                        entry.name,
+                        TreeRowKind::Hint,
+                        "New community",
                     )
                     .depth(*depth)
-                    .avatar(entry.name)
+                    .icon(IconName::Plus)
+                    .on_click(cx.listener(|this, _event, window, cx| {
+                        this.new_community(window, cx);
+                    }))
                     .into_any_element(),
                     SidebarRow::Hint { text, depth } => TreeRow::new(
                         ElementId::NamedInteger("tree-row".into(), index as u64),

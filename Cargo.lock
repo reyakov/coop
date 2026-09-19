@@ -9343,6 +9343,7 @@ dependencies = [
  "chat",
  "chat_ui",
  "common",
+ "community",
  "device",
  "gpui-pre",
  "instant",

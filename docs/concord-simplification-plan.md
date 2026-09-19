@@ -282,6 +282,33 @@ the base64 record). `cargo clippy -p concord --all-targets` and
    arity, `set_pin_list`'s missing `.await`, the GPUI `init` signature and
    registry names, and the "Not wired up yet" registry bullet.
 
+### Phase 5 — sidebar calls `create` — DONE
+
+The last blocker was that nothing invoked `CommunityRegistry::create`; the
+running app logged `community load: 0 state document(s) found` and `subscribe`
+never ran. The sidebar now:
+
+1. Renders `CommunityRegistry::communities()` instead of the hardcoded
+   `dummy_communities()`. `SidebarRow::Community` carries an `Entity<Community>`,
+   labelled with `Community::name()` (control-fold metadata, falling back to the
+   community id until the first fold).
+2. Adds a "New community" row to the Community section that opens a name prompt
+   and calls `CommunityRegistry::create` with default metadata. Relays stay empty,
+   so the subscription resolves through `ReqTarget::auto` against the pool's
+   relays rather than a manual target that `add_relay` might not have connected.
+3. Observes the registry, so a `track` or fold re-render reaches the list, and
+   subscribes to `CommunityEvent::Error`, which is now logged
+   (`log::error!("community: {error}")`) instead of vanishing. A `cx.notify()` in
+   the registry's per-community observer propagates the fold that fills in the
+   name.
+
+Validation: `cargo check -p workspace -p community --all-targets`,
+`cargo test -p community` (1 passed), `cargo clippy -p workspace -p community
+--all-targets`, and `cargo fmt -p workspace -p community --check` are clean.
+
+Still local-only: the genesis is persisted but not published to relays, so a
+second account cannot discover the community yet.
+
 ---
 
 ## 3. Retained-by-decision surface (reference only)

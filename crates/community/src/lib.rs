@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use concord::CommunityId;
 use concord::cord01::KIND_WRAP;
-use concord::cord02::CommunityMetadata;
+pub use concord::cord02::CommunityMetadata;
 use concord::store::CommunityState;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 use nostr_sdk::prelude::*;
@@ -204,7 +204,9 @@ impl CommunityRegistry {
             self.observers
                 .push(cx.observe(&community, |this, _community, cx| {
                     this.sync_subscriptions(cx);
+                    cx.notify();
                 }));
+
             self.index.insert(id, community.clone());
             self.communities.push(community);
         }
@@ -230,9 +232,10 @@ impl CommunityRegistry {
     /// Re-subscribe every community whose held planes moved.
     fn sync_subscriptions(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
 
         for community in self.communities.clone() {
+            let client = nostr.read(cx).client();
+
             let (id, key, state) = {
                 let community = community.read(cx);
                 (
@@ -257,9 +260,9 @@ impl CommunityRegistry {
             let subscription = sync::subscription_id(&id);
             let filter = sync::subscription_filter(&planes);
             let relays = key.relays().to_vec();
+
             self.synced.insert(id, key);
 
-            let client = client.clone();
             self.tasks.push(cx.spawn(async move |this, cx| {
                 if let Err(error) = subscribe(&client, &subscription, &relays, filter).await {
                     this.update(cx, |_this, cx| {
@@ -325,6 +328,7 @@ async fn subscribe(
     relays: &[RelayUrl],
     filter: Filter,
 ) -> Result<()> {
+    log::info!("community {id}: subscribing to {relays:?}");
     client.unsubscribe(id).await?;
 
     for url in relays {
