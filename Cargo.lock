@@ -1275,6 +1275,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "community"
+version = "1.0.2"
+dependencies = [
+ "anyhow",
+ "concord",
+ "flume 0.11.1",
+ "futures",
+ "gpui-pre",
+ "log",
+ "nostr-memory",
+ "nostr-sdk",
+ "serde_json",
+ "smallvec",
+ "smol",
+ "state",
+]
+
+[[package]]
+name = "community_ui"
+version = "1.0.2"
+dependencies = [
+ "anyhow",
+ "common",
+ "community",
+ "gpui-pre",
+ "nostr-sdk",
+ "person",
+ "settings",
+ "smallvec",
+ "state",
+ "theme",
+ "ui",
+]
+
+[[package]]
 name = "compression-codecs"
 version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1297,12 +1332,12 @@ name = "concord"
 version = "1.0.2"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chacha20 0.9.1",
  "data-encoding",
  "hkdf",
  "hmac 0.12.1",
  "nostr",
- "nostr-memory",
  "nostr-sdk",
  "rand 0.10.2",
  "serde",
@@ -1412,6 +1447,7 @@ dependencies = [
  "auto_update",
  "chat",
  "common",
+ "community",
  "device",
  "gpui-pre",
  "gpui-pre-linux",
@@ -1437,6 +1473,7 @@ dependencies = [
  "assets",
  "chat",
  "common",
+ "community",
  "console_error_panic_hook",
  "console_log",
  "device",
@@ -9323,6 +9360,8 @@ dependencies = [
  "chat",
  "chat_ui",
  "common",
+ "community",
+ "community_ui",
  "device",
  "gpui-pre",
  "instant",

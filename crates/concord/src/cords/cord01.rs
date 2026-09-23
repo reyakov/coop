@@ -3,8 +3,8 @@ use std::fmt;
 use data_encoding::BASE64;
 use nostr::nips::nip44::v2::{ConversationKey, decrypt_to_bytes, encrypt_to_bytes_with_nonce};
 use nostr_sdk::prelude::{
-    Event, EventBuilder, EventId, FinalizeEvent, Keys, Kind, PublicKey, Tag, Timestamp,
-    UnsignedEvent,
+    AsyncGetPublicKey, AsyncNip44, AsyncSignEvent, Event, EventBuilder, EventId, FinalizeEvent,
+    FinalizeEventAsync, Keys, Kind, PublicKey, Tag, Timestamp, UnsignedEvent,
 };
 
 use crate::derive::GroupKey;
@@ -17,8 +17,8 @@ pub const KIND_SEAL_PLAINTEXT: u16 = 20014;
 pub const NIP44_MAX_PLAINTEXT: usize = 65_535;
 
 const TAG_MS: &str = "ms";
-const TAG_CHANNEL: &str = "channel";
-const TAG_EPOCH: &str = "epoch";
+pub(crate) const TAG_CHANNEL: &str = "channel";
+pub(crate) const TAG_EPOCH: &str = "epoch";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SealForm {
@@ -198,32 +198,52 @@ pub fn open_bytes(conversation: &ConversationKey, content: &str) -> Result<Vec<u
 }
 
 /// A member's own document (the Community List, the Invite List): NIP-44 to self.
-pub fn seal_to_self(keys: &Keys, plaintext: &[u8]) -> Result<String, StreamError> {
-    seal_bytes(
-        &ConversationKey::derive(keys.secret_key(), &keys.public_key())
-            .map_err(|error| StreamError::Encrypt(error.to_string()))?,
-        plaintext,
-    )
+pub async fn seal_to_self<S>(signer: &S, plaintext: &str) -> Result<String, StreamError>
+where
+    S: AsyncGetPublicKey + AsyncNip44 + ?Sized,
+{
+    check_plaintext_cap(plaintext.len())?;
+
+    let address = signer
+        .get_public_key_async()
+        .await
+        .map_err(|error| StreamError::Encrypt(error.to_string()))?;
+
+    signer
+        .nip44_encrypt_async(&address, plaintext)
+        .await
+        .map_err(|error| StreamError::Encrypt(error.to_string()))
 }
 
-pub fn open_to_self(keys: &Keys, content: &str) -> Result<Vec<u8>, StreamError> {
-    open_bytes(
-        &ConversationKey::derive(keys.secret_key(), &keys.public_key())
-            .map_err(|error| StreamError::Decrypt(error.to_string()))?,
-        content,
-    )
+pub async fn open_to_self<S>(signer: &S, content: &str) -> Result<String, StreamError>
+where
+    S: AsyncGetPublicKey + AsyncNip44 + ?Sized,
+{
+    let address = signer
+        .get_public_key_async()
+        .await
+        .map_err(|error| StreamError::Decrypt(error.to_string()))?;
+
+    signer
+        .nip44_decrypt_async(&address, content)
+        .await
+        .map_err(|error| StreamError::Decrypt(error.to_string()))
 }
 
-pub fn build_seal(
+pub async fn build_seal<S>(
     rumor: &UnsignedEvent,
     form: SealForm,
     group: &GroupKey,
-    author: &Keys,
-) -> Result<Event, StreamError> {
+    author: &S,
+) -> Result<Event, StreamError>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+{
     let content = seal_content(rumor, form, group)?;
     EventBuilder::new(Kind::Custom(form.kind()), content)
         .custom_created_at(rumor.created_at)
-        .finalize(author)
+        .finalize_async(author)
+        .await
         .map_err(|error| StreamError::Sign(error.to_string()))
 }
 
@@ -400,7 +420,10 @@ fn check_plaintext_cap(len: usize) -> Result<(), StreamError> {
     Ok(())
 }
 
-fn unique_tag(rumor: &UnsignedEvent, name: &'static str) -> Result<Option<String>, StreamError> {
+pub(crate) fn unique_tag(
+    rumor: &UnsignedEvent,
+    name: &'static str,
+) -> Result<Option<String>, StreamError> {
     let mut found: Option<String> = None;
 
     for tag in rumor.tags.iter() {
@@ -450,7 +473,7 @@ mod tests {
     }
 
     fn sealed(rumor: &UnsignedEvent, form: SealForm, author: &Keys) -> Event {
-        build_seal(rumor, form, &group(0), author).expect("seals")
+        smol::block_on(build_seal(rumor, form, &group(0), author)).expect("seals")
     }
 
     fn wrapped(seal: &Event, kind: u16, at_secs: u64) -> Event {

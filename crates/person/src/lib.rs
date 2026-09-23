@@ -3,7 +3,7 @@ use std::sync::RwLock;
 
 use anyhow::{Error, anyhow};
 use common::EventExt;
-use gpui::{App, AppContext, Context, Entity, Global, Task, Window};
+use gpui::{App, AppContext, Context, Entity, Global, Task};
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
@@ -13,8 +13,8 @@ mod person;
 
 pub use person::*;
 
-pub fn init(window: &mut Window, cx: &mut App) {
-    PersonRegistry::set_global(cx.new(|cx| PersonRegistry::new(window, cx)), cx);
+pub fn init(cx: &mut App) {
+    PersonRegistry::set_global(cx.new(PersonRegistry::new), cx);
 }
 
 struct GlobalPersonRegistry(Entity<PersonRegistry>);
@@ -56,7 +56,8 @@ impl PersonRegistry {
     }
 
     /// Create a new person registry instance
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let entity = cx.entity().downgrade();
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
@@ -96,8 +97,8 @@ impl PersonRegistry {
         }));
 
         // Load all user profiles from the database
-        cx.defer_in(window, |this, _window, cx| {
-            this.load(cx);
+        cx.defer(move |cx| {
+            entity.update(cx, |this, cx| this.load(cx)).ok();
         });
 
         Self {

@@ -1,18 +1,16 @@
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
 
 use anyhow::Result;
 use data_encoding::HEXLOWER;
 use nostr_sdk::prelude::*;
 
 use crate::cord01::{
-    KIND_WRAP, OpenedStream, SealForm, StreamError, build_rumor_ms, build_seal, open_wrap,
-    wrap_seal,
+    KIND_WRAP, OpenedStream, SealForm, build_rumor_ms, build_seal, open_wrap, wrap_seal,
 };
-use crate::cord04::{
-    AuthorityCitation, TAG_CITATION, canonical_decimal, citation_from, citation_tag,
-};
+use crate::cord04::{AuthorityCitation, canonical_decimal, citation_tag};
+pub use crate::cords::rumor::RumorError as GuestbookError;
+use crate::cords::rumor::{optional_citation, pubkey, required, value};
 use crate::{GroupKey, decode_hex_32};
 
 pub const KIND_JOIN_LEAVE: u16 = 3306;
@@ -28,41 +26,6 @@ const TAG_SNAP: &str = "snap";
 const TAG_CONTENT: &str = "content";
 const CONTENT_JOIN: &str = "join";
 const CONTENT_LEAVE: &str = "leave";
-
-#[derive(Debug)]
-pub enum GuestbookError {
-    Stream(StreamError),
-    NotEncryptedSealed,
-    UnknownKind(u16),
-    MissingTag(&'static str),
-    DuplicateTag(&'static str),
-    BadTag(&'static str),
-}
-
-impl fmt::Display for GuestbookError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            GuestbookError::Stream(error) => write!(f, "stream: {error}"),
-            GuestbookError::NotEncryptedSealed => {
-                write!(f, "guestbook rumor must ride an encrypted seal")
-            }
-            GuestbookError::UnknownKind(kind) => {
-                write!(f, "not a guestbook rumor kind: {kind}")
-            }
-            GuestbookError::MissingTag(name) => write!(f, "missing guestbook tag: {name}"),
-            GuestbookError::DuplicateTag(name) => write!(f, "duplicate guestbook tag: {name}"),
-            GuestbookError::BadTag(name) => write!(f, "malformed guestbook tag: {name}"),
-        }
-    }
-}
-
-impl std::error::Error for GuestbookError {}
-
-impl From<StreamError> for GuestbookError {
-    fn from(error: StreamError) -> Self {
-        GuestbookError::Stream(error)
-    }
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GuestbookEntry {
@@ -183,18 +146,21 @@ pub fn build_snapshot_chunks(
         .collect()
 }
 
-pub fn seal_rumor(
+pub async fn seal_rumor<S>(
     rumor: &UnsignedEvent,
     group: &GroupKey,
-    author: &Keys,
-) -> Result<(Event, Keys), GuestbookError> {
+    author: &S,
+) -> Result<(Event, Keys), GuestbookError>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+{
     let kind = rumor.kind.as_u16();
 
     if !is_guestbook_kind(kind) {
         return Err(GuestbookError::UnknownKind(kind));
     }
 
-    let seal = build_seal(rumor, SealForm::Encrypted, group, author)?;
+    let seal = build_seal(rumor, SealForm::Encrypted, group, author).await?;
 
     Ok(wrap_seal(&seal, group, KIND_WRAP, rumor.created_at, &[])?)
 }
@@ -221,10 +187,15 @@ pub fn open(
     Ok((opened, rumor))
 }
 
+/// Coalesce the guestbook flat: one final state per npub, the latest entry
+/// winning by millisecond time, ties broken by the lower rumor id.
+///
+/// `snapshot_authorities` are the npubs whose refounding is known to have minted an epoch this client reads.
+/// A snapshot chunk is honored only from one of them, and an empty set honors no snapshot at all.
 pub fn coalesce(
     rumors: &[GuestbookRumor],
     now_ms: u64,
-    snapshot_authority: Option<&PublicKey>,
+    snapshot_authorities: &BTreeSet<PublicKey>,
     can_kick: impl Fn(&PublicKey, &PublicKey, Option<&AuthorityCitation>) -> bool,
 ) -> BTreeMap<PublicKey, MemberState> {
     let mut states: BTreeMap<PublicKey, (u64, Reverse<EventId>, MemberState)> = BTreeMap::new();
@@ -284,7 +255,7 @@ pub fn coalesce(
                 at_ms,
                 ..
             } => {
-                if snapshot_authority != Some(refounder) {
+                if !snapshot_authorities.contains(refounder) {
                     continue;
                 }
 
@@ -466,73 +437,21 @@ fn snapshot_of(rumor: &UnsignedEvent) -> Result<([u8; 32], (u32, u32)), Guestboo
     Ok((snapshot_id, (index, total)))
 }
 
-fn optional_citation(rumor: &UnsignedEvent) -> Result<Option<AuthorityCitation>, GuestbookError> {
-    let Some(fields) = tag(rumor, TAG_CITATION)? else {
-        return Ok(None);
-    };
-
-    citation_from(fields)
-        .map(Some)
-        .ok_or(GuestbookError::BadTag(TAG_CITATION))
-}
-
 fn decimal(raw: &str) -> Result<u32, GuestbookError> {
     canonical_decimal(raw)
         .and_then(|value| u32::try_from(value).ok())
         .ok_or(GuestbookError::BadTag(TAG_SNAP))
 }
 
-fn required<'a>(
-    rumor: &'a UnsignedEvent,
-    name: &'static str,
-) -> Result<&'a [String], GuestbookError> {
-    tag(rumor, name)?.ok_or(GuestbookError::MissingTag(name))
-}
-
 fn tagged_pubkey(rumor: &UnsignedEvent, name: &'static str) -> Result<PublicKey, GuestbookError> {
     pubkey(value(required(rumor, name)?, name)?, name)
-}
-
-fn tag<'a>(
-    rumor: &'a UnsignedEvent,
-    name: &'static str,
-) -> Result<Option<&'a [String]>, GuestbookError> {
-    let mut found: Option<&[String]> = None;
-
-    for candidate in rumor.tags.iter() {
-        let fields = candidate.as_slice();
-
-        if fields.first().map(String::as_str) != Some(name) {
-            continue;
-        }
-
-        if found.is_some() {
-            return Err(GuestbookError::DuplicateTag(name));
-        }
-
-        found = Some(fields);
-    }
-
-    Ok(found)
-}
-
-fn value<'a>(fields: &'a [String], name: &'static str) -> Result<&'a str, GuestbookError> {
-    fields
-        .get(1)
-        .map(String::as_str)
-        .ok_or(GuestbookError::BadTag(name))
-}
-
-fn pubkey(hex: &str, name: &'static str) -> Result<PublicKey, GuestbookError> {
-    let bytes = decode_hex_32(hex).map_err(|_| GuestbookError::BadTag(name))?;
-
-    PublicKey::from_slice(&bytes).map_err(|_| GuestbookError::BadTag(name))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cord01::build_rumor_secs;
+    use crate::cord01::{StreamError, build_rumor_secs};
+    use crate::cord04::TAG_CITATION;
     use crate::derive::guestbook_group_key;
     use crate::{CommunityId, Epoch};
 
@@ -541,6 +460,11 @@ mod tests {
 
     fn community() -> CommunityId {
         CommunityId::from_bytes([0x11u8; 32])
+    }
+
+    /// The refounders a fold is told about: a snapshot seeds members on theirs alone.
+    fn refounders(keys: &[&Keys]) -> BTreeSet<PublicKey> {
+        keys.iter().map(|keys| keys.public_key()).collect()
     }
 
     fn group() -> GroupKey {
@@ -556,7 +480,9 @@ mod tests {
     }
 
     fn publish(rumor: &UnsignedEvent, author: &Keys) -> GuestbookRumor {
-        let wrap = seal_rumor(rumor, &group(), author).expect("seals").0;
+        let wrap = smol::block_on(seal_rumor(rumor, &group(), author))
+            .expect("seals")
+            .0;
 
         open(&wrap, &group()).expect("opens").1
     }
@@ -617,7 +543,7 @@ mod tests {
                 citation.is_some() && actor == &carol.public_key() && target != &owner.public_key()
             };
 
-        let states = coalesce(&rumors, AT + 8_000, Some(&carol.public_key()), can_kick);
+        let states = coalesce(&rumors, AT + 8_000, &refounders(&[&carol]), can_kick);
 
         assert_eq!(
             states.get(&alice.public_key()),
@@ -646,7 +572,7 @@ mod tests {
 
         let reversed: Vec<GuestbookRumor> = rumors.iter().rev().cloned().collect();
         assert_eq!(
-            coalesce(&reversed, AT + 8_000, Some(&carol.public_key()), can_kick),
+            coalesce(&reversed, AT + 8_000, &refounders(&[&carol]), can_kick),
             states,
             "arrival order cannot change the fold"
         );
@@ -733,7 +659,7 @@ mod tests {
             ),
         ];
 
-        let states = coalesce(&rumors, AT + 1_000, None, can_kick);
+        let states = coalesce(&rumors, AT + 1_000, &BTreeSet::new(), can_kick);
 
         assert_eq!(
             states.get(&kicked.public_key()),
@@ -770,21 +696,21 @@ mod tests {
         )
         .remove(0);
 
-        for authority in [None, Some(refounder.public_key())] {
+        for authority in [BTreeSet::new(), refounders(&[&refounder])] {
             let states = coalesce(
                 &[
                     publish(&by_refounder, &refounder),
                     publish(&by_impostor, &impostor),
                 ],
                 AT + 1_000,
-                authority.as_ref(),
+                &authority,
                 |_, _, _| true,
             );
 
             assert_eq!(
                 states.contains_key(&seeded.public_key()),
-                authority.is_some(),
-                "only the epoch's refounder seeds, and there is no owner fallback"
+                !authority.is_empty(),
+                "only a known refounder seeds, and there is no owner fallback"
             );
             assert!(
                 !states.contains_key(&smuggled.public_key()),
@@ -808,11 +734,11 @@ mod tests {
             &member,
         );
         assert!(
-            coalesce(&[future], AT, None, |_, _, _| true).is_empty(),
+            coalesce(&[future], AT, &BTreeSet::new(), |_, _, _| true).is_empty(),
             "an entry more than an hour ahead is dropped"
         );
         assert_eq!(
-            coalesce(&[horizon], AT, None, |_, _, _| true).len(),
+            coalesce(&[horizon], AT, &BTreeSet::new(), |_, _, _| true).len(),
             1,
             "the horizon itself is skew, not forgery"
         );
@@ -826,7 +752,9 @@ mod tests {
         );
         assert!(matches!(
             open(
-                &seal_rumor(&bad_ms, &group(), &member).expect("seals").0,
+                &smol::block_on(seal_rumor(&bad_ms, &group(), &member))
+                    .expect("seals")
+                    .0,
                 &group()
             ),
             Err(GuestbookError::Stream(StreamError::BadMs))
@@ -835,7 +763,9 @@ mod tests {
         let bad_verb = build_rumor_ms(KIND_JOIN_LEAVE, member.public_key(), "maybe", vec![], AT);
         assert!(matches!(
             open(
-                &seal_rumor(&bad_verb, &group(), &member).expect("seals").0,
+                &smol::block_on(seal_rumor(&bad_verb, &group(), &member))
+                    .expect("seals")
+                    .0,
                 &group()
             ),
             Err(GuestbookError::BadTag(TAG_CONTENT))
@@ -854,7 +784,7 @@ mod tests {
         );
         assert!(matches!(
             open(
-                &seal_rumor(&ambiguous, &group(), &moderator)
+                &smol::block_on(seal_rumor(&ambiguous, &group(), &moderator))
                     .expect("seals")
                     .0,
                 &group()
@@ -876,7 +806,9 @@ mod tests {
             );
             assert!(matches!(
                 open(
-                    &seal_rumor(&rumor, &group(), &moderator).expect("seals").0,
+                    &smol::block_on(seal_rumor(&rumor, &group(), &moderator))
+                        .expect("seals")
+                        .0,
                     &group()
                 ),
                 Err(GuestbookError::BadTag(TAG_SNAP))

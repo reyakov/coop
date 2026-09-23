@@ -1,3 +1,4 @@
+use std::rc::Rc;
 use std::sync::Arc;
 
 use ::settings::AppSettings;
@@ -5,11 +6,13 @@ use anyhow::Error;
 use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry};
 use common::download_dir;
+use community::{CommunityEvent, CommunityRegistry};
+use community_ui::CommunityPanel;
 use device::{DeviceEvent, DeviceRegistry};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, Styled, Subscription, Task, Window, div, px,
+    Action, AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Styled, Subscription, Task, WeakEntity, Window, div, px,
 };
 use nostr_sdk::prelude::*;
 use person::{PersonRegistry, shorten_pubkey};
@@ -17,17 +20,18 @@ use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, StateEvent};
 use theme::{ActiveTheme, SIDEBAR_WIDTH, Theme, ThemeRegistry};
-use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{self, ClosePanel, DockArea, DockLayout, DockPlacement, Panel, PanelHandle};
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::{Notification, NotificationKind};
-use ui::{Icon, IconName, Root, Sizable, TitleBar, WindowExtension, h_flex, v_flex};
+use ui::{Icon, IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
 
-use crate::dialogs::import::ImportIdentity;
 use crate::dialogs::restore::RestoreEncryption;
-use crate::dialogs::settings;
-use crate::panels::{backup, contact_list, greeter, messaging_relays, profile, relay_list};
+use crate::dialogs::{new_chat, new_community, settings};
+use crate::panels::{
+    backup, browse, contact_list, greeter, inbox, messaging_relays, profile, relay_list, requests,
+    search,
+};
 use crate::sidebar::Sidebar;
 
 mod dialogs;
@@ -57,28 +61,34 @@ enum Command {
     ShowSettings,
     ShowBackup,
     ShowContactList,
+    ShowInbox,
+    ShowRequests,
+    ShowBrowse,
+    ShowSearch,
+    NewChat,
+    NewCommunity,
 }
 
 pub struct Workspace {
-    sidebar: Entity<Sidebar>,
-    /// App's Dock Area
     dock: Entity<DockArea>,
-
+    title_bar_chrome: Rc<dock::TitleBarChrome>,
+    /// The community panel currently docked, if any
+    community_panel: Option<WeakEntity<CommunityPanel>>,
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
-
     /// Event subscriptions
-    _subscriptions: SmallVec<[Subscription; 6]>,
+    _subscriptions: SmallVec<[Subscription; 7]>,
 }
 
 impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let chat = ChatRegistry::global(cx);
+        let communities = CommunityRegistry::global(cx);
         let device = DeviceRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
 
         let sidebar = cx.new(|cx| Sidebar::new(window, cx));
-        let dock = dock::dock_area("coop", window, cx);
+        let (dock, title_bar_chrome) = dock::dock_area("coop", window, cx);
 
         let mut subscriptions = smallvec![];
 
@@ -91,16 +101,10 @@ impl Workspace {
 
         subscriptions.push(
             // Subscribe to the nostr events
-            cx.subscribe_in(&nostr, window, move |this, _state, event, window, cx| {
-                match event {
-                    StateEvent::SignerChanged => {
-                        window.close_all_modals(cx);
-                    }
-                    StateEvent::NoSigner => {
-                        this.import_identity(window, cx);
-                    }
-                    _ => {}
-                };
+            cx.subscribe_in(&nostr, window, move |_this, _state, event, window, cx| {
+                if let StateEvent::SignerChanged = event {
+                    window.close_all_modals(cx);
+                }
             }),
         );
 
@@ -213,25 +217,77 @@ impl Workspace {
             }),
         );
 
-        cx.defer_in(window, |this, window, cx| {
+        subscriptions.push(
+            // Observe all events emitted by the community registry
+            cx.subscribe_in(
+                &communities,
+                window,
+                move |this, communities, event, window, cx| match event {
+                    CommunityEvent::Open(id) => {
+                        if let Some(community) = communities.read(cx).community(id) {
+                            let panel = community_ui::init(community, window, cx);
+
+                            this.community_panel = Some(panel.downgrade());
+                            this.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
+                        }
+                    }
+                    CommunityEvent::Close(_) => {
+                        let Some(panel) = this
+                            .community_panel
+                            .take()
+                            .and_then(|panel| panel.upgrade())
+                        else {
+                            return;
+                        };
+
+                        this.dock.update(cx, |area, cx| {
+                            ui::dock::add_panel(
+                                area,
+                                PanelHandle::new(panel),
+                                DockPlacement::Center,
+                                window,
+                                cx,
+                            );
+                            ui::dock::focus_tab_panel(area, window, cx);
+
+                            cx.defer_in(window, |_, window, cx| {
+                                window.dispatch_action(Box::new(ClosePanel), cx);
+                            });
+                        });
+                    }
+                    _ => {}
+                },
+            ),
+        );
+
+        cx.defer_in(window, move |this, window, cx| {
+            let sidebar = PanelHandle::new(sidebar);
+
+            this.dock.update(cx, |area, cx| {
+                let left = DockLayout::tabs().panel_view(Arc::new(sidebar), cx);
+                area.set_dock(DockPlacement::Left, left, window, cx);
+                area.set_dock_size(DockPlacement::Left, SIDEBAR_WIDTH, window, cx);
+            });
+
             let greeter = PanelHandle::new(greeter::init(window, cx));
             let center = DockLayout::v_split()
                 .child(DockLayout::tabs().panel_view(Arc::new(greeter), cx), None);
 
-            this.dock
-                .update(cx, |area, cx| area.set_center(center, window, cx));
+            this.dock.update(cx, |area, cx| {
+                area.set_center(center, window, cx);
+            });
         });
 
         Self {
-            sidebar,
             dock,
+            title_bar_chrome,
+            community_panel: None,
             tasks: vec![],
             _subscriptions: subscriptions,
         }
     }
 
-    /// Add a panel to the dock, from anywhere that has the window but not the
-    /// workspace.
+    /// Add a panel to the dock, from anywhere that has the window but not the workspace.
     pub fn add_panel<P: Panel>(
         panel: Entity<P>,
         placement: DockPlacement,
@@ -293,6 +349,29 @@ impl Workspace {
                     window,
                     cx,
                 );
+            }
+            Command::ShowInbox => {
+                self.add_panel_to_dock(inbox::init(window, cx), DockPlacement::Center, window, cx);
+            }
+            Command::ShowRequests => {
+                self.add_panel_to_dock(
+                    requests::init(window, cx),
+                    DockPlacement::Center,
+                    window,
+                    cx,
+                );
+            }
+            Command::ShowBrowse => {
+                self.add_panel_to_dock(browse::init(window, cx), DockPlacement::Center, window, cx);
+            }
+            Command::ShowSearch => {
+                self.add_panel_to_dock(search::init(window, cx), DockPlacement::Center, window, cx);
+            }
+            Command::NewChat => {
+                new_chat::open(window, cx);
+            }
+            Command::NewCommunity => {
+                new_community::open(window, cx);
             }
             Command::ShowBackup => {
                 self.add_panel_to_dock(backup::init(window, cx), DockPlacement::Left, window, cx);
@@ -425,19 +504,6 @@ impl Workspace {
         });
     }
 
-    fn import_identity(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let import = cx.new(|cx| ImportIdentity::new(window, cx));
-
-        window.open_modal(cx, move |this, _window, _cx| {
-            this.width(px(450.))
-                .show_close(false)
-                .overlay_closable(false)
-                .keyboard(false)
-                .title("Onboarding")
-                .child(import.clone())
-        });
-    }
-
     fn theme_selector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         window.open_modal(cx, move |this, _window, cx| {
             let registry = ThemeRegistry::global(cx);
@@ -518,95 +584,14 @@ impl Workspace {
         });
     }
 
-    fn titlebar_left(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let nostr = NostrRegistry::global(cx);
-        let current_user = nostr.read(cx).current_user();
-
-        h_flex()
-            .flex_shrink_0()
-            .gap_2()
-            .when_none(&current_user, |this| {
-                this.child(
-                    div()
-                        .text_xs()
-                        .text_color(cx.theme().text_muted)
-                        .child(SharedString::from("Import your identity to continue")),
-                )
-            })
-            .when_some(current_user.as_ref(), |this, public_key| {
-                let persons = PersonRegistry::global(cx);
-                let profile = persons.read(cx).get(public_key, cx);
-                let avatar = profile.avatar();
-                let name = profile.name();
-
-                this.child(
-                    Button::new("current-user")
-                        .child(Avatar::new(avatar.clone()).xsmall())
-                        .small()
-                        .caret()
-                        .compact()
-                        .transparent()
-                        .dropdown_menu(move |this, _window, cx| {
-                            let avatar = avatar.clone();
-                            let name = name.clone();
-
-                            this.min_w(px(256.))
-                                .item(PopupMenuItem::element(move |_window, cx| {
-                                    h_flex()
-                                        .gap_1p5()
-                                        .text_xs()
-                                        .text_color(cx.theme().text_muted)
-                                        .child(Avatar::new(avatar.clone()).xsmall())
-                                        .child(name.clone())
-                                }))
-                                .separator()
-                                .menu_with_icon(
-                                    "Profile",
-                                    IconName::Profile,
-                                    Box::new(Command::ShowProfile),
-                                )
-                                .menu_with_icon(
-                                    "Contact List",
-                                    IconName::Book,
-                                    Box::new(Command::ShowContactList),
-                                )
-                                .menu_with_icon(
-                                    "Backup",
-                                    IconName::UserKey,
-                                    Box::new(Command::ShowBackup),
-                                )
-                                .menu_with_icon(
-                                    "Themes",
-                                    IconName::Sun,
-                                    Box::new(Command::ToggleTheme),
-                                )
-                                // Only offer in-app updates when auto-update is
-                                // enabled (managed channels update themselves).
-                                .when(AutoUpdater::is_available(cx), |this| {
-                                    this.separator().menu_with_icon(
-                                        "Check for Updates",
-                                        IconName::Device,
-                                        Box::new(Command::Update),
-                                    )
-                                })
-                                .menu_with_icon(
-                                    "Settings",
-                                    IconName::Settings,
-                                    Box::new(Command::ShowSettings),
-                                )
-                        }),
-                )
-            })
-    }
-
-    fn titlebar_right(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn titlebar_right(_window: &mut Window, cx: &mut App) -> AnyElement {
         let auto_updater = AutoUpdater::try_global(cx);
         let chat = ChatRegistry::global(cx);
         let nip4e_enabled = AppSettings::get_nip4e(cx);
         let nostr = NostrRegistry::global(cx);
 
         let Some(public_key) = nostr.read(cx).current_user() else {
-            return div();
+            return div().into_any_element();
         };
 
         let persons = PersonRegistry::global(cx);
@@ -635,11 +620,11 @@ impl Workspace {
                         .tooltip("Quit and relaunch into the installed update")
                         .small()
                         .ghost()
-                        .on_click(cx.listener(|_this, _event, _window, cx| {
+                        .on_click(|_event, _window, cx| {
                             if let Some(auto_updater) = AutoUpdater::try_global(cx) {
                                 auto_updater.update(cx, |this, cx| this.restart(cx));
                             }
-                        })),
+                        }),
                 )
             })
             .when(nip4e_enabled, |this| {
@@ -764,6 +749,7 @@ impl Workspace {
                             )
                     }),
             )
+            .into_any_element()
     }
 }
 
@@ -772,34 +758,15 @@ impl Render for Workspace {
         let modal_layer = Root::render_modal_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
 
+        // Render the title bar chrome
+        self.title_bar_chrome.set_trailing(Self::titlebar_right);
+
         div()
             .id("workspace")
             .on_action(cx.listener(Self::on_command))
             .relative()
             .size_full()
-            .child(
-                v_flex()
-                    .size_full()
-                    // Title Bar
-                    .child(
-                        TitleBar::new()
-                            .child(self.titlebar_left(cx))
-                            .child(self.titlebar_right(cx)),
-                    )
-                    // Main
-                    .child(
-                        h_flex()
-                            .size_full()
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .h_full()
-                                    .w(SIDEBAR_WIDTH)
-                                    .child(self.sidebar.clone()),
-                            )
-                            .child(self.dock.clone()),
-                    ),
-            )
+            .child(self.dock.clone())
             // Notifications
             .children(notification_layer)
             // Modals

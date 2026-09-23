@@ -103,14 +103,18 @@ impl Person {
         self.messaging_relays.first().cloned()
     }
 
-    /// Get profile avatar
-    pub fn avatar(&self) -> SharedString {
+    /// Get profile picture, if the profile has one
+    pub fn avatar(&self) -> Option<SharedString> {
         self.metadata()
             .picture
             .as_ref()
             .filter(|picture| !picture.is_empty())
-            .map(|picture| picture.into())
-            .unwrap_or_else(|| "brand/avatar.png".into())
+            .map(SharedString::from)
+    }
+
+    /// A stable seed for this profile's generated avatar
+    pub fn avatar_seed(&self) -> SharedString {
+        SharedString::from(self.public_key().to_hex())
     }
 
     /// Get profile name

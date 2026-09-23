@@ -9,6 +9,7 @@ use gpui::{
 use gpui_platform::application;
 use nostr_sdk::prelude::SecretKey;
 use state::{APP_ID, CLIENT_NAME};
+use theme::TABBAR_HEIGHT;
 use ui::Root;
 
 actions!(coop, [Quit]);
@@ -30,6 +31,12 @@ fn main() {
         .with_assets(Assets)
         .with_http_client(Arc::new(reqwest_client::ReqwestClient::new()))
         .run(move |cx| {
+            // Initialize components
+            ui::init(cx);
+
+            // Initialize theme registry
+            theme::init(cx);
+
             // Load embedded fonts in assets/fonts
             load_embedded_fonts(cx);
 
@@ -54,6 +61,29 @@ fn main() {
                 disabled: false,
             }]);
 
+            // Initialize settings
+            settings::init(cx);
+
+            // Initialize the nostr client
+            state::init(cx, cli_key);
+
+            // Initialize person registry
+            person::init(cx);
+
+            // Initialize device signer
+            //
+            // NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
+            device::init(cx);
+
+            // Initialize app registry
+            chat::init(cx);
+
+            // Initialize community registry
+            community::init(cx);
+
+            // Initialize auto update
+            auto_update::init(cx);
+
             // Set up the window bounds
             let bounds = Bounds::centered(None, size(px(960.0), px(720.0)), cx);
 
@@ -66,46 +96,21 @@ fn main() {
                 app_id: Some(APP_ID.to_owned()),
                 titlebar: Some(TitlebarOptions {
                     title: Some(SharedString::new_static(CLIENT_NAME)),
-                    traffic_light_position: Some(point(px(9.0), px(9.0))),
+                    traffic_light_position: Some(point(
+                        px(9.0),
+                        px(TABBAR_HEIGHT / px(2.) - 14. / 2.),
+                    )),
                     appears_transparent: true,
                 }),
+                app_owns_titlebar_drag: true,
                 ..Default::default()
             };
 
-            // Open a window with default options
             cx.open_window(opts, |window, cx| {
-                // Initialize components
-                ui::init(cx);
-
-                // Initialize theme registry
-                theme::init(cx);
-
-                // Initialize settings
-                settings::init(window, cx);
-
-                // Initialize the nostr client
-                state::init(window, cx, cli_key);
-
-                // Initialize person registry
-                person::init(window, cx);
-
-                // Initialize device signer
-                //
-                // NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
-                device::init(window, cx);
-
-                // Initialize app registry
-                chat::init(window, cx);
-
-                // Initialize auto update
-                auto_update::init(window, cx);
-
-                // Root view
                 cx.new(|cx| Root::new(workspace::init(window, cx).into(), window, cx))
             })
             .expect("Failed to open window. Please restart the application.");
 
-            // Bring the app to the foreground
             cx.activate(true);
         });
 }

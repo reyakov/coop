@@ -121,7 +121,7 @@ fn signing_bytes(
     bytes
 }
 
-pub fn edition_hash(
+fn edition_hash(
     entity: &[u8; 32],
     version: u64,
     prev: Option<&[u8; 32]>,
@@ -246,14 +246,14 @@ impl From<&ParsedEdition> for EditionMeta {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct FoldResult {
+struct FoldResult {
     pub head: Option<usize>,
     pub gap: bool,
     pub anchored: bool,
 }
 
 /// The highest version whose chain is intact, given a held floor.
-pub fn fold(editions: &[EditionMeta], floor: u64, floor_hash: Option<&[u8; 32]>) -> FoldResult {
+fn fold(editions: &[EditionMeta], floor: u64, floor_hash: Option<&[u8; 32]>) -> FoldResult {
     let mut by_version: BTreeMap<u64, usize> = BTreeMap::new();
 
     for (index, edition) in editions.iter().enumerate() {
@@ -311,7 +311,7 @@ pub fn fold(editions: &[EditionMeta], floor: u64, floor_hash: Option<&[u8; 32]>)
 }
 
 /// The highest version overall, ignoring contiguity.
-pub fn bootstrap_head(editions: &[EditionMeta]) -> Option<usize> {
+fn bootstrap_head(editions: &[EditionMeta]) -> Option<usize> {
     editions
         .iter()
         .enumerate()

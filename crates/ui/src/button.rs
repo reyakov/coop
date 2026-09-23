@@ -116,26 +116,20 @@ pub trait ButtonVariants: Sized {
 #[allow(clippy::type_complexity)]
 pub struct Button {
     base: BaseButton,
-
     icon: Option<Icon>,
     label: Option<SharedString>,
     tooltip: Option<SharedString>,
     children: Vec<AnyElement>,
-
     variant: ButtonVariant,
     size: Size,
-
     disabled: bool,
     loading: bool,
-
     rounded: bool,
     compact: bool,
     caret: bool,
     indicator: bool,
-
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_hover: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
-
     tab_index: isize,
     tab_stop: bool,
 

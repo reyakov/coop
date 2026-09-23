@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use gpui::{App, AppContext, Context, Entity, Global, SharedString, Task, Window};
+use gpui::{App, AppContext, Context, Entity, Global, SharedString, Task};
 use gpui_updater_core::{EngineConfig, Release, UpdateEngine, UpdateStatus, Verification, Version};
 use instant::Duration;
 
@@ -35,7 +35,7 @@ fn uses_managed_updates() -> bool {
 }
 
 /// Initialize the auto-update system.
-pub fn init(window: &mut Window, cx: &mut App) {
+pub fn init(cx: &mut App) {
     if uses_managed_updates() {
         log::info!(
             "Skipping auto-update initialization: updates are managed by the installed distribution channel (Flatpak/Snap)"
@@ -60,10 +60,7 @@ pub fn init(window: &mut Window, cx: &mut App) {
         return;
     };
 
-    AutoUpdater::set_global(
-        cx.new(|cx| AutoUpdater::new(window, version, filter, cx)),
-        cx,
-    );
+    AutoUpdater::set_global(cx.new(|cx| AutoUpdater::new(version, filter, cx)), cx);
 }
 
 struct GlobalAutoUpdater(Entity<AutoUpdater>);
@@ -103,21 +100,17 @@ impl AutoUpdater {
         cx.set_global(GlobalAutoUpdater(state));
     }
 
-    fn new(
-        window: &mut Window,
-        version: Version,
-        filter: AssetFilter,
-        cx: &mut Context<Self>,
-    ) -> Self {
+    fn new(version: Version, filter: AssetFilter, cx: &mut Context<Self>) -> Self {
+        let entity = cx.entity().downgrade();
         let source = GiteaSource::new(GITEA_API_BASE, GITEA_REPO_OWNER, GITEA_REPO_NAME, filter);
         let config = EngineConfig::new(version.clone()).verification(Verification::Checksum);
         let engine = Arc::new(UpdateEngine::new(source, config));
 
         // Schedule an auto-check after a 2-minute delay
-        cx.defer_in(window, |_this, _window, cx| {
-            cx.spawn(async move |this, cx| {
+        cx.defer(move |cx| {
+            cx.spawn(async move |cx| {
                 cx.background_executor().timer(AUTO_CHECK_DELAY).await;
-                this.update(cx, |this, cx| this.check(cx)).ok();
+                entity.update(cx, |this, cx| this.check(cx)).ok();
             })
             .detach();
         });

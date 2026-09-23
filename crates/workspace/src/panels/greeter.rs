@@ -157,8 +157,11 @@ impl Render for GreeterPanel {
                                             .label("Change theme")
                                             .ghost()
                                             .small()
-                                            .on_click(cx.listener(move |_, _, _, cx| {
-                                                cx.dispatch_action(&Command::ToggleTheme);
+                                            .on_click(cx.listener(move |_, _, window, cx| {
+                                                window.dispatch_action(
+                                                    Box::new(Command::ToggleTheme),
+                                                    cx,
+                                                );
                                             })),
                                     ),
                             ),

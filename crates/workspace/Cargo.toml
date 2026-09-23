@@ -12,6 +12,8 @@ state = { path = "../state" }
 device = { path = "../device" }
 chat = { path = "../chat" }
 chat_ui = { path = "../chat_ui" }
+community = { path = "../community" }
+community_ui = { path = "../community_ui" }
 settings = { path = "../settings" }
 person = { path = "../person" }
 auto_update = { path = "../auto_update" }

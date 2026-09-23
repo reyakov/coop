@@ -11,10 +11,10 @@ use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::cord01::{self, NIP44_MAX_PLAINTEXT, StreamError};
-use crate::cord02::list::{canonical, union};
 use crate::cord02::{ImageRef, MAX_RELAYS};
 use crate::cord04::{TAG_SUBKIND, vsk};
 use crate::derive::{TOKEN_LEN, verify_community_id};
+use crate::utils::{canonical, union};
 use crate::{ChannelId, CommunityId, Epoch, Extra, decode_hex_32};
 
 pub const KIND_BUNDLE: u16 = 33301;
@@ -447,16 +447,19 @@ pub fn parse_link(input: &str) -> Result<ParsedInviteLink, InviteError> {
     })
 }
 
-pub fn build_direct_invite(
-    inviter: &Keys,
+pub async fn build_direct_invite<S>(
+    inviter: &S,
     recipient: &PublicKey,
     invite: &CommunityInvite,
-) -> Result<Event, InviteError> {
+) -> Result<Event, InviteError>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44,
+{
     invite.validate()?;
 
     let json = serde_json::to_string(invite).map_err(json_error)?;
-    let rumor = EventBuilder::new(Kind::Custom(KIND_DIRECT_INVITE), json)
-        .finalize_unsigned(inviter.public_key());
+    let author = inviter.get_public_key_async().await.map_err(crypto_error)?;
+    let rumor = EventBuilder::new(Kind::Custom(KIND_DIRECT_INVITE), json).finalize_unsigned(author);
 
     let mut tags = vec![Tag::custom("k", [KIND_DIRECT_INVITE.to_string()])];
 
@@ -469,15 +472,22 @@ pub fn build_direct_invite(
 
     GiftWrapBuilder::new(*recipient, rumor)
         .extra_tags(tags)
-        .finalize(inviter)
+        .finalize_async(inviter)
+        .await
         .map_err(crypto_error)
 }
 
-pub fn unwrap_direct_invite(
+/// The NIP-59 unwrap is `Sized`-bounded in the SDK, so this stays `Sized` too.
+pub async fn unwrap_direct_invite<S>(
     wrap: &Event,
-    recipient: &Keys,
-) -> Result<(PublicKey, CommunityInvite), InviteError> {
-    let unwrapped = UnwrappedGift::from_gift_wrap(recipient, wrap).map_err(crypto_error)?;
+    recipient: &S,
+) -> Result<(PublicKey, CommunityInvite), InviteError>
+where
+    S: AsyncNip44,
+{
+    let unwrapped = UnwrappedGift::from_gift_wrap_async(recipient, wrap)
+        .await
+        .map_err(crypto_error)?;
 
     if unwrapped.rumor.kind.as_u16() != KIND_DIRECT_INVITE {
         return Err(InviteError::BadEvent("rumor is not a direct invite"));
@@ -590,25 +600,32 @@ pub fn merge_invite_lists(held: InviteList, incoming: InviteList) -> InviteList 
     }
 }
 
-pub fn build_invite_list(keys: &Keys, list: &InviteList) -> Result<Event, InviteError> {
+pub async fn build_invite_list<S>(keys: &S, list: &InviteList) -> Result<Event, InviteError>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
+{
     list.fits()?;
 
     let json = serde_json::to_string(list).map_err(json_error)?;
-    let content = cord01::seal_to_self(keys, json.as_bytes())?;
+    let content = cord01::seal_to_self(keys, &json).await?;
 
     EventBuilder::new(Kind::Custom(KIND_INVITE_LIST), content)
-        .finalize(keys)
+        .finalize_async(keys)
+        .await
         .map_err(crypto_error)
 }
 
-pub fn parse_invite_list(keys: &Keys, event: &Event) -> Result<InviteList, InviteError> {
+pub async fn parse_invite_list<S>(keys: &S, event: &Event) -> Result<InviteList, InviteError>
+where
+    S: AsyncGetPublicKey + AsyncNip44 + ?Sized,
+{
     if event.kind.as_u16() != KIND_INVITE_LIST {
         return Err(InviteError::Kind(event.kind.as_u16()));
     }
 
-    let json = cord01::open_to_self(keys, &event.content)?;
+    let json = cord01::open_to_self(keys, &event.content).await?;
 
-    serde_json::from_slice(&json).map_err(json_error)
+    serde_json::from_str(&json).map_err(json_error)
 }
 
 /// An entry is immutable once minted, so two copies should agree.
@@ -920,7 +937,12 @@ mod tests {
         let recipient = Keys::generate();
         let invite = bundle();
 
-        let wrap = build_direct_invite(&inviter, &recipient.public_key(), &invite).expect("builds");
+        let wrap = smol::block_on(build_direct_invite(
+            &inviter,
+            &recipient.public_key(),
+            &invite,
+        ))
+        .expect("builds");
         assert_eq!(wrap.kind, Kind::GiftWrap);
         assert_ne!(
             wrap.pubkey,
@@ -932,13 +954,14 @@ mod tests {
             "the k tag is what makes an invite indexable"
         );
 
-        let (sender, opened) = unwrap_direct_invite(&wrap, &recipient).expect("unwraps");
+        let (sender, opened) =
+            smol::block_on(unwrap_direct_invite(&wrap, &recipient)).expect("unwraps");
         assert_eq!(sender, inviter.public_key());
         assert_eq!(opened.community_id, invite.community_id);
 
         // Somebody else's wrap is not ours to open...
         let stranger = Keys::generate();
-        assert!(unwrap_direct_invite(&wrap, &stranger).is_err());
+        assert!(smol::block_on(unwrap_direct_invite(&wrap, &stranger)).is_err());
 
         // ...and a wrap that opens to some other kind is not an invite.
         let rumor = EventBuilder::new(Kind::Custom(crate::cord03::KIND_MESSAGE), "hello")
@@ -947,7 +970,7 @@ mod tests {
             .finalize(&recipient)
             .expect("wraps");
         assert!(matches!(
-            unwrap_direct_invite(&wrap, &recipient),
+            smol::block_on(unwrap_direct_invite(&wrap, &recipient)),
             Err(InviteError::BadEvent(_))
         ));
     }

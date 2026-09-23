@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use smallvec::{SmallVec, smallvec};
 use theme::{Theme, ThemeFamily, ThemeMode};
 
-pub fn init(window: &mut Window, cx: &mut App) {
-    AppSettings::set_global(cx.new(|cx| AppSettings::new(window, cx)), cx)
+pub fn init(cx: &mut App) {
+    AppSettings::set_global(cx.new(AppSettings::new), cx)
 }
 
 const DEFAULT_FILE_SERVER: &str = "https://nostr.download/";
@@ -46,7 +46,10 @@ setting_accessors! {
     pub nip4e: bool,
     pub trusted_relays: Vec<String>,
     pub file_server: Url,
+    pub recent_communities: Vec<String>,
 }
+
+const RECENT_COMMUNITIES_CAP: usize = 10;
 
 /// Signer kind
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -130,6 +133,10 @@ pub struct Settings {
 
     /// Server for blossom media attachments
     pub file_server: Url,
+
+    /// Recently opened community ids, newest first
+    #[serde(default)]
+    pub recent_communities: Vec<String>,
 }
 
 impl Default for Settings {
@@ -142,6 +149,7 @@ impl Default for Settings {
             nip4e: false,
             trusted_relays: vec![],
             file_server: Url::parse(DEFAULT_FILE_SERVER).unwrap(),
+            recent_communities: vec![],
         }
     }
 }
@@ -160,7 +168,6 @@ impl Global for GlobalAppSettings {}
 pub struct AppSettings {
     /// Settings
     inner: Entity<Settings>,
-
     /// Event subscriptions
     _subscriptions: SmallVec<[Subscription; 2]>,
 }
@@ -171,12 +178,18 @@ impl AppSettings {
         cx.global::<GlobalAppSettings>().0.clone()
     }
 
+    /// The underlying settings entity, which notifies whenever any field changes.
+    pub fn entity(&self) -> &Entity<Settings> {
+        &self.inner
+    }
+
     /// Set the global settings instance
     fn set_global(state: Entity<Self>, cx: &mut App) {
         cx.set_global(GlobalAppSettings(state));
     }
 
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let entity = cx.entity().downgrade();
         let inner = cx.new(|_| Settings::default());
         let mut subscriptions = smallvec![];
 
@@ -188,8 +201,8 @@ impl AppSettings {
         );
 
         // Run at the end of current cycle
-        cx.defer_in(window, |this, window, cx| {
-            this.load(window, cx);
+        cx.defer(move |cx| {
+            entity.update(cx, |this, cx| this.load(cx)).ok();
         });
 
         Self {
@@ -207,7 +220,7 @@ impl AppSettings {
     }
 
     /// Load settings
-    fn load(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn load(&mut self, cx: &mut Context<Self>) {
         let task: Task<Result<Settings, Error>> = cx.background_spawn(async move {
             #[cfg(not(target_arch = "wasm32"))]
             {
@@ -219,7 +232,7 @@ impl AppSettings {
             Err(anyhow!("Not found"))
         });
 
-        cx.spawn_in(window, async move |this, cx| {
+        cx.spawn(async move |this, cx| {
             let mut settings = task.await.unwrap_or(Settings::default());
 
             // Move settings still pointed at the old default file server over to the new one
@@ -228,9 +241,10 @@ impl AppSettings {
             }
 
             // Update settings
-            this.update_in(cx, |this, window, cx| {
+            this.update(cx, |this, cx| {
                 this.set_settings(settings, cx);
-                this.apply_theme(window, cx);
+                this.apply_theme(None, cx);
+                cx.refresh_windows();
             })
             .ok();
         })
@@ -262,7 +276,7 @@ impl AppSettings {
         });
 
         // Apply the new theme
-        self.apply_theme(window, cx);
+        self.apply_theme(Some(window), cx);
     }
 
     /// Reset theme
@@ -271,22 +285,22 @@ impl AppSettings {
             this.theme = None;
             cx.notify();
         });
-        self.apply_theme(window, cx);
+        self.apply_theme(Some(window), cx);
     }
 
     /// Apply theme
-    pub fn apply_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn apply_theme(&mut self, mut window: Option<&mut Window>, cx: &mut Context<Self>) {
         if let Some(name) = self.inner.read(cx).theme.as_ref() {
             let mode = self.inner.read(cx).theme_mode;
 
             if let Ok(new_theme) = ThemeFamily::from_assets(name) {
-                Theme::apply_theme(Rc::new(new_theme), Some(window), cx);
-                Theme::change(mode, Some(window), cx);
+                Theme::apply_theme(Rc::new(new_theme), window.as_deref_mut(), cx);
+                Theme::change(mode, window, cx);
             } else {
                 log::info!("Failed to load theme: {name}");
             }
         } else {
-            Theme::apply_theme(Rc::new(ThemeFamily::default()), Some(window), cx);
+            Theme::apply_theme(Rc::new(ThemeFamily::default()), window, cx);
         }
     }
 
@@ -316,6 +330,16 @@ impl AppSettings {
                     .push(url.as_str_without_trailing_slash().to_string());
                 cx.notify();
             }
+        });
+    }
+
+    /// Move a community to the front of the recently opened list
+    pub fn record_recent_community(&mut self, id: String, cx: &mut Context<Self>) {
+        self.inner.update(cx, |this, cx| {
+            this.recent_communities.retain(|existing| existing != &id);
+            this.recent_communities.insert(0, id);
+            this.recent_communities.truncate(RECENT_COMMUNITIES_CAP);
+            cx.notify();
         });
     }
 }

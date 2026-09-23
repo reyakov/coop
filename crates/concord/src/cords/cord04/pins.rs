@@ -583,7 +583,7 @@ mod tests {
             at_ms,
             None,
         );
-        let (wrap, _) = seal_rumor(&rumor, &group(), author, false).expect("seals");
+        let (wrap, _) = smol::block_on(seal_rumor(&rumor, &group(), author, false)).expect("seals");
 
         open(&wrap, &group(), &channel(), Epoch(0)).expect("opens")
     }
@@ -699,7 +699,7 @@ mod tests {
             AT_MS + 5_000,
             None,
         );
-        let (wrap, _) = seal_rumor(&edit, &group(), &author, false).expect("seals");
+        let (wrap, _) = smol::block_on(seal_rumor(&edit, &group(), &author, false)).expect("seals");
         let (edit_opened, _) = open(&wrap, &group(), &channel(), Epoch(0)).expect("opens");
 
         let refreshed = with_proven_edit(&entry, &edit_opened, &group(), &channel());
@@ -718,7 +718,8 @@ mod tests {
             AT_MS + 6_000,
             None,
         );
-        let (wrap, _) = seal_rumor(&hijack, &group(), &stranger, false).expect("seals");
+        let (wrap, _) =
+            smol::block_on(seal_rumor(&hijack, &group(), &stranger, false)).expect("seals");
         let (hijack_opened, _) = open(&wrap, &group(), &channel(), Epoch(0)).expect("opens");
 
         let unchanged = with_proven_edit(&entry, &hijack_opened, &group(), &channel());
@@ -805,7 +806,8 @@ mod tests {
                 None,
                 AT_MS + 1_000,
             );
-            let (wrap, _) = seal_rumor(&delete, &group(), author_keys, false).expect("seals");
+            let (wrap, _) =
+                smol::block_on(seal_rumor(&delete, &group(), author_keys, false)).expect("seals");
             let (_, rumor) = open(&wrap, &group(), &channel(), Epoch(0)).expect("opens");
 
             assert_eq!(

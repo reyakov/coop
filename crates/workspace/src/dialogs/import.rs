@@ -1,8 +1,8 @@
 use anyhow::{Error, anyhow};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
-    Subscription, Task, Window, div,
+    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
+    Subscription, Task, Window, div, px,
 };
 use instant::Duration;
 use nostr_connect::prelude::*;
@@ -11,6 +11,19 @@ use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::input::{Input, InputEvent, InputState};
 use ui::{Disableable, StyledExt, WindowExtension, divider, v_flex};
+
+pub fn open(window: &mut Window, cx: &mut App) {
+    let import = cx.new(|cx| ImportIdentity::new(window, cx));
+
+    window.open_modal(cx, move |this, _window, _cx| {
+        this.width(px(450.))
+            .show_close(false)
+            .overlay_closable(false)
+            .keyboard(false)
+            .title("Onboarding")
+            .child(import.clone())
+    });
+}
 
 #[derive(Debug)]
 pub struct ImportIdentity {

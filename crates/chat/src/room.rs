@@ -289,12 +289,21 @@ impl Room {
         }
     }
 
-    /// Gets the display image for the room
-    pub fn display_image(&self, cx: &App) -> SharedString {
-        if !self.is_group() {
-            self.display_member(cx).avatar()
+    /// Gets the display picture for the room, if it has one
+    pub fn display_image(&self, cx: &App) -> Option<SharedString> {
+        if self.is_group() {
+            None
         } else {
-            SharedString::from("brand/group.png")
+            self.display_member(cx).avatar()
+        }
+    }
+
+    /// A stable seed for the room's generated avatar
+    pub fn display_image_seed(&self, cx: &App) -> SharedString {
+        if self.is_group() {
+            SharedString::from(self.id.to_string())
+        } else {
+            self.display_member(cx).avatar_seed()
         }
     }
 

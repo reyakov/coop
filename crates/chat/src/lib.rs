@@ -26,8 +26,8 @@ pub use state::FileAttachment;
 /// A static keypair used only for signing locally-cached rumor events.
 static LOCAL_KEYS: LazyLock<Keys> = LazyLock::new(Keys::generate);
 
-pub fn init(window: &mut Window, cx: &mut App) {
-    ChatRegistry::set_global(cx.new(|cx| ChatRegistry::new(window, cx)), cx);
+pub fn init(cx: &mut App) {
+    ChatRegistry::set_global(cx.new(ChatRegistry::new), cx);
 }
 
 struct GlobalChatRegistry(Entity<ChatRegistry>);
@@ -150,7 +150,8 @@ impl ChatRegistry {
     }
 
     /// Create a new chat registry instance
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
+        let entity = cx.entity().downgrade();
         let nostr = NostrRegistry::global(cx);
         let (tx, rx) = flume::unbounded::<Signal>();
         let mut subscriptions = smallvec![];
@@ -167,9 +168,12 @@ impl ChatRegistry {
             }),
         );
 
-        // Run at the end of the current cycle
-        cx.defer_in(window, |this, _window, cx| {
-            this.get_rooms(cx);
+        cx.defer(move |cx| {
+            entity
+                .update(cx, |this, cx| {
+                    this.get_rooms(cx);
+                })
+                .ok();
         });
 
         Self {
@@ -221,7 +225,21 @@ impl ChatRegistry {
                 };
 
                 match *message {
-                    RelayMessage::Event { event, .. } => {
+                    RelayMessage::Event {
+                        subscription_id,
+                        event,
+                        ..
+                    } => {
+                        let chat_sub = subscription_id.as_str() != sub_id1.as_str();
+                        let device_sub = subscription_id.as_str() != sub_id2.as_str();
+
+                        // Concord wraps are also kind 1059.
+                        //
+                        // Only the two gift wrap subscriptions carry NIP-59 wraps for this account.
+                        if event.kind == Kind::GiftWrap && chat_sub && device_sub {
+                            continue;
+                        }
+
                         // Prune the dedup set before it grows unbounded
                         if processed_events.len() >= MAX_PROCESSED {
                             processed_events.clear();

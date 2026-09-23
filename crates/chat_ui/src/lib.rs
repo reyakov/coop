@@ -1203,6 +1203,7 @@ impl ChatPanel {
                         if show_author {
                             this.child(
                                 Avatar::new(author.avatar())
+                                    .seed(author.avatar_seed())
                                     .flex_shrink_0()
                                     .relative()
                                     .dropdown_menu(move |this, _window, _cx| {
@@ -1470,7 +1471,7 @@ impl ChatPanel {
                         h_flex()
                             .gap_1()
                             .font_semibold()
-                            .child(Avatar::new(avatar).small())
+                            .child(Avatar::new(avatar).seed(profile.avatar_seed()).small())
                             .child(name.clone()),
                     ),
             )
@@ -1978,11 +1979,12 @@ impl Panel for ChatPanel {
         self.room
             .read_with(cx, |this, cx| {
                 let label = this.display_name(cx);
-                let url = this.display_image(cx);
+                let picture = this.display_image(cx);
+                let seed = this.display_image_seed(cx);
 
                 h_flex()
                     .gap_1p5()
-                    .child(Avatar::new(url).xsmall())
+                    .child(Avatar::new(picture).seed(seed).xsmall())
                     .child(label)
                     .into_any_element()
             })
