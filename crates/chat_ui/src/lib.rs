@@ -31,19 +31,21 @@ use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
 use ui::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use ui::menu::DropdownMenu;
+use ui::message::{MessageRow, WelcomeMessage};
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
 use ui::tooltip::Tooltip;
-use ui::{
-    Disableable, Icon, IconName, InteractiveElementExt, Sizable, StyledExt, WindowExtension,
-    h_flex, v_flex,
-};
+use ui::{Disableable, Icon, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 use crate::file::*;
 use crate::text::RenderedText;
 
 const REACTION_EMOJIS: &[&str] = &["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
 const COMPACT_REACTION_EMOJIS: &[&str] = &["👍", "❤️", "👀"];
+
+/// Notice shown when a conversation has no messages, and above the message list.
+const PRIVATE_NOTICE: &str =
+    "This conversation is private. Only members can see each other's messages.";
 
 /// Regex matching strings that consist entirely of emoji characters,
 /// zero-width joiners, variation selectors, and keycap combiners.
@@ -126,9 +128,8 @@ impl ChatPanel {
         let replies_to = cx.new(|_| HashSet::new());
         let reports_by_id = Arc::new(RwLock::new(BTreeMap::new()));
 
-        // Define list of messages
         let messages = Vec::new();
-        let list_state = ListState::new(messages.len(), ListAlignment::Bottom, px(1024.));
+        let list_state = ListState::new(messages.len() + 1, ListAlignment::Bottom, px(1024.));
 
         // Get room id and name
         let (id, name) = room
@@ -577,7 +578,6 @@ impl ChatPanel {
     where
         E: Into<Message>,
     {
-        let old_len = self.messages.len();
         let msg: Message = m.into();
 
         if let Err(pos) = self.messages.binary_search(&msg) {
@@ -586,7 +586,8 @@ impl ChatPanel {
             for (i, message) in self.messages.iter().enumerate().skip(pos) {
                 self.message_index.insert(message.id, i);
             }
-            self.list_state.splice(old_len..old_len, 1);
+            let len = self.list_state.item_count();
+            self.list_state.splice(len..len, 1);
 
             if scroll {
                 self.list_state.scroll_to(ListOffset {
@@ -657,7 +658,8 @@ impl ChatPanel {
     /// Scroll to a message by its ID
     fn scroll_to(&self, id: &EventId) {
         if let Some(ix) = self.messages.iter().position(|msg| &msg.id == id) {
-            self.list_state.scroll_to_reveal_item(ix);
+            // The welcome message occupies the first row, so message rows sit one ahead.
+            self.list_state.scroll_to_reveal_item(ix + 1);
         }
     }
 
@@ -1051,10 +1053,19 @@ impl ChatPanel {
         cx.open_url(&content);
     }
 
-    fn render_announcement(&self, cx: &Context<Self>) -> AnyElement {
-        const MSG: &str =
-            "This conversation is private. Only members can see each other's messages.";
+    fn render_welcome(&self, cx: &Context<Self>) -> AnyElement {
+        WelcomeMessage::new("welcome")
+            .icon(
+                svg()
+                    .path("brand/coop.svg")
+                    .size_12()
+                    .text_color(cx.theme().ghost_element_background_alt),
+            )
+            .message(PRIVATE_NOTICE)
+            .into_any_element()
+    }
 
+    fn render_announcement(&self, cx: &Context<Self>) -> AnyElement {
         v_flex()
             .h_40()
             .w_full()
@@ -1072,7 +1083,7 @@ impl ChatPanel {
                     .size_12()
                     .text_color(cx.theme().ghost_element_active),
             )
-            .child(MSG)
+            .child(PRIVATE_NOTICE)
             .into_any_element()
     }
 
@@ -1141,7 +1152,14 @@ impl ChatPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let file = self.messages.get(ix).and_then(|message| {
+        if ix == 0 {
+            return self.render_welcome(cx);
+        }
+
+        // The welcome message occupies the first row, so message rows sit one ahead.
+        let index = ix - 1;
+
+        let file = self.messages.get(index).and_then(|message| {
             let file = message.file.clone()?;
             (!self.decrypted_files.contains_key(&message.id) && file.is_image())
                 .then_some((message.id, file))
@@ -1151,14 +1169,14 @@ impl ChatPanel {
             self.load_file(id, file, cx);
         }
 
-        if let Some(message) = self.messages.get(ix) {
+        if let Some(message) = self.messages.get(index) {
             let persons = PersonRegistry::global(cx);
-            let show_author = self.is_group_start(ix);
+            let show_author = self.is_group_start(index);
             let text = self
                 .rendered_texts_by_id
                 .entry(message.id)
                 .or_insert_with(|| {
-                    RenderedText::new(&message.content, &message.mentions, &persons, true, cx)
+                    text::rendered_text(&message.content, &message.mentions, &persons, true, cx)
                 })
                 .element(ix.into(), window, cx);
 
@@ -1188,68 +1206,38 @@ impl ChatPanel {
         // Hide avatar setting
         let hide_avatar = AppSettings::get_hide_avatar(cx);
 
-        div()
-            .id(ix)
-            .group("")
-            .relative()
-            .w_full()
-            .py_1()
-            .px_3()
-            .child(
-                div()
-                    .flex()
-                    .gap_3()
-                    .when(!hide_avatar, |this| {
-                        if show_author {
-                            this.child(
-                                Avatar::new(author.avatar())
-                                    .seed(author.avatar_seed())
-                                    .flex_shrink_0()
-                                    .relative()
-                                    .dropdown_menu(move |this, _window, _cx| {
-                                        this.menu("Public Key", Box::new(Command::Copy(pk)))
-                                            .menu("View Relays", Box::new(Command::Relays(pk)))
-                                            .separator()
-                                            .menu("View on njump.me", Box::new(Command::Njump(pk)))
-                                    }),
-                            )
-                        } else {
-                            this.child(div().flex_shrink_0().w(px(32.)))
-                        }
-                    })
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .w_full()
-                            .flex_initial()
-                            .overflow_hidden()
-                            .when(show_author, |this| {
-                                this.child(
-                                    h_flex()
-                                        .gap_2()
-                                        .text_sm()
-                                        .text_color(cx.theme().text_placeholder)
-                                        .child(div().font_semibold().child(author.name()))
-                                        .child(message.created_at.to_human_time())
-                                        .when(has_reports, |this| {
-                                            this.child(self.render_sent_reports(&id, cx))
-                                        }),
-                                )
-                            })
-                            .when(has_replies, |this| {
-                                this.children(self.render_message_replies(replies, cx))
-                            })
-                            .when(message.file.is_none(), |this| this.child(rendered_text))
-                            .child(self.render_media(&message.media, cx))
-                            .when_some(message.file.as_ref(), |this, file| {
-                                this.child(self.render_message_file(&id, file, cx))
-                            })
-                            .when(has_reactions, |this| {
-                                this.child(self.render_reactions(&id, cx))
-                            }),
-                    ),
+        MessageRow::new(ix)
+            .show_author(show_author)
+            .hide_avatar(hide_avatar)
+            .avatar(
+                Avatar::new(author.avatar())
+                    .seed(author.avatar_seed())
+                    .flex_shrink_0()
+                    .relative()
+                    .dropdown_menu(move |this, _window, _cx| {
+                        this.menu("Public Key", Box::new(Command::Copy(pk)))
+                            .menu("View Relays", Box::new(Command::Relays(pk)))
+                            .separator()
+                            .menu("View on njump.me", Box::new(Command::Njump(pk)))
+                    }),
             )
-            .child(
+            .author(author.name())
+            .timestamp(message.created_at.to_human_time())
+            .when(has_reports, |this| {
+                this.header_extra(self.render_sent_reports(&id, cx))
+            })
+            .when(has_replies, |this| {
+                this.children(self.render_message_replies(replies, cx))
+            })
+            .when(message.file.is_none(), |this| this.child(rendered_text))
+            .child(self.render_media(&message.media, cx))
+            .when_some(message.file.as_ref(), |this, file| {
+                this.child(self.render_message_file(&id, file, cx))
+            })
+            .when(has_reactions, |this| {
+                this.child(self.render_reactions(&id, cx))
+            })
+            .overlay(
                 div()
                     .group_hover("", |this| this.bg(cx.theme().element_active))
                     .absolute()
@@ -1259,7 +1247,7 @@ impl ChatPanel {
                     .h_full()
                     .bg(cx.theme().border_transparent),
             )
-            .child(self.render_actions(&id, &pk, cx))
+            .overlay(self.render_actions(&id, &pk, cx))
             .on_mouse_down(
                 MouseButton::Middle,
                 cx.listener(move |this, _, _window, cx| {
@@ -1269,7 +1257,6 @@ impl ChatPanel {
             .on_double_click(cx.listener(move |this, _, _window, cx| {
                 this.reply_to(&id, cx);
             }))
-            .hover(|this| this.bg(cx.theme().surface_background))
             .into_any_element()
     }
 
@@ -1983,12 +1970,13 @@ impl Panel for ChatPanel {
                 let seed = this.display_image_seed(cx);
 
                 h_flex()
-                    .gap_1p5()
+                    .gap_1()
+                    .text_xs()
                     .child(Avatar::new(picture).seed(seed).xsmall())
                     .child(label)
                     .into_any_element()
             })
-            .unwrap_or(div().child("Unknown").into_any_element())
+            .unwrap_or(div().text_xs().child("Unknown").into_any_element())
     }
 
     fn toolbar_buttons(&self, _window: &Window, _cx: &App) -> Vec<Button> {

@@ -3,9 +3,9 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, ClickEvent, Div, InteractiveElement, IntoElement, MouseButton, ParentElement,
-    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, px, relative,
+    RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
-use theme::{ActiveTheme, TABBAR_HEIGHT};
+use theme::ActiveTheme;
 
 use crate::{Icon, IconName, Selectable, h_flex};
 
@@ -25,6 +25,7 @@ pub struct Tab {
     children: Vec<AnyElement>,
     pub(super) disabled: bool,
     pub(super) selected: bool,
+    pub(super) segmented: bool,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
 }
 
@@ -69,6 +70,7 @@ impl Default for Tab {
             children: Vec::new(),
             disabled: false,
             selected: false,
+            segmented: false,
             prefix: None,
             suffix: None,
             on_click: None,
@@ -132,6 +134,12 @@ impl Tab {
         self.tab_bar_prefix = Some(tab_bar_prefix);
         self
     }
+
+    /// Render the tab as a segment inside a segmented control.
+    pub(crate) fn segmented(mut self, segmented: bool) -> Self {
+        self.segmented = segmented;
+        self
+    }
 }
 
 impl ParentElement for Tab {
@@ -167,74 +175,103 @@ impl Styled for Tab {
 
 impl RenderOnce for Tab {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let fg = if self.disabled {
+        let Self {
+            ix,
+            base,
+            label,
+            icon,
+            prefix,
+            suffix,
+            children,
+            disabled,
+            selected,
+            segmented,
+            on_click,
+            ..
+        } = self;
+
+        let foreground = if disabled {
             cx.theme().text_muted
-        } else if self.selected {
+        } else if selected {
             cx.theme().tab_active_foreground
         } else {
             cx.theme().tab_foreground
         };
 
-        self.base
-            .id(self.ix)
-            .flex()
-            .flex_wrap()
-            .gap_1()
+        let content = h_flex()
+            .flex_1()
+            .h_6()
+            .whitespace_nowrap()
             .items_center()
-            .flex_shrink_0()
-            .h(TABBAR_HEIGHT)
-            .relative()
             .overflow_hidden()
-            .text_color(fg)
-            .text_sm()
-            .when_some(self.prefix, |this, prefix| this.child(prefix))
-            .child(
-                h_flex()
+            .when(segmented, |this| this.justify_center().px_1())
+            .when(!segmented, |this| this.justify_start())
+            .map(|this| match icon {
+                Some(icon) => this.w(px(38.)).child(icon.size_4()),
+                None => this
+                    .map(|this| match label {
+                        Some(label) => this.child(label),
+                        None => this,
+                    })
+                    .children(children),
+            });
+
+        base.id(ix)
+            .group("tab")
+            .flex()
+            .items_center()
+            .text_color(foreground)
+            .when(segmented, |this| {
+                this.text_xs()
                     .flex_1()
-                    .h(px(30.))
-                    .line_height(relative(1.))
-                    .whitespace_nowrap()
-                    .items_center()
-                    .justify_center()
+                    .h_6()
+                    .rounded(cx.theme().radius)
+                    .when(selected && !disabled, |this| {
+                        this.bg(cx.theme().tab_active_background)
+                            .when(cx.theme().shadow, |this| this.shadow_sm())
+                    })
+                    .when(!selected && !disabled, |this| {
+                        this.hover(|this| this.bg(cx.theme().tab_hover_background))
+                    })
+            })
+            .when(!segmented, |this| {
+                this.flex_shrink_0()
+                    .min_w_32()
+                    .h_7()
+                    .gap_1()
+                    .px_1p5()
+                    .text_sm()
+                    .rounded(cx.theme().radius)
                     .overflow_hidden()
-                    .flex_shrink_0()
-                    .px_3()
-                    .map(|this| match self.icon {
-                        Some(icon) => this.w(px(38.)).child(icon.size_4()),
-                        None => this
-                            .map(|this| match self.label {
-                                Some(label) => this.child(label),
-                                None => this,
-                            })
-                            .children(self.children),
-                    }),
-            )
-            .when_some(self.suffix, |this, suffix| {
-                this.child(div().pr_2().child(suffix))
+                    .when(selected && !disabled, |this| {
+                        this.bg(cx.theme().tab_background)
+                    })
+                    .when(!selected && !disabled, |this| {
+                        this.hover(|this| {
+                            this.bg(cx.theme().tab_hover_background)
+                                .text_color(cx.theme().tab_active_foreground)
+                        })
+                    })
+            })
+            .when_some(prefix, |this, prefix| this.child(prefix))
+            .child(content)
+            .when_some(suffix, |this, suffix| {
+                this.child(
+                    div()
+                        .flex_shrink_0()
+                        .when(!selected, |this| {
+                            this.invisible().group_hover("tab", |this| this.visible())
+                        })
+                        .child(suffix),
+                )
             })
             .on_mouse_down(MouseButton::Left, |_ev, _window, cx| {
                 cx.stop_propagation();
             })
-            .when(!self.disabled, |this| {
-                this.when_some(self.on_click.clone(), |this, on_click| {
+            .when(!disabled, |this| {
+                this.when_some(on_click, |this, on_click| {
                     this.on_click(move |event, window, cx| on_click(event, window, cx))
                 })
             })
-            .child(
-                div()
-                    .absolute()
-                    .bottom_0()
-                    .left_0()
-                    .right_0()
-                    .h_0p5()
-                    .when(self.selected && !self.disabled, |this| {
-                        this.bg(cx.theme().element_active)
-                    })
-                    .when(!self.selected && !self.disabled, |this| {
-                        this.invisible().group_hover("", |this| {
-                            this.visible().bg(cx.theme().secondary_background)
-                        })
-                    }),
-            )
     }
 }

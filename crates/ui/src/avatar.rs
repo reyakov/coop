@@ -27,7 +27,7 @@ pub(super) fn avatar_size(size: Size) -> AbsoluteLength {
         Size::Large => px(64.).into(),
         Size::Medium => px(32.).into(),
         Size::Small => px(24.).into(),
-        Size::XSmall => px(20.).into(),
+        Size::XSmall => px(18.).into(),
         Size::Size(size) => size.into(),
     }
 }

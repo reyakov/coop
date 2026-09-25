@@ -58,13 +58,16 @@ impl Panel for GreeterPanel {
     }
 
     fn title(&self, cx: &App) -> AnyElement {
-        div()
+        h_flex()
+            .gap_1()
+            .text_xs()
             .child(
                 svg()
                     .path("brand/coop.svg")
                     .size_4()
                     .text_color(cx.theme().text_muted),
             )
+            .child("Welcome")
             .into_any_element()
     }
 }

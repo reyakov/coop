@@ -7,7 +7,7 @@ pub use concord::cord03::{ChatMessage, ReplyRef};
 use concord::state::CommunityState;
 pub use concord::{ChannelId, CommunityId, Epoch};
 use futures::future::{Either, select};
-use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task, Window};
+use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
@@ -223,27 +223,6 @@ impl CommunityRegistry {
 
     pub fn community(&self, id: &CommunityId) -> Option<Entity<Community>> {
         self.index.get(id).cloned()
-    }
-
-    /// Ask the workspace to open a community's panel.
-    pub fn emit_community(
-        &mut self,
-        community: &Entity<Community>,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let id = community.read(cx).id();
-
-        cx.defer_in(window, move |_this, _window, cx| {
-            cx.emit(CommunityEvent::Open(id));
-        });
-    }
-
-    /// Ask the workspace to close a community's panel.
-    pub fn emit_close(&mut self, id: CommunityId, window: &mut Window, cx: &mut Context<Self>) {
-        cx.defer_in(window, move |_this, _window, cx| {
-            cx.emit(CommunityEvent::Close(id));
-        });
     }
 
     /// Create a community owned by the current account and begin tracking it.

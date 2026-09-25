@@ -5,22 +5,21 @@ use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Anchor, AnyElement, AnyView, App, AppContext as _, Bounds, Context, Div, Empty, Entity,
+    AnyElement, AnyView, App, AppContext as _, Bounds, Context, Div, Empty, Entity,
     GlobalElementId, InspectorElementId, InteractiveElement as _, IntoElement, LayoutId,
     MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render, ScrollHandle,
     SharedString, Stateful, StatefulInteractiveElement as _, Style, StyleRefinement, Styled as _,
-    WeakEntity, Window, actions, div, px, rems,
+    WeakEntity, Window, actions, div, px,
 };
 pub use gpui_base::dock::{DockArea, DockLayout, DockPlacement};
 use gpui_base::dock::{
     DockAreaRenderer, DockContext, DragPanel, DropIndicator, InsertTarget, NodeId, PaneNode,
-    PaneRef, PanelId, TabGroupContext, TabGroupRenderer, TileContext, TilesRenderer,
+    PaneRef, PanelId, TabGroupContext, TabGroupRenderer,
 };
 use gpui_base::{Placement, ResizeHandleContext, Side};
 use theme::{ActiveTheme, TABBAR_HEIGHT};
 
 use crate::button::{Button, ButtonVariants as _};
-use crate::menu::DropdownMenu as _;
 use crate::resizable::{resize_handle, resize_handle_appearance};
 use crate::tab::Tab;
 use crate::tab::tab_bar::TabBar;
@@ -95,6 +94,19 @@ pub fn add_panel(
     area.add_panel_view(Arc::new(panel), placement, None, window, cx);
 }
 
+/// Add a panel to a dock reached through a weak handle.
+pub fn add_panel_to(
+    dock: &WeakEntity<DockArea>,
+    panel: PanelHandle,
+    placement: DockPlacement,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let _ = dock.update(cx, |area, cx| {
+        add_panel(area, panel, placement, window, cx);
+    });
+}
+
 /// The panel in any region of `area` whose logical id is `key`.
 fn find_panel(area: &DockArea, key: &SharedString, cx: &App) -> Option<(PanelId, NodeId, usize)> {
     let placements = [
@@ -167,7 +179,6 @@ fn left_top_group(node: &PaneNode) -> Option<NodeId> {
     match node.kind() {
         PaneRef::Tabs { .. } => Some(node.id()),
         PaneRef::Split { children, .. } => children.first().and_then(left_top_group),
-        PaneRef::Tiles { .. } => None,
     }
 }
 
@@ -182,7 +193,6 @@ fn right_top_group(node: &PaneNode) -> Option<NodeId> {
             };
             child.and_then(right_top_group)
         }
-        PaneRef::Tiles { .. } => None,
     }
 }
 
@@ -262,18 +272,6 @@ impl DockAreaRenderer for DockSkin {
 
     fn tab_group_renderer(&self) -> Rc<dyn TabGroupRenderer> {
         Rc::new(TabGroupSkin::new(self.shared.clone()))
-    }
-
-    fn tiles_renderer(&self) -> Rc<dyn TilesRenderer> {
-        Rc::new(NoTiles)
-    }
-}
-
-struct NoTiles;
-
-impl TilesRenderer for NoTiles {
-    fn render_drag_bar(&self, _: &TileContext, _: &mut Window, _: &mut App) -> AnyElement {
-        Empty.into_any_element()
     }
 }
 
@@ -430,9 +428,6 @@ impl TabGroupSkin {
     }
 
     /// Whether this group is the left dock's root with a single panel.
-    ///
-    /// Such a group draws no tab bar, so its panel owns the window's top-left
-    /// corner — including the space the macOS traffic lights overlay.
     fn is_plain_left_group(&self, group: &TabGroupContext, cx: &App) -> bool {
         let Some(area) = self.shared.area() else {
             return false;
@@ -445,9 +440,6 @@ impl TabGroupSkin {
             && group.panels().len() == 1
     }
 
-    /// Whether this group is the topmost-left group on screen, which sits under
-    /// the native macOS traffic lights. The left dock's group is leftmost while
-    /// it is open and holds a panel; the center's is leftmost otherwise.
     fn is_leftmost_top_group(&self, group: &TabGroupContext, cx: &App) -> bool {
         let Some(area) = self.shared.area() else {
             return false;
@@ -465,172 +457,6 @@ impl TabGroupSkin {
         tree.and_then(|tree| left_top_group(tree.root())) == Some(group.node())
     }
 
-    fn render_toolbar(
-        &self,
-        group: &TabGroupContext,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> impl IntoElement {
-        let zoomed = group.is_zoomed();
-        let closable = group.is_closable();
-        let zoomable = group.active_panel().is_some_and(|panel| panel.zoomable(cx));
-
-        let zoom_label = if zoomed { "Zoom Out" } else { "Zoom In" };
-
-        let buttons = group
-            .active_panel()
-            .and_then(PanelHandle::of)
-            .map(|handle| handle.panel().toolbar_buttons(window, cx))
-            .unwrap_or_default();
-
-        let menu_panel = group
-            .active_panel()
-            .and_then(PanelHandle::of)
-            .map(|handle| handle.panel().clone());
-
-        h_flex()
-            .p_0p5()
-            .gap_1p5()
-            .occlude()
-            .rounded_full()
-            .children(buttons.into_iter().map(|button| button.small().ghost()))
-            .when(zoomed, |this| {
-                this.child(
-                    Button::new("zoom")
-                        .icon(IconName::Zoom)
-                        .small()
-                        .ghost()
-                        .tooltip("Zoom Out")
-                        .on_click({
-                            let group = TabGroupContext::clone(group);
-                            move |_, window, cx| group.toggle_zoom(window, cx)
-                        }),
-                )
-            })
-            .child(
-                Button::new("menu")
-                    .icon(IconName::Ellipsis)
-                    .small()
-                    .ghost()
-                    .dropdown_menu({
-                        move |menu, _, cx| {
-                            let menu = match menu_panel.clone() {
-                                Some(panel) => panel.popup_menu(menu, cx),
-                                None => menu,
-                            };
-
-                            menu.when(zoomable, |this| {
-                                this.separator().menu(zoom_label, Box::new(ToggleZoom))
-                            })
-                            .when(closable, |this| {
-                                this.separator().menu("Close", Box::new(ClosePanel))
-                            })
-                        }
-                    })
-                    .anchor(Anchor::TopRight),
-            )
-    }
-
-    fn render_title(
-        &self,
-        group: &TabGroupContext,
-        ix: usize,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> AnyElement {
-        let panel = group.panels()[ix].clone();
-        let left_button = self.dock_toggle_button(DockPlacement::Left, group, cx);
-        let bottom_button = self.dock_toggle_button(DockPlacement::Bottom, group, cx);
-        let right_button = self.dock_toggle_button(DockPlacement::Right, group, cx);
-        let has_leading = left_button.is_some() || bottom_button.is_some();
-        let drag = tab_drag(group, ix, cx);
-        let is_title_bar = self.is_title_bar_group(group, cx);
-        let needs_traffic_light_padding =
-            cfg!(target_os = "macos") && self.is_leftmost_top_group(group, cx);
-        let trailing_chrome = is_title_bar
-            .then(|| self.shared.chrome.trailing(window, cx))
-            .flatten();
-
-        let bar = h_flex()
-            .id("tab-title-bar")
-            .justify_between()
-            .items_center()
-            .line_height(rems(1.0))
-            .h(TABBAR_HEIGHT)
-            .bg(cx.theme().panel_background)
-            .when(left_button.is_some(), |this| this.pl_2())
-            .when(right_button.is_some(), |this| this.pr_2())
-            .when(has_leading, |this| {
-                this.child(
-                    h_flex()
-                        .flex_shrink_0()
-                        .mr_1()
-                        .gap_1()
-                        .children(left_button)
-                        .children(bottom_button),
-                )
-            })
-            .when(needs_traffic_light_padding, |this| {
-                this.pl(px(TRAFFIC_LIGHT_PADDING))
-            })
-            .child(
-                div()
-                    .id("tab")
-                    .flex_initial()
-                    .min_w_0()
-                    .px_2()
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .child(
-                        div()
-                            .w_full()
-                            .text_ellipsis()
-                            .text_sm()
-                            .child(panel_title(&panel, cx)),
-                    )
-                    .when_some(drag, |this, drag| {
-                        this.on_drag(drag, {
-                            let panel = panel.clone();
-                            move |drag, offset, _, cx| {
-                                cx.stop_propagation();
-                                drag.set_drag_offset(offset);
-                                cx.new(|_| DragPreview {
-                                    panel: panel.clone(),
-                                })
-                            }
-                        })
-                    }),
-            )
-            .child({
-                let space = div().id("tab-title-space").flex_1().h_full();
-                if is_title_bar {
-                    title_bar_drag_handlers(space, window, cx).into_any_element()
-                } else {
-                    space.into_any_element()
-                }
-            })
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .ml_1()
-                    .gap_1()
-                    .child(self.render_toolbar(group, window, cx))
-                    .children(right_button),
-            )
-            .when_some(trailing_chrome, |this, chrome| this.child(chrome));
-
-        if is_title_bar {
-            h_flex()
-                .h(TABBAR_HEIGHT)
-                .bg(cx.theme().panel_background)
-                .child(bar.flex_1())
-                .child(window_controls())
-                .into_any_element()
-        } else {
-            bar.into_any_element()
-        }
-    }
-
     fn render_tabs(
         &self,
         group: &TabGroupContext,
@@ -642,9 +468,12 @@ impl TabGroupSkin {
         let bottom_button = self.dock_toggle_button(DockPlacement::Bottom, group, cx);
         let right_button = self.dock_toggle_button(DockPlacement::Right, group, cx);
         let has_leading = left_button.is_some() || bottom_button.is_some();
+
         let collapsed = group.is_collapsed();
         let droppable = group.is_droppable();
         let tabs_count = group.panels().len();
+        let is_title_bar = self.is_title_bar_group(group, cx);
+
         let displayed = group.active_panel().map(|panel| panel.panel_id(cx));
         let displayed_ix = displayed.and_then(|displayed| {
             group
@@ -652,12 +481,14 @@ impl TabGroupSkin {
                 .iter()
                 .position(|panel| panel.panel_id(cx) == displayed)
         });
-        let is_title_bar = self.is_title_bar_group(group, cx);
+
         let needs_traffic_light_padding =
             cfg!(target_os = "macos") && self.is_leftmost_top_group(group, cx);
+
         let trailing_chrome = is_title_bar
             .then(|| self.shared.chrome.trailing(window, cx))
             .flatten();
+
         let empty_space = div()
             .id("tab-bar-empty-space")
             .h_full()
@@ -673,6 +504,7 @@ impl TabGroupSkin {
                         }
                     })
             });
+
         let empty_space = if is_title_bar {
             title_bar_drag_handlers(empty_space, window, cx).into_any_element()
         } else {
@@ -689,7 +521,9 @@ impl TabGroupSkin {
             .when(is_title_bar || has_leading, |this| {
                 this.prefix(
                     h_flex()
-                        .items_center()
+                        .size(TABBAR_HEIGHT)
+                        .flex_shrink_0()
+                        .justify_center()
                         .top_0()
                         .right(-px(1.))
                         .pl_0p5()
@@ -767,13 +601,13 @@ impl TabGroupSkin {
             .when(!collapsed, |this| {
                 this.suffix(
                     h_flex()
+                        .flex_shrink_0()
                         .items_center()
                         .top_0()
                         .right_0()
                         .h_full()
                         .px_0p5()
                         .gap_1()
-                        .child(self.render_toolbar(group, window, cx))
                         .children(right_button)
                         .children(trailing_chrome),
                 )
@@ -846,7 +680,13 @@ impl TabGroupSkin {
                 .small()
                 .ghost()
                 .tab_stop(false)
-                .tooltip(if is_open { "Collapse" } else { "Expand" })
+                .map(|this| {
+                    if is_open {
+                        this.tooltip("Collapse")
+                    } else {
+                        this.tooltip("Expand")
+                    }
+                })
                 .on_click(move |_, window, cx| {
                     area.update(cx, |area, cx| area.toggle_dock(placement, window, cx));
                 }),
@@ -901,13 +741,11 @@ impl TabGroupRenderer for TabGroupSkin {
             self.scroll_handle.scroll_to_item(visible_ix);
         }
 
-        match visible.as_slice() {
-            [] => Empty.into_any_element(),
-            // One panel in a group that is not asking for tabs gets the title
-            // instead of a tab bar.
-            [ix] => self.render_title(group, *ix, window, cx),
-            _ => self.render_tabs(group, visible.as_slice(), window, cx),
+        if visible.is_empty() {
+            return Empty.into_any_element();
         }
+
+        self.render_tabs(group, visible.as_slice(), window, cx)
     }
 
     fn render_active_panel(

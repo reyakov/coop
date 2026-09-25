@@ -7,6 +7,7 @@ use gpui::{
     Window, div, px,
 };
 use smallvec::SmallVec;
+use theme::ActiveTheme;
 
 use super::Tab;
 use crate::button::{Button, ButtonVariants as _};
@@ -25,6 +26,7 @@ pub struct TabBar {
     last_empty_space: AnyElement,
     selected_index: Option<usize>,
     menu: bool,
+    segmented: bool,
     #[allow(clippy::type_complexity)]
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
 }
@@ -43,7 +45,14 @@ impl TabBar {
             selected_index: None,
             on_click: None,
             menu: false,
+            segmented: false,
         }
+    }
+
+    /// Render the tabs as a segmented control inside a pill-shaped track.
+    pub fn segmented(mut self, segmented: bool) -> Self {
+        self.segmented = segmented;
+        self
     }
 
     /// Set whether to show the menu button when tabs overflow, default is false.
@@ -113,33 +122,45 @@ impl Styled for TabBar {
 }
 
 impl RenderOnce for TabBar {
-    fn render(self, _: &mut Window, _cx: &mut App) -> impl IntoElement {
+    fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let mut item_labels = Vec::new();
         let selected_index = self.selected_index;
         let on_click = self.on_click.clone();
+        let segmented = self.segmented;
+        let has_prefix = self.prefix.is_some();
 
         self.base
             .group("tab-bar")
             .relative()
             .flex()
             .items_center()
+            .min_w_0()
             .refine_style(&self.style)
+            .when(segmented, |this| {
+                this.bg(cx.theme().tab_background)
+                    .p_0p5()
+                    .rounded(cx.theme().radius)
+            })
             .when_some(self.prefix, |this, prefix| this.child(prefix))
             .child(
                 h_flex()
                     .id("tabs")
                     .flex_1()
-                    .overflow_x_scroll()
+                    .when(!segmented, |this| {
+                        this.overflow_x_scroll()
+                            .when(!has_prefix, |this| this.pl_2())
+                    })
                     .when_some(self.scroll_handle, |this, scroll_handle| {
                         this.track_scroll(&scroll_handle)
                     })
-                    .gap(px(0.))
+                    .gap_1()
                     .children(self.children.into_iter().enumerate().map(|(ix, child)| {
                         item_labels.push((child.label.clone(), child.disabled));
                         let tab_bar_prefix = child.tab_bar_prefix.unwrap_or(true);
                         child
                             .ix(ix)
                             .tab_bar_prefix(tab_bar_prefix)
+                            .segmented(segmented)
                             .when_some(self.selected_index, |this, selected_ix| {
                                 this.selected(selected_ix == ix)
                             })

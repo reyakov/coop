@@ -11,7 +11,7 @@ use concord::cord06::RekeyScope;
 use concord::derive::{channel_group_key, grant_locator};
 use concord::state::{ChannelCursor, ChannelKeyRef, CommunityState, HeldKey, HeldRoot};
 use concord::{ChannelId, CommunityId, Epoch};
-use gpui::{App, AppContext, Context, EventEmitter, Task};
+use gpui::{App, AppContext, Context, EventEmitter, SharedString, Task};
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
@@ -107,8 +107,6 @@ impl SubscriptionKey {
 #[derive(Debug, Clone)]
 pub enum CommunityEvent {
     Updated(CommunityId),
-    Open(CommunityId),
-    Close(CommunityId),
     Channel(CommunityId, ChannelId),
     /// History exists here that no held key can open.
     Unreadable(CommunityId),
@@ -180,15 +178,16 @@ impl Community {
         &self.state
     }
 
-    pub fn name(&self) -> String {
+    pub fn name(&self) -> SharedString {
         if let Some(metadata) = &self.control.community {
-            return metadata.name.clone();
+            return SharedString::from(&metadata.name);
         }
 
         self.state
             .name
-            .clone()
-            .unwrap_or_else(|| self.state.id.to_hex())
+            .as_ref()
+            .map(SharedString::from)
+            .unwrap_or_else(|| SharedString::from("Unknown"))
     }
 
     pub fn control(&self) -> &ControlFold {

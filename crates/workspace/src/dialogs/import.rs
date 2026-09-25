@@ -20,7 +20,7 @@ pub fn open(window: &mut Window, cx: &mut App) {
             .show_close(false)
             .overlay_closable(false)
             .keyboard(false)
-            .title("Onboarding")
+            .title("Get Started")
             .child(import.clone())
     });
 }

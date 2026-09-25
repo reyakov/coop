@@ -23,7 +23,4 @@ futures.workspace = true
 log.workspace = true
 serde.workspace = true
 
-linkify = "0.10.0"
-pulldown-cmark = "0.13.1"
 regex = "1"
-

@@ -31,7 +31,7 @@ fn uses_managed_updates() -> bool {
         // Allow opting out of in-app updates via an explicit environment variable.
         || std::env::var(COOP_UPDATE_EXPLANATION).is_ok()
         // The Snap package sets `COOP_BUNDLE_TYPE=snap` (see snapcraft.yaml.in).
-        || std::env::var(COOP_BUNDLE_TYPE).is_ok_and(|value| value == "snap")
+        || std::env::var(COOP_BUNDLE_TYPE).is_ok_and(|value | value == "snap")
 }
 
 /// Initialize the auto-update system.
@@ -127,6 +127,11 @@ impl AutoUpdater {
     /// Whether nothing is happening, so the UI can hide the status line.
     pub fn idle(&self) -> bool {
         matches!(self.status, UpdateStatus::Idle)
+    }
+
+    /// Whether the running version is the newest release, so the status line can be hidden.
+    pub fn up_to_date(&self) -> bool {
+        matches!(self.status, UpdateStatus::Idle | UpdateStatus::UpToDate)
     }
 
     /// Whether a verified update is installed and waiting for a restart.

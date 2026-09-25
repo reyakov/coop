@@ -9,7 +9,7 @@ use fuzzy_matcher::FuzzyMatcher;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, Global, SharedString, Subscription, Task,
-    WeakEntity, Window,
+    WeakEntity,
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
@@ -37,15 +37,8 @@ impl Global for GlobalChatRegistry {}
 /// Chat event.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ChatEvent {
-    /// An event to open a room by its ID
-    OpenRoom(u64),
-    /// An event to close a room by its ID
-    CloseRoom(u64),
-    /// An event to notify UI about a new chat request
     Ping,
-    /// No Inbox Relays found, the app is not ready to subscribe messages
     InboxRelayNotFound,
-    /// An error occurred
     Error(String),
 }
 
@@ -543,34 +536,16 @@ impl ChatRegistry {
         cx.notify();
     }
 
-    /// Emit an open room event.
-    ///
-    /// If the room is new, add it to the registry.
-    pub fn emit_room(&mut self, room: &Entity<Room>, window: &mut Window, cx: &mut Context<Self>) {
-        // Get the room's ID.
+    /// Track a room so it is listed and can be looked up by id.
+    pub fn track_room(&mut self, room: &Entity<Room>, cx: &mut Context<Self>) {
         let id = room.read(cx).id;
 
-        // If the room is new, add it to the registry and index.
         if let hash_map::Entry::Vacant(e) = self.room_index.entry(id) {
             let entity = room.to_owned();
             e.insert(entity.clone());
+
             self.rooms.insert(0, entity);
-        }
-
-        // Emit the open room event deferred to avoid re-entrant reads
-        cx.defer_in(window, move |_this, _window, cx| {
-            cx.emit(ChatEvent::OpenRoom(id));
-        });
-    }
-
-    /// Close a room.
-    pub fn close_room(&mut self, id: u64, window: &mut Window, cx: &mut Context<Self>) {
-        if self.room_index.contains_key(&id) {
-            self.room_index.remove(&id);
-            self.rooms.retain(|r| r.read(cx).id != id);
-            cx.defer_in(window, move |_this, _window, cx| {
-                cx.emit(ChatEvent::CloseRoom(id));
-            });
+            cx.notify();
         }
     }
 

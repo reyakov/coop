@@ -19,9 +19,6 @@ pub enum PanelEvent {
 
 pub trait Panel: EventEmitter<PanelEvent> + Render + Focusable {
     /// The name of the panel used to serialize, deserialize and identify the panel.
-    ///
-    /// This is used to identify the panel when deserializing the panel.
-    /// Once you have defined a panel id, this must not be changed.
     fn panel_id(&self) -> SharedString;
 
     /// The title of the panel

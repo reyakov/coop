@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 
 use anyhow::Result;
@@ -19,6 +19,8 @@ use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
 use ui::input::{InputEvent, Textarea, TextareaState};
+use ui::markdown::RenderedText;
+use ui::message::WelcomeMessage;
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
 use ui::{Disableable, IconName, Sizable, WindowExtension, h_flex, v_flex};
@@ -97,6 +99,8 @@ pub struct CommunityPanel {
     channel: Option<ChannelId>,
     /// The selected channel's timeline (oldest first)
     rows: Vec<ChatMessage>,
+    /// Rendered markdown content, keyed by message id and dropped when a row changes
+    rendered_texts_by_id: BTreeMap<EventId, RenderedText>,
     /// Whether the store holds rows older than `rows`
     has_more: bool,
     /// A round or a page read is in flight
@@ -145,53 +149,49 @@ impl CommunityPanel {
             window,
             |_this, _community, event, window, cx| {
                 match event {
-                    CommunityEvent::Updated(_)
-                    | CommunityEvent::Unreadable(_)
-                    | CommunityEvent::Failed(_) => {
-                        cx.defer_in(window, |this, window, cx| this.reload(window, cx));
-                    }
                     CommunityEvent::Channel(..) => {
-                        cx.defer_in(window, |this, window, cx| this.load(window, cx));
+                        cx.defer_in(window, |this, window, cx| {
+                            this.load(window, cx);
+                        });
                     }
                     CommunityEvent::Error(error) => {
-                        window.push_notification(
-                            Notification::error(error.clone()).autohide(false),
-                            cx,
-                        );
+                        window.push_notification(Notification::error(error.clone()), cx);
                     }
-                    CommunityEvent::Open(_) | CommunityEvent::Close(_) => {}
+                    _ => {
+                        cx.defer_in(window, |this, window, cx| {
+                            this.reload(window, cx);
+                        });
+                    }
                 };
             },
         ));
 
-        let panel = Self {
+        cx.defer_in(window, |this, window, cx| {
+            this.list_state.set_follow_mode(FollowMode::Tail);
+            this.list_state.set_scroll_handler(cx.listener(
+                |this, event: &ListScrollEvent, window, cx| {
+                    if event.visible_range.start <= LOAD_OLDER_THRESHOLD {
+                        this.load_older(window, cx);
+                    }
+                },
+            ));
+            this.load(window, cx);
+        });
+
+        Self {
             id,
             focus_handle: cx.focus_handle(),
             community: community.downgrade(),
             channel,
             rows: Vec::new(),
+            rendered_texts_by_id: BTreeMap::new(),
             has_more: false,
             loading: false,
             list_state: ListState::new(0, ListAlignment::Bottom, px(1024.)),
             input,
             tasks: smallvec![],
             _subscriptions: subscriptions,
-        };
-
-        panel.list_state.set_follow_mode(FollowMode::Tail);
-        panel.list_state.set_scroll_handler(cx.listener(
-            |this, event: &ListScrollEvent, window, cx| {
-                if event.visible_range.start <= LOAD_OLDER_THRESHOLD {
-                    this.load_older(window, cx);
-                }
-            },
-        ));
-
-        cx.defer_in(window, |this, window, cx| {
-            this.load(window, cx);
-        });
-
-        panel
+        }
     }
 
     /// The channel to show, following the community's selection.
@@ -205,17 +205,18 @@ impl CommunityPanel {
         if channel != self.channel {
             self.channel = channel;
             self.rows.clear();
+            self.rendered_texts_by_id.clear();
             self.has_more = false;
             self.loading = false;
-            self.list_state.reset(1);
+            self.list_state.reset(2);
         }
 
         channel
     }
 
-    /// The list's item count: the load-older row, then every message row.
+    /// The list's item count: the welcome row, the load-older row, then every message row.
     fn item_count(&self) -> usize {
-        self.rows.len() + 1
+        self.rows.len() + 2
     }
 
     /// A timeline read, `before_ms` exclusive, or `None` for the newest rows.
@@ -494,6 +495,7 @@ impl CommunityPanel {
 
         if !connected {
             self.rows = messages;
+            self.rendered_texts_by_id.clear();
             self.has_more = has_more;
             self.list_state.reset(self.item_count());
             cx.notify();
@@ -528,7 +530,13 @@ impl CommunityPanel {
 
         for message in messages {
             match shown.get(&message.id).copied() {
-                Some(ix) => self.rows[ix] = message,
+                Some(ix) => {
+                    // Drop the cached render when the text changes, so edits re-parse.
+                    if self.rows[ix].content != message.content {
+                        self.rendered_texts_by_id.remove(&message.id);
+                    }
+                    self.rows[ix] = message;
+                }
                 None => fresh.push(message),
             }
         }
@@ -544,7 +552,8 @@ impl CommunityPanel {
 
             shown.insert(message.id, at);
             self.rows.insert(at, message);
-            self.list_state.splice(at + 1..at + 1, 1);
+            // The welcome and load-older rows sit above the messages.
+            self.list_state.splice(at + 2..at + 2, 1);
         }
     }
 
@@ -626,7 +635,29 @@ impl CommunityPanel {
             .into_any_element()
     }
 
-    /// The row at index 0: the affordance that pages older history in.
+    /// The row at index 0: the welcome message for the channel.
+    fn render_welcome(&self, cx: &Context<Self>) -> AnyElement {
+        let (name, avatar) = self
+            .community
+            .read_with(cx, |community, _cx| {
+                let seed = community.id().to_hex();
+                let avatar = match community.icon() {
+                    Some(path) => Avatar::from_source(path).seed(seed).large(),
+                    None => Avatar::new(None).seed(seed).large(),
+                };
+
+                (community.name(), avatar)
+            })
+            .unwrap_or_else(|_| (SharedString::from("this community"), Avatar::new(None)));
+
+        WelcomeMessage::new("welcome")
+            .icon(avatar)
+            .title(format!("Welcome to {}", name))
+            .message(format!("This is the start of the {} channel.", name))
+            .into_any_element()
+    }
+
+    /// The row at index 1: the affordance that pages older history in.
     fn render_older(&self, cx: &mut Context<Self>) -> AnyElement {
         if !self.has_more {
             return div().into_any_element();
@@ -668,20 +699,34 @@ impl CommunityPanel {
     fn render_message(
         &mut self,
         ix: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         if ix == 0 {
+            return self.render_welcome(cx);
+        }
+
+        if ix == 1 {
             return self.render_older(cx);
         }
 
-        let Some(message) = self.rows.get(ix - 1) else {
+        // The welcome and load-older rows sit above the messages.
+        let Some(message) = self.rows.get(ix - 2) else {
             return div().into_any_element();
         };
 
-        let show_author = self.opens_run(ix - 1);
+        let show_author = self.opens_run(ix - 2);
 
-        message::render(ix, message, show_author, cx)
+        let content = if message.deleted {
+            message::deleted(cx)
+        } else {
+            self.rendered_texts_by_id
+                .entry(message.id)
+                .or_insert_with(|| RenderedText::new(&message.content, &[], true))
+                .element(ix.into(), window, cx)
+        };
+
+        message::render(ix, message, content, show_author, cx)
     }
 
     fn render_composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -723,12 +768,13 @@ impl Panel for CommunityPanel {
                 };
 
                 h_flex()
-                    .gap_1p5()
+                    .gap_1()
+                    .text_xs()
                     .child(avatar)
-                    .child(SharedString::from(community.name()))
+                    .child(community.name())
                     .into_any_element()
             })
-            .unwrap_or_else(|_| div().child("Unknown").into_any_element())
+            .unwrap_or_else(|_| div().text_xs().child("Unknown").into_any_element())
     }
 
     fn toolbar_buttons(&self, _window: &Window, _cx: &App) -> Vec<Button> {

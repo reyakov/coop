@@ -22,6 +22,7 @@ impl<T: IconNamed> From<T> for Icon {
 pub enum IconName {
     ArrowLeft,
     ArrowRight,
+    ArrowDownCircle,
     Boom,
     Book,
     ChevronDown,
@@ -66,6 +67,7 @@ pub enum IconName {
     Ship,
     Shield,
     Group,
+    Hashtag,
     History,
     UserKey,
     Upload,
@@ -99,6 +101,7 @@ impl IconNamed for IconName {
         match self {
             Self::ArrowLeft => "icons/arrow-left.svg",
             Self::ArrowRight => "icons/arrow-right.svg",
+            Self::ArrowDownCircle => "icons/arrow-down-circle.svg",
             Self::Boom => "icons/boom.svg",
             Self::Book => "icons/book.svg",
             Self::ChevronDown => "icons/chevron-down.svg",
@@ -146,6 +149,7 @@ impl IconNamed for IconName {
             Self::Upload => "icons/upload.svg",
             Self::Usb => "icons/usb.svg",
             Self::Group => "icons/group.svg",
+            Self::Hashtag => "icons/hashtag.svg",
             Self::History => "icons/history.svg",
             Self::PanelLeft => "icons/panel-left.svg",
             Self::PanelLeftOpen => "icons/panel-left-open.svg",

@@ -2,17 +2,18 @@ use chat::{ChatRegistry, Room, RoomKind};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
-    Subscription, Window, div, px,
+    Subscription, WeakEntity, Window, div, px,
 };
 use nostr_sdk::prelude::*;
 use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
+use ui::dock::{DockArea, DockPlacement, PanelHandle};
 use ui::input::{Input, InputEvent, InputState};
 use ui::{StyledExt, WindowExtension, v_flex};
 
-pub fn open(window: &mut Window, cx: &mut App) {
-    let view = cx.new(|cx| NewChat::new(window, cx));
+pub fn open(dock: WeakEntity<DockArea>, window: &mut Window, cx: &mut App) {
+    let view = cx.new(|cx| NewChat::new(dock, window, cx));
 
     window.open_modal(cx, move |this, _window, _cx| {
         this.width(px(420.)).title("New chat").child(view.clone())
@@ -20,6 +21,9 @@ pub fn open(window: &mut Window, cx: &mut App) {
 }
 
 pub struct NewChat {
+    /// The dock a started chat opens in
+    dock: WeakEntity<DockArea>,
+
     /// Public key input
     input: Entity<InputState>,
 
@@ -31,7 +35,7 @@ pub struct NewChat {
 }
 
 impl NewChat {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(dock: WeakEntity<DockArea>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let input = cx.new(|cx| InputState::new(window, cx).placeholder("npub"));
 
         let subscription = cx.subscribe_in(&input, window, |this, _input, event, window, cx| {
@@ -41,6 +45,7 @@ impl NewChat {
         });
 
         Self {
+            dock,
             input,
             error: None,
             _subscription: Some(subscription),
@@ -56,6 +61,8 @@ impl NewChat {
         };
 
         let nostr = NostrRegistry::global(cx);
+        let chat = ChatRegistry::global(cx);
+
         let Some(current_user) = nostr.read(cx).current_user() else {
             self.set_error("You are not signed in", cx);
             return;
@@ -70,11 +77,19 @@ impl NewChat {
             .organize(&current_user)
             .kind(RoomKind::Ongoing);
 
-        let chat = ChatRegistry::global(cx);
-        chat.update(cx, |chat, cx| {
+        let room = chat.update(cx, |chat, cx| {
             let room = cx.new(|_| room);
-            chat.emit_room(&room, window, cx);
+            chat.track_room(&room, cx);
+            room
         });
+
+        ui::dock::add_panel_to(
+            &self.dock,
+            PanelHandle::new(chat_ui::init(room.downgrade(), window, cx)),
+            DockPlacement::Center,
+            window,
+            cx,
+        );
 
         window.close_modal(cx);
     }

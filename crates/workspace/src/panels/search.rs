@@ -7,8 +7,8 @@ use common::DebouncedDelay;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div,
-    uniform_list,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, WeakEntity,
+    Window, div, uniform_list,
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
@@ -17,22 +17,25 @@ use smallvec::{SmallVec, smallvec};
 use state::{FIND_DELAY, NostrRegistry};
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
-use ui::dock::{Panel, PanelEvent};
+use ui::dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelHandle};
 use ui::input::{Input, InputEvent, InputState};
+use ui::nav::Nav;
 use ui::notification::Notification;
 use ui::{Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
-use crate::sidebar::{TreeRow, TreeRowKind};
+use crate::sidebar::nav_avatar;
 
 const INPUT_PLACEHOLDER: &str = "Find or start a conversation";
 
-pub fn init(window: &mut Window, cx: &mut App) -> Entity<SearchPanel> {
-    cx.new(|cx| SearchPanel::new(window, cx))
+pub fn init(dock: WeakEntity<DockArea>, window: &mut Window, cx: &mut App) -> Entity<SearchPanel> {
+    cx.new(|cx| SearchPanel::new(dock, window, cx))
 }
 
 pub struct SearchPanel {
     name: SharedString,
     focus_handle: FocusHandle,
+    /// The dock a started chat opens in
+    dock: WeakEntity<DockArea>,
 
     /// Find input state
     find_input: Entity<InputState>,
@@ -63,7 +66,7 @@ pub struct SearchPanel {
 }
 
 impl SearchPanel {
-    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(dock: WeakEntity<DockArea>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let contact_list = cx.new(|_| None);
         let selected_pkeys = cx.new(|_| HashSet::new());
         let find_results = cx.new(|_| None);
@@ -107,6 +110,7 @@ impl SearchPanel {
         Self {
             name: "Search".into(),
             focus_handle: cx.focus_handle(),
+            dock,
             find_input,
             find_debouncer: DebouncedDelay::new(),
             find_results,
@@ -285,6 +289,7 @@ impl SearchPanel {
     fn create_room(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let chat = ChatRegistry::global(cx);
         let async_chat = chat.downgrade();
+        let dock = self.dock.clone();
 
         let nostr = NostrRegistry::global(cx);
         let Some(public_key) = nostr.read(cx).current_user() else {
@@ -295,14 +300,26 @@ impl SearchPanel {
         let receivers = self.get_selected(cx);
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            // Create a new room and emit it
-            async_chat.update_in(cx, |this, _window, cx| {
+            // Create a new room and register it
+            let room = async_chat.update_in(cx, |chat, _window, cx| {
                 let room = cx.new(|_| {
                     Room::new(public_key, receivers)
                         .organize(&public_key)
                         .kind(RoomKind::Ongoing)
                 });
-                this.emit_room(&room, _window, cx);
+                chat.track_room(&room, cx);
+                room
+            })?;
+
+            // Open it in the dock
+            cx.update(|window, cx| {
+                ui::dock::add_panel_to(
+                    &dock,
+                    PanelHandle::new(chat_ui::init(room.downgrade(), window, cx)),
+                    DockPlacement::Center,
+                    window,
+                    cx,
+                );
             })?;
 
             // Reset the find panel
@@ -341,13 +358,17 @@ impl SearchPanel {
                     this.select(&pkey_clone, cx);
                 });
 
-                TreeRow::new(
-                    ElementId::NamedInteger("search-result".into(), (range.start + ix) as u64),
-                    TreeRowKind::Room,
-                    profile.name(),
+                Nav::new(ElementId::NamedInteger(
+                    "search-result".into(),
+                    (range.start + ix) as u64,
+                ))
+                .label(profile.name())
+                .text_sm()
+                .font_medium()
+                .when_some(
+                    nav_avatar(Some(profile.avatar_seed()), profile.avatar(), cx),
+                    |this, avatar| this.prefix(avatar),
                 )
-                .avatar(profile.avatar_seed())
-                .picture(profile.avatar())
                 .on_click(handler)
                 .selected(selected)
                 .into_any_element()
@@ -382,13 +403,17 @@ impl SearchPanel {
                     this.select(&pkey_clone, cx);
                 });
 
-                TreeRow::new(
-                    ElementId::NamedInteger("contact".into(), (range.start + ix) as u64),
-                    TreeRowKind::Room,
-                    profile.name().trim(),
+                Nav::new(ElementId::NamedInteger(
+                    "contact".into(),
+                    (range.start + ix) as u64,
+                ))
+                .label(profile.name().trim())
+                .text_sm()
+                .font_medium()
+                .when_some(
+                    nav_avatar(Some(profile.avatar_seed()), profile.avatar(), cx),
+                    |this, avatar| this.prefix(avatar),
                 )
-                .avatar(profile.avatar_seed())
-                .picture(profile.avatar())
                 .on_click(handler)
                 .selected(selected)
                 .into_any_element()

@@ -1,4 +1,3 @@
-use std::rc::Rc;
 use std::sync::Arc;
 
 use ::settings::AppSettings;
@@ -6,25 +5,20 @@ use anyhow::Error;
 use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry};
 use common::download_dir;
-use community::{CommunityEvent, CommunityRegistry};
-use community_ui::CommunityPanel;
 use device::{DeviceEvent, DeviceRegistry};
-use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, AnyElement, App, AppContext, Context, Entity, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Subscription, Task, WeakEntity, Window, div, px,
+    Action, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
+    Render, SharedString, Styled, Subscription, Task, Window, div, px,
 };
 use nostr_sdk::prelude::*;
-use person::{PersonRegistry, shorten_pubkey};
 use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, StateEvent};
 use theme::{ActiveTheme, SIDEBAR_WIDTH, Theme, ThemeRegistry};
 use ui::button::{Button, ButtonVariants};
-use ui::dock::{self, ClosePanel, DockArea, DockLayout, DockPlacement, Panel, PanelHandle};
-use ui::menu::{DropdownMenu, PopupMenuItem};
+use ui::dock::{self, DockArea, DockLayout, DockPlacement, Panel, PanelHandle};
 use ui::notification::{Notification, NotificationKind};
-use ui::{Icon, IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
+use ui::{IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
 
 use crate::dialogs::restore::RestoreEncryption;
 use crate::dialogs::{new_chat, new_community, settings};
@@ -71,9 +65,6 @@ enum Command {
 
 pub struct Workspace {
     dock: Entity<DockArea>,
-    title_bar_chrome: Rc<dock::TitleBarChrome>,
-    /// The community panel currently docked, if any
-    community_panel: Option<WeakEntity<CommunityPanel>>,
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
     /// Event subscriptions
@@ -83,12 +74,11 @@ pub struct Workspace {
 impl Workspace {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let chat = ChatRegistry::global(cx);
-        let communities = CommunityRegistry::global(cx);
         let device = DeviceRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
 
-        let sidebar = cx.new(|cx| Sidebar::new(window, cx));
-        let (dock, title_bar_chrome) = dock::dock_area("coop", window, cx);
+        let (dock, _) = dock::dock_area("coop", window, cx);
+        let sidebar = cx.new(|cx| Sidebar::new(window, dock.downgrade(), cx));
 
         let mut subscriptions = smallvec![];
 
@@ -164,7 +154,7 @@ impl Workspace {
 
         subscriptions.push(
             // Observe all events emitted by the chat registry
-            cx.subscribe_in(&chat, window, move |this, chat, ev, window, cx| {
+            cx.subscribe_in(&chat, window, move |_this, _chat, ev, window, cx| {
                 match ev {
                     ChatEvent::InboxRelayNotFound => {
                         const MSG: &str = "Messaging Relays not found. Cannot receive messages.";
@@ -187,28 +177,6 @@ impl Workspace {
                             cx,
                         );
                     }
-                    ChatEvent::OpenRoom(id) => {
-                        if let Some(room) = chat.read(cx).room(id, cx) {
-                            this.add_panel_to_dock(
-                                chat_ui::init(room, window, cx),
-                                DockPlacement::Center,
-                                window,
-                                cx,
-                            );
-                        }
-                    }
-                    ChatEvent::CloseRoom(..) => {
-                        this.dock.update(cx, |area, cx| {
-                            // Force focus to the tab panel
-                            ui::dock::focus_tab_panel(area, window, cx);
-
-                            // Dispatch the close panel action
-                            cx.defer_in(window, |_, window, cx| {
-                                window.dispatch_action(Box::new(ClosePanel), cx);
-                                window.close_all_modals(cx);
-                            });
-                        });
-                    }
                     ChatEvent::Error(error) => {
                         window.push_notification(Notification::error(error).autohide(false), cx);
                     }
@@ -217,71 +185,23 @@ impl Workspace {
             }),
         );
 
-        subscriptions.push(
-            // Observe all events emitted by the community registry
-            cx.subscribe_in(
-                &communities,
-                window,
-                move |this, communities, event, window, cx| match event {
-                    CommunityEvent::Open(id) => {
-                        if let Some(community) = communities.read(cx).community(id) {
-                            let panel = community_ui::init(community, window, cx);
-
-                            this.community_panel = Some(panel.downgrade());
-                            this.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
-                        }
-                    }
-                    CommunityEvent::Close(_) => {
-                        let Some(panel) = this
-                            .community_panel
-                            .take()
-                            .and_then(|panel| panel.upgrade())
-                        else {
-                            return;
-                        };
-
-                        this.dock.update(cx, |area, cx| {
-                            ui::dock::add_panel(
-                                area,
-                                PanelHandle::new(panel),
-                                DockPlacement::Center,
-                                window,
-                                cx,
-                            );
-                            ui::dock::focus_tab_panel(area, window, cx);
-
-                            cx.defer_in(window, |_, window, cx| {
-                                window.dispatch_action(Box::new(ClosePanel), cx);
-                            });
-                        });
-                    }
-                    _ => {}
-                },
-            ),
-        );
-
         cx.defer_in(window, move |this, window, cx| {
             let sidebar = PanelHandle::new(sidebar);
-
-            this.dock.update(cx, |area, cx| {
-                let left = DockLayout::tabs().panel_view(Arc::new(sidebar), cx);
-                area.set_dock(DockPlacement::Left, left, window, cx);
-                area.set_dock_size(DockPlacement::Left, SIDEBAR_WIDTH, window, cx);
-            });
-
             let greeter = PanelHandle::new(greeter::init(window, cx));
-            let center = DockLayout::v_split()
-                .child(DockLayout::tabs().panel_view(Arc::new(greeter), cx), None);
 
-            this.dock.update(cx, |area, cx| {
-                area.set_center(center, window, cx);
+            this.dock.update(cx, |this, cx| {
+                let left = DockLayout::tabs().panel_view(Arc::new(sidebar), cx);
+                let center = DockLayout::v_split()
+                    .child(DockLayout::tabs().panel_view(Arc::new(greeter), cx), None);
+
+                this.set_dock(DockPlacement::Left, left, window, cx);
+                this.set_dock_size(DockPlacement::Left, SIDEBAR_WIDTH, window, cx);
+                this.set_center(center, window, cx);
             });
         });
 
         Self {
             dock,
-            title_bar_chrome,
-            community_panel: None,
             tasks: vec![],
             _subscriptions: subscriptions,
         }
@@ -365,10 +285,11 @@ impl Workspace {
                 self.add_panel_to_dock(browse::init(window, cx), DockPlacement::Center, window, cx);
             }
             Command::ShowSearch => {
-                self.add_panel_to_dock(search::init(window, cx), DockPlacement::Center, window, cx);
+                let panel = search::init(self.dock.downgrade(), window, cx);
+                self.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
             }
             Command::NewChat => {
-                new_chat::open(window, cx);
+                new_chat::open(self.dock.downgrade(), window, cx);
             }
             Command::NewCommunity => {
                 new_community::open(window, cx);
@@ -583,183 +504,12 @@ impl Workspace {
                 }))
         });
     }
-
-    fn titlebar_right(_window: &mut Window, cx: &mut App) -> AnyElement {
-        let auto_updater = AutoUpdater::try_global(cx);
-        let chat = ChatRegistry::global(cx);
-        let nip4e_enabled = AppSettings::get_nip4e(cx);
-        let nostr = NostrRegistry::global(cx);
-
-        let Some(public_key) = nostr.read(cx).current_user() else {
-            return div().into_any_element();
-        };
-
-        let persons = PersonRegistry::global(cx);
-        let profile = persons.read(cx).get(&public_key, cx);
-        let announcement = profile.announcement();
-
-        let updater_status = auto_updater.as_ref().and_then(|updater| {
-            let updater = updater.read(cx);
-            (!updater.idle()).then(|| updater.status())
-        });
-
-        let staged_update = auto_updater
-            .as_ref()
-            .is_some_and(|updater| updater.read(cx).staged());
-
-        h_flex()
-            .when(!cx.theme().platform.is_mac(), |this| this.pr_2())
-            .gap_2()
-            .when_some(updater_status, |this, status| {
-                this.child(div().text_xs().italic().child(status))
-            })
-            .when(staged_update, |this| {
-                this.child(
-                    Button::new("restart-to-update")
-                        .label("Restart to Update")
-                        .tooltip("Quit and relaunch into the installed update")
-                        .small()
-                        .ghost()
-                        .on_click(|_event, _window, cx| {
-                            if let Some(auto_updater) = AutoUpdater::try_global(cx) {
-                                auto_updater.update(cx, |this, cx| this.restart(cx));
-                            }
-                        }),
-                )
-            })
-            .when(nip4e_enabled, |this| {
-                this.child(
-                    Button::new("key")
-                        .icon(IconName::UserKey)
-                        .tooltip("Decoupled encryption key")
-                        .small()
-                        .ghost()
-                        .dropdown_menu(move |this, _window, _cx| {
-                            this.min_w(px(260.))
-                                .label("Encryption Key")
-                                .when_some(announcement.as_ref(), |this, announcement| {
-                                    let name = announcement.client_name();
-                                    let pkey = shorten_pubkey(announcement.public_key(), 8);
-
-                                    this.item(PopupMenuItem::element(move |_window, cx| {
-                                        h_flex()
-                                            .gap_1()
-                                            .text_sm()
-                                            .child(
-                                                Icon::new(IconName::Device)
-                                                    .small()
-                                                    .text_color(cx.theme().icon_muted),
-                                            )
-                                            .child(name.clone())
-                                    }))
-                                    .item(
-                                        PopupMenuItem::element(move |_window, cx| {
-                                            h_flex()
-                                                .gap_1()
-                                                .text_sm()
-                                                .child(
-                                                    Icon::new(IconName::UserKey)
-                                                        .small()
-                                                        .text_color(cx.theme().icon_muted),
-                                                )
-                                                .child(SharedString::from(pkey.clone()))
-                                        }),
-                                    )
-                                })
-                                .separator()
-                                .menu_with_icon(
-                                    "Backup",
-                                    IconName::Shield,
-                                    Box::new(Command::BackupEncryption),
-                                )
-                                .menu_with_icon(
-                                    "Restore from secret key",
-                                    IconName::Usb,
-                                    Box::new(Command::ImportEncryption),
-                                )
-                                .separator()
-                                .menu_with_icon(
-                                    "Reload",
-                                    IconName::Refresh,
-                                    Box::new(Command::RefreshEncryption),
-                                )
-                                .menu_with_icon(
-                                    "Reset",
-                                    IconName::Warning,
-                                    Box::new(Command::ResetEncryption),
-                                )
-                        }),
-                )
-            })
-            .child(
-                Button::new("inbox")
-                    .icon(IconName::Inbox)
-                    .small()
-                    .ghost()
-                    .dropdown_menu(move |this, _window, cx| {
-                        let urls: Vec<(SharedString, SharedString)> = profile
-                            .messaging_relays()
-                            .iter()
-                            .map(|url| {
-                                (
-                                    SharedString::from(url.to_string()),
-                                    chat.read(cx).count_messages(url).to_string().into(),
-                                )
-                            })
-                            .collect();
-
-                        // Header
-                        let menu = this.min_w(px(260.)).label("Messaging Relays");
-
-                        // Content
-                        let menu = urls.into_iter().fold(menu, |this, (url, count)| {
-                            this.item(PopupMenuItem::element(move |_window, cx| {
-                                h_flex()
-                                    .px_1()
-                                    .w_full()
-                                    .text_sm()
-                                    .justify_between()
-                                    .child(url.clone())
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().text_muted)
-                                            .child(count.clone()),
-                                    )
-                            }))
-                        });
-
-                        // Footer
-                        menu.separator()
-                            .menu_with_icon(
-                                "Manage gossip relays",
-                                IconName::Relay,
-                                Box::new(Command::ShowRelayList),
-                            )
-                            .menu_with_icon(
-                                "Manage messaging relays",
-                                IconName::Relay,
-                                Box::new(Command::ShowMessaging),
-                            )
-                            .separator()
-                            .menu_with_icon(
-                                "Reload",
-                                IconName::Refresh,
-                                Box::new(Command::RefreshMessagingRelays),
-                            )
-                    }),
-            )
-            .into_any_element()
-    }
 }
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let modal_layer = Root::render_modal_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
-
-        // Render the title bar chrome
-        self.title_bar_chrome.set_trailing(Self::titlebar_right);
 
         div()
             .id("workspace")
