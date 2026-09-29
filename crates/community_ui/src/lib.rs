@@ -641,10 +641,7 @@ impl CommunityPanel {
             .community
             .read_with(cx, |community, _cx| {
                 let seed = community.id().to_hex();
-                let avatar = match community.icon() {
-                    Some(path) => Avatar::from_source(path).seed(seed).large(),
-                    None => Avatar::new(None).seed(seed).large(),
-                };
+                let avatar = Avatar::from_source(community.icon()).seed(seed).large();
 
                 (community.name(), avatar)
             })
@@ -762,10 +759,7 @@ impl Panel for CommunityPanel {
         self.community
             .read_with(cx, |community, _cx| {
                 let seed = community.id().to_hex();
-                let avatar = match community.icon() {
-                    Some(path) => Avatar::from_source(path).seed(seed).xsmall(),
-                    None => Avatar::new(None).seed(seed).xsmall(),
-                };
+                let avatar = Avatar::from_source(community.icon()).seed(seed).xsmall();
 
                 h_flex()
                     .gap_1()

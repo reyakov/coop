@@ -15,7 +15,7 @@ use ui::{Disableable, StyledExt, WindowExtension, divider, v_flex};
 pub fn open(window: &mut Window, cx: &mut App) {
     let import = cx.new(|cx| ImportIdentity::new(window, cx));
 
-    window.open_modal(cx, move |this, _window, _cx| {
+    window.open_dialog(cx, move |this, _window, _cx| {
         this.width(px(450.))
             .show_close(false)
             .overlay_closable(false)
@@ -138,7 +138,7 @@ impl ImportIdentity {
                 Ok(keys) => {
                     nostr.update_in(cx, |this, window, cx| {
                         this.set_signer(keys, cx);
-                        window.close_modal(cx);
+                        window.close_dialog(cx);
                     })?;
                 }
                 Err(e) => {

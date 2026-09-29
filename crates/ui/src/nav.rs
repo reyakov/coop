@@ -84,40 +84,36 @@ impl RenderOnce for Nav {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let clickable = self.on_click.is_some();
 
-        v_flex()
-            .id(format!("nav-{}", self.id))
-            .w_full()
-            .h_10()
-            .child(
-                h_flex()
-                    .id(self.id)
-                    .h_9()
-                    .w_full()
-                    .px_1p5()
-                    .gap_1p5()
-                    .rounded(cx.theme().radius_lg)
-                    .when_some(self.prefix, |this, prefix| this.child(prefix))
-                    .child(
-                        h_flex()
-                            .gap_1()
-                            .flex_1()
-                            .child(div().truncate().min_w_0().child(self.label))
-                            .child(div().flex_1())
-                            .when_some(self.suffix, |this, suffix| {
-                                this.child(div().flex_shrink_0().child(suffix))
-                            }),
-                    )
-                    .when(clickable, |this| {
-                        this.cursor_pointer()
-                            .hover(|this| this.bg(cx.theme().ghost_element_hover))
-                            .when(self.selected, |this| {
-                                this.bg(cx.theme().ghost_element_active)
-                            })
-                    })
-                    .when_some(self.on_click, |this, handler| {
-                        this.on_click(move |event, window, cx| handler(event, window, cx))
-                    })
-                    .refine_style(&self.style),
-            )
+        v_flex().w_full().h_10().child(
+            h_flex()
+                .id(self.id)
+                .h_9()
+                .w_full()
+                .px_1p5()
+                .gap_1p5()
+                .rounded(cx.theme().radius_lg)
+                .when_some(self.prefix, |this, prefix| this.child(prefix))
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .flex_1()
+                        .min_w_0()
+                        .child(div().flex_1().min_w_0().truncate().child(self.label))
+                        .when_some(self.suffix, |this, suffix| {
+                            this.child(div().flex_shrink_0().child(suffix))
+                        }),
+                )
+                .when(clickable, |this| {
+                    this.cursor_pointer()
+                        .hover(|this| this.bg(cx.theme().ghost_element_hover))
+                        .when(self.selected, |this| {
+                            this.bg(cx.theme().ghost_element_active)
+                        })
+                })
+                .when_some(self.on_click, |this, handler| {
+                    this.on_click(move |event, window, cx| handler(event, window, cx))
+                })
+                .refine_style(&self.style),
+        )
     }
 }

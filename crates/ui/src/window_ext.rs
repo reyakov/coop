@@ -3,24 +3,24 @@ use std::rc::Rc;
 use gpui::{App, ElementId, Entity, Window};
 
 use crate::Root;
-use crate::modal::Modal;
+use crate::dialog::Dialog;
 use crate::notification::Notification;
 
-/// Extension trait for [`Window`] to add modal, notification .. functionality.
+/// Extension trait for [`Window`] to add dialog, notification .. functionality.
 pub trait WindowExtension: Sized {
-    /// Opens a Modal.
-    fn open_modal<F>(&mut self, cx: &mut App, builder: F)
+    /// Opens a Dialog.
+    fn open_dialog<F>(&mut self, cx: &mut App, builder: F)
     where
-        F: Fn(Modal, &mut Window, &mut App) -> Modal + 'static;
+        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static;
 
-    /// Return true, if there is an active Modal.
-    fn has_active_modal(&mut self, cx: &mut App) -> bool;
+    /// Return true, if there is an active Dialog.
+    fn has_active_dialog(&mut self, cx: &mut App) -> bool;
 
-    /// Closes the last active Modal.
-    fn close_modal(&mut self, cx: &mut App);
+    /// Closes the last active Dialog.
+    fn close_dialog(&mut self, cx: &mut App);
 
-    /// Closes all active Modals.
-    fn close_all_modals(&mut self, cx: &mut App);
+    /// Closes all active Dialogs.
+    fn close_all_dialogs(&mut self, cx: &mut App);
 
     /// Returns number of notifications.
     fn notifications(&mut self, cx: &mut App) -> Rc<Vec<Entity<Notification>>>;
@@ -46,31 +46,31 @@ pub trait WindowExtension: Sized {
 
 impl WindowExtension for Window {
     #[inline]
-    fn open_modal<F>(&mut self, cx: &mut App, builder: F)
+    fn open_dialog<F>(&mut self, cx: &mut App, builder: F)
     where
-        F: Fn(Modal, &mut Window, &mut App) -> Modal + 'static,
+        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
     {
         Root::update(self, cx, move |root, window, cx| {
-            root.open_modal(builder, window, cx);
+            root.open_dialog(builder, window, cx);
         })
     }
 
     #[inline]
-    fn has_active_modal(&mut self, cx: &mut App) -> bool {
-        Root::read(self, cx).has_active_modals()
+    fn has_active_dialog(&mut self, cx: &mut App) -> bool {
+        Root::read(self, cx).has_active_dialogs()
     }
 
     #[inline]
-    fn close_modal(&mut self, cx: &mut App) {
+    fn close_dialog(&mut self, cx: &mut App) {
         Root::update(self, cx, move |root, window, cx| {
-            root.close_modal(window, cx);
+            root.close_dialog(window, cx);
         })
     }
 
     #[inline]
-    fn close_all_modals(&mut self, cx: &mut App) {
+    fn close_all_dialogs(&mut self, cx: &mut App) {
         Root::update(self, cx, |root, window, cx| {
-            root.close_all_modals(window, cx);
+            root.close_all_dialogs(window, cx);
         })
     }
 

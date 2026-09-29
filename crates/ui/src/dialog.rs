@@ -6,7 +6,6 @@ use gpui::{
     InteractiveElement as _, IntoElement, ParentElement, Pixels, RenderOnce, SharedString,
     StyleRefinement, Styled, Window, div, hsla, point, px, size,
 };
-use gpui_base::Dialog;
 use instant::Duration;
 use theme::ActiveTheme;
 
@@ -22,15 +21,15 @@ type RenderButtonFn = Box<dyn FnOnce(&mut Window, &mut App) -> AnyElement>;
 type FooterFn =
     Box<dyn Fn(RenderButtonFn, RenderButtonFn, &mut Window, &mut App) -> Vec<AnyElement>>;
 
-/// Modal button props.
-pub struct ModalButtonProps {
+/// Dialog button props.
+pub struct DialogButtonProps {
     ok_text: Option<SharedString>,
     ok_variant: ButtonVariant,
     cancel_text: Option<SharedString>,
     cancel_variant: ButtonVariant,
 }
 
-impl Default for ModalButtonProps {
+impl Default for DialogButtonProps {
     fn default() -> Self {
         Self {
             ok_text: None,
@@ -41,7 +40,7 @@ impl Default for ModalButtonProps {
     }
 }
 
-impl ModalButtonProps {
+impl DialogButtonProps {
     /// Sets the text of the OK button. Default is `OK`.
     pub fn ok_text(mut self, ok_text: impl Into<SharedString>) -> Self {
         self.ok_text = Some(ok_text.into());
@@ -68,7 +67,7 @@ impl ModalButtonProps {
 }
 
 #[derive(IntoElement)]
-pub struct Modal {
+pub struct Dialog {
     style: StyleRefinement,
     title: Option<AnyElement>,
     footer: Option<FooterFn>,
@@ -85,15 +84,15 @@ pub struct Modal {
     overlay_closable: bool,
     keyboard: bool,
     show_close: bool,
-    button_props: ModalButtonProps,
+    button_props: DialogButtonProps,
 
-    /// This will be change when open the modal, the focus handle is create when open the modal.
+    /// This will be change when open the dialog, the focus handle is create when open the dialog.
     pub focus_handle: FocusHandle,
     pub layer_ix: usize,
     pub overlay_visible: bool,
 }
 
-impl Modal {
+impl Dialog {
     pub fn new(_window: &mut Window, cx: &mut App) -> Self {
         Self {
             style: StyleRefinement::default(),
@@ -111,19 +110,19 @@ impl Modal {
             on_close: Rc::new(|_, _, _| {}),
             on_ok: None,
             on_cancel: Rc::new(|_, _, _| true),
-            button_props: ModalButtonProps::default(),
+            button_props: DialogButtonProps::default(),
             show_close: true,
             overlay_closable: true,
         }
     }
 
-    /// Sets the title of the modal.
+    /// Sets the title of the dialog.
     pub fn title(mut self, title: impl IntoElement) -> Self {
         self.title = Some(title.into_any_element());
         self
     }
 
-    /// Set the footer of the modal.
+    /// Set the footer of the dialog.
     ///
     /// The `footer` is a function that takes two `RenderButtonFn` and a `WindowContext` and returns a list of `AnyElement`.
     ///
@@ -145,7 +144,7 @@ impl Modal {
         self
     }
 
-    /// Set to use confirm modal, with OK and Cancel buttons.
+    /// Set to use confirm dialog, with OK and Cancel buttons.
     ///
     /// See also [`Self::alert`]
     pub fn confirm(self) -> Self {
@@ -154,7 +153,7 @@ impl Modal {
             .show_close(false)
     }
 
-    /// Set to as a alter modal, with OK button.
+    /// Set to as a alter dialog, with OK button.
     ///
     /// See also [`Self::confirm`]
     pub fn alert(self) -> Self {
@@ -163,13 +162,13 @@ impl Modal {
             .show_close(false)
     }
 
-    /// Set the button props of the modal.
-    pub fn button_props(mut self, button_props: ModalButtonProps) -> Self {
+    /// Set the button props of the dialog.
+    pub fn button_props(mut self, button_props: DialogButtonProps) -> Self {
         self.button_props = button_props;
         self
     }
 
-    /// Sets the callback for when the modal is closed.
+    /// Sets the callback for when the dialog is closed.
     ///
     /// Called after [`Self::on_ok`] or [`Self::on_cancel`] callback.
     pub fn on_close(
@@ -180,9 +179,9 @@ impl Modal {
         self
     }
 
-    /// Sets the callback for when the modal is has been confirmed.
+    /// Sets the callback for when the dialog is has been confirmed.
     ///
-    /// The callback should return `true` to close the modal, if return `false` the modal will not be closed.
+    /// The callback should return `true` to close the dialog, if return `false` the dialog will not be closed.
     pub fn on_ok(
         mut self,
         on_ok: impl Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static,
@@ -191,9 +190,9 @@ impl Modal {
         self
     }
 
-    /// Sets the callback for when the modal is has been canceled.
+    /// Sets the callback for when the dialog is has been canceled.
     ///
-    /// The callback should return `true` to close the modal, if return `false` the modal will not be closed.
+    /// The callback should return `true` to close the dialog, if return `false` the dialog will not be closed.
     pub fn on_cancel(
         mut self,
         on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static,
@@ -208,39 +207,39 @@ impl Modal {
         self
     }
 
-    /// Set the top offset of the modal, defaults to None, will use the 1/10 of the viewport height.
+    /// Shift the dialog down from the window centre, defaults to `None`.
     pub fn margin_top(mut self, margin_top: Pixels) -> Self {
         self.margin_top = Some(margin_top);
         self
     }
 
-    /// Sets the width of the modal, defaults to 480px.
+    /// Sets the width of the dialog, defaults to 480px.
     pub fn width(mut self, width: Pixels) -> Self {
         self.width = width;
         self
     }
 
-    /// Set the maximum width of the modal, defaults to `None`.
+    /// Set the maximum width of the dialog, defaults to `None`.
     pub fn max_w(mut self, max_width: Pixels) -> Self {
         self.max_width = Some(max_width);
         self
     }
 
-    /// Set the overlay of the modal, defaults to `true`.
+    /// Set the overlay of the dialog, defaults to `true`.
     pub fn overlay(mut self, overlay: bool) -> Self {
         self.overlay = overlay;
         self
     }
 
-    /// Set the overlay closable of the modal, defaults to `true`.
+    /// Set the overlay closable of the dialog, defaults to `true`.
     ///
-    /// When the overlay is clicked, the modal will be closed.
+    /// When the overlay is clicked, the dialog will be closed.
     pub fn overlay_closable(mut self, overlay_closable: bool) -> Self {
         self.overlay_closable = overlay_closable;
         self
     }
 
-    /// Set whether to support keyboard esc to close the modal, defaults to `true`.
+    /// Set whether to support keyboard esc to close the dialog, defaults to `true`.
     pub fn keyboard(mut self, keyboard: bool) -> Self {
         self.keyboard = keyboard;
         self
@@ -251,22 +250,22 @@ impl Modal {
     }
 }
 
-impl ParentElement for Modal {
+impl ParentElement for Dialog {
     fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
         self.content.extend(elements);
     }
 }
 
-impl Styled for Modal {
+impl Styled for Dialog {
     fn style(&mut self) -> &mut gpui::StyleRefinement {
         &mut self.style
     }
 }
 
-impl RenderOnce for Modal {
+impl RenderOnce for Dialog {
     fn render(self, window: &mut Window, cx: &mut App) -> impl gpui::IntoElement {
         let layer_ix = self.layer_ix;
-        let is_topmost = layer_ix + 1 == Root::read(window, cx).active_modals.len();
+        let is_topmost = layer_ix + 1 == Root::read(window, cx).active_dialogs.len();
         let has_footer = self.footer.is_some();
         let on_close = self.on_close.clone();
         let on_ok = self.on_ok.clone();
@@ -296,7 +295,7 @@ impl RenderOnce for Modal {
                             }
 
                             on_close(&ClickEvent::default(), window, cx);
-                            window.close_modal(cx);
+                            window.close_dialog(cx);
                         }
                     })
                     .into_any_element()
@@ -327,7 +326,7 @@ impl RenderOnce for Modal {
                             }
 
                             on_close(&ClickEvent::default(), window, cx);
-                            window.close_modal(cx);
+                            window.close_dialog(cx);
                         }
                     })
                     .into_any_element()
@@ -344,10 +343,7 @@ impl RenderOnce for Modal {
             );
 
         let offset_top = px(layer_ix as f32 * 16.);
-        let y = self.margin_top.unwrap_or(view_size.height / 10.) + offset_top;
-        let x = view_size.width / 2. - self.width / 2.;
-        let card_top = window_paddings.top + y;
-        let card_left = window_paddings.left + x;
+        let top_offset = self.margin_top.unwrap_or(px(0.)) + offset_top;
 
         let mut padding_right = px(16.);
         let mut padding_left = px(16.);
@@ -386,11 +382,9 @@ impl RenderOnce for Modal {
             .min_h_24()
             .refine_style(&self.style)
             // There style is high priority, can't be overridden.
-            .absolute()
             .occlude()
             .relative()
-            .left(card_left)
-            .top(card_top)
+            .top(top_offset)
             .w(self.width)
             .when_some(self.max_width, |this, w| this.max_w(w))
             .child(
@@ -401,34 +395,41 @@ impl RenderOnce for Modal {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .relative()
                     .when_some(self.title, |this, title| {
                         this.h_10().font_semibold().text_center().child(title)
+                    })
+                    .when(self.show_close, |this| {
+                        let on_cancel = on_cancel.clone();
+                        let on_close = on_close.clone();
+
+                        this.child(
+                            div()
+                                .absolute()
+                                .top_0()
+                                .bottom_0()
+                                .right_2()
+                                .flex()
+                                .items_center()
+                                .child(
+                                    Button::new("close")
+                                        .icon(IconName::CloseCircleFill)
+                                        .custom(
+                                            ButtonCustomVariant::new(window, cx)
+                                                .foreground(cx.theme().icon_muted)
+                                                .color(cx.theme().ghost_element_background)
+                                                .hover(cx.theme().ghost_element_background)
+                                                .active(cx.theme().ghost_element_background),
+                                        )
+                                        .on_click(move |_, window, cx| {
+                                            on_cancel(&ClickEvent::default(), window, cx);
+                                            on_close(&ClickEvent::default(), window, cx);
+                                            window.close_dialog(cx);
+                                        }),
+                                ),
+                        )
                     }),
             )
-            .when(self.show_close, |this| {
-                let on_cancel = on_cancel.clone();
-                let on_close = on_close.clone();
-
-                this.child(
-                    Button::new("close")
-                        .icon(IconName::CloseCircleFill)
-                        .absolute()
-                        .top_1p5()
-                        .right_2()
-                        .custom(
-                            ButtonCustomVariant::new(window, cx)
-                                .foreground(cx.theme().icon_muted)
-                                .color(cx.theme().ghost_element_background)
-                                .hover(cx.theme().ghost_element_background)
-                                .active(cx.theme().ghost_element_background),
-                        )
-                        .on_click(move |_, window, cx| {
-                            on_cancel(&ClickEvent::default(), window, cx);
-                            on_close(&ClickEvent::default(), window, cx);
-                            window.close_modal(cx);
-                        }),
-                )
-            })
             .child(
                 div()
                     .pt_px()
@@ -459,7 +460,8 @@ impl RenderOnce for Modal {
                 )
             })
             .with_animation("slide-down", animation, move |this, delta| {
-                let y_offset = px(0.) + delta * px(30.);
+                // Settle at the target offset; only the entrance is animated.
+                let y_offset = px(30.) * (delta - 1.);
                 // This is equivalent to `shadow_xl` with an extra opacity.
                 let shadow = vec![
                     BoxShadow {
@@ -477,10 +479,10 @@ impl RenderOnce for Modal {
                         inset: false,
                     },
                 ];
-                this.top(card_top + y_offset).shadow(shadow)
+                this.top(top_offset + y_offset).shadow(shadow)
             });
 
-        Dialog::new(cx)
+        gpui_base::Dialog::new(cx)
             .layer(layer_ix, is_topmost)
             .focus_handle(self.focus_handle.clone())
             .close_on_escape(self.keyboard)
@@ -492,7 +494,7 @@ impl RenderOnce for Modal {
             .on_cancel(move |event, window, cx| on_cancel(event, window, cx))
             .on_close(move |event, window, cx| {
                 on_close(event, window, cx);
-                window.close_modal(cx);
+                window.close_dialog(cx);
             })
             .backdrop(backdrop)
             .popup(card)

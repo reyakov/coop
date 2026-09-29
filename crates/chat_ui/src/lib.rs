@@ -633,7 +633,7 @@ impl ChatPanel {
         self.reports_by_id.read().unwrap().contains_key(id)
     }
 
-    /// Clone reports for a message (used for modal display, not called during render)
+    /// Clone reports for a message (used for dialog display, not called during render)
     fn sent_reports(&self, id: &EventId) -> Option<Vec<SendReport>> {
         self.reports_by_id.read().unwrap().get(id).cloned()
     }
@@ -978,7 +978,7 @@ impl ChatPanel {
         let chat = ChatRegistry::global(cx);
         let seen_on = chat.read(cx).rumor_seen_on(id);
 
-        window.open_modal(cx, move |this, _window, cx| {
+        window.open_dialog(cx, move |this, _window, cx| {
             this.title("Seen on").show_close(true).child(
                 v_flex()
                     .gap_1()
@@ -1021,7 +1021,7 @@ impl ChatPanel {
     fn open_relays(&mut self, public_key: &PublicKey, window: &mut Window, cx: &mut Context<Self>) {
         let profile = self.profile(public_key, cx);
 
-        window.open_modal(cx, move |this, _window, cx| {
+        window.open_dialog(cx, move |this, _window, cx| {
             let relays = profile.messaging_relays();
 
             this.title("Messaging Relays")
@@ -1422,7 +1422,7 @@ impl ChatPanel {
                     this.on_click(move |_e, window, cx| {
                         let reports = reports.clone();
 
-                        window.open_modal(cx, move |this, _window, cx| {
+                        window.open_dialog(cx, move |this, _window, cx| {
                             this.title(SharedString::from("Sent Reports"))
                                 .show_close(true)
                                 .child(v_flex().gap_4().children({

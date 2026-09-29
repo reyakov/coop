@@ -1,25 +1,29 @@
+use std::collections::HashSet;
 use std::ops::Range;
 use std::rc::Rc;
 
+use anyhow::Error;
 use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
 use common::TimestampExt;
 use community::{ChannelId, Community, CommunityEvent, CommunityRegistry};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, Context, Div, Entity, EventEmitter, FocusHandle, Focusable,
+    AnyElement, App, AppContext, Context, Div, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ObjectFit, ParentElement, Render, SharedString, Stateful,
-    Styled, StyledImage, Subscription, UniformListScrollHandle, WeakEntity, Window, div, img, px,
-    retain_all, uniform_list,
+    Styled, StyledImage, Subscription, Task, UniformListScrollHandle, WeakEntity, Window, div, img,
+    px, retain_all, uniform_list,
 };
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
+use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, StateEvent};
 use theme::{ActiveTheme, TABBAR_HEIGHT};
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonCustomVariant, ButtonVariants};
-use ui::dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelHandle};
+use ui::dialog::DialogButtonProps;
+use ui::dock::{ClosePanel, DockArea, DockPlacement, Panel, PanelEvent, PanelHandle};
 use ui::indicator::Indicator;
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::nav::Nav;
@@ -34,17 +38,18 @@ use ui::{
 };
 
 use crate::Command;
-use crate::dialogs::import;
+use crate::dialogs::{import, screening};
 
 mod tab;
 mod utils;
 
 use tab::SidebarTab;
-pub(crate) use utils::{nav_avatar, nav_icon, pick_banner};
+pub(crate) use utils::{nav_icon, pick_banner};
 
 pub enum SidebarRow {
     Room { room: Entity<Room> },
     Community { community: Entity<Community> },
+    Contact { public_key: PublicKey },
 }
 
 /// A collapsible group of rows in the sidebar's community view.
@@ -81,10 +86,23 @@ pub struct Sidebar {
     active_tab: SidebarTab,
     /// The community the sidebar is browsing, if any
     community: Option<WeakEntity<Community>>,
+    /// Whether the inbox list is showing contacts to start a chat with
+    contacts_open: bool,
+    /// The signed-in user's contacts, loaded when the contact picker opens
+    contacts: Option<Vec<PublicKey>>,
+    /// Contacts selected in the contact picker
+    selected_contacts: HashSet<PublicKey>,
+    /// Scroll state of the contact picker's list
+    contacts_scroll: UniformListScrollHandle,
+    /// Whether the inbox list is showing chat requests instead of rooms
+    requests_open: bool,
+    /// Scroll state of the requests list
+    requests_scroll: UniformListScrollHandle,
     channels_open: bool,
     admins_open: bool,
     members_open: bool,
     new_requests: bool,
+    tasks: SmallVec<[Task<Result<(), Error>>; 1]>,
     _subscriptions: SmallVec<[Subscription; 4]>,
 }
 
@@ -104,6 +122,11 @@ impl Sidebar {
                 };
             }),
         );
+
+        // Keep the room and request counts in sync with the chat registry.
+        subscriptions.push(cx.observe(&chat, |_this, _chat, cx| {
+            cx.notify();
+        }));
 
         subscriptions.push(cx.subscribe_in(
             &communities,
@@ -136,10 +159,17 @@ impl Sidebar {
             banner: pick_banner(),
             active_tab: SidebarTab::Inbox,
             community: None,
+            contacts_open: false,
+            contacts: None,
+            selected_contacts: HashSet::new(),
+            contacts_scroll: UniformListScrollHandle::new(),
+            requests_open: false,
+            requests_scroll: UniformListScrollHandle::new(),
             channels_open: true,
             admins_open: true,
             members_open: true,
             new_requests: false,
+            tasks: smallvec![],
             _subscriptions: subscriptions,
         }
     }
@@ -149,7 +179,153 @@ impl Sidebar {
             return;
         }
         self.active_tab = tab;
+        self.close_contacts();
+        self.close_requests();
         cx.notify();
+    }
+
+    /// Leave the contact picker and clear its selection.
+    fn close_contacts(&mut self) {
+        self.contacts_open = false;
+        self.selected_contacts.clear();
+    }
+
+    /// Show or hide the contact picker in the inbox list.
+    fn toggle_contacts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.contacts_open = !self.contacts_open;
+
+        if !self.contacts_open {
+            self.selected_contacts.clear();
+        } else {
+            self.close_requests();
+            if self.contacts.is_none() {
+                self.load_contacts(window, cx);
+            }
+        }
+
+        cx.notify();
+    }
+
+    /// Leave the requests list in the inbox.
+    fn close_requests(&mut self) {
+        self.requests_open = false;
+    }
+
+    /// Show or hide the chat requests in the inbox list.
+    fn toggle_requests(&mut self, cx: &mut Context<Self>) {
+        self.requests_open = !self.requests_open;
+
+        if self.requests_open {
+            self.close_contacts();
+            self.new_requests = false;
+        }
+
+        cx.notify();
+    }
+
+    /// Load the signed-in user's contact list into the contact picker.
+    fn load_contacts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+
+        let Some(public_key) = nostr.read(cx).current_user() else {
+            return;
+        };
+
+        let task: Task<Result<Vec<PublicKey>, Error>> = cx.background_spawn(async move {
+            let filter = Filter::new()
+                .author(public_key)
+                .kind(Kind::ContactList)
+                .limit(1);
+
+            let contacts: Vec<PublicKey> = client
+                .database()
+                .query(filter)
+                .await?
+                .into_iter()
+                .next()
+                .map(|event| event.tags.public_keys().collect())
+                .unwrap_or_default();
+
+            Ok(contacts)
+        });
+
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            match task.await {
+                Ok(contacts) => {
+                    this.update(cx, |this, cx| {
+                        this.contacts = Some(contacts);
+                        cx.notify();
+                    })?;
+                }
+                Err(error) => {
+                    cx.update(|window, cx| {
+                        window.push_notification(
+                            Notification::error(error.to_string()).autohide(false),
+                            cx,
+                        );
+                    })?;
+                }
+            }
+
+            Ok(())
+        }));
+    }
+
+    /// Toggle a contact's selection in the contact picker.
+    fn toggle_contact(&mut self, public_key: &PublicKey, cx: &mut Context<Self>) {
+        if !self.selected_contacts.remove(public_key) {
+            self.selected_contacts.insert(public_key.to_owned());
+        }
+        cx.notify();
+    }
+
+    /// Start a chat with the contacts selected in the picker.
+    fn create_chat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_contacts.is_empty() {
+            return;
+        }
+
+        let nostr = NostrRegistry::global(cx);
+        let Some(public_key) = nostr.read(cx).current_user() else {
+            return;
+        };
+
+        let chat = ChatRegistry::global(cx);
+        let async_chat = chat.downgrade();
+        let dock = self.dock.clone();
+
+        let receivers: Vec<PublicKey> = self.selected_contacts.iter().copied().collect();
+
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            let room = async_chat.update_in(cx, |chat, _window, cx| {
+                let room = cx.new(|_| {
+                    Room::new(public_key, receivers)
+                        .organize(&public_key)
+                        .kind(RoomKind::Ongoing)
+                });
+                chat.track_room(&room, cx);
+                room
+            })?;
+
+            cx.update(|window, cx| {
+                ui::dock::add_panel_to(
+                    &dock,
+                    PanelHandle::new(chat_ui::init(room.downgrade(), window, cx)),
+                    DockPlacement::Center,
+                    window,
+                    cx,
+                );
+            })?;
+
+            // Leave the picker now that the chat is open
+            this.update(cx, |this, cx| {
+                this.close_contacts();
+                cx.notify();
+            })?;
+
+            Ok(())
+        }));
     }
 
     /// Leave the community view, returning the sidebar to its tab list.
@@ -293,13 +469,34 @@ impl Sidebar {
     fn render_tabs(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let sidebar = cx.entity().downgrade();
         let active_tab = self.active_tab;
+        let requests_open = self.requests_open && active_tab == SidebarTab::Inbox;
+        let contacts_open = self.contacts_open && active_tab == SidebarTab::Inbox && !requests_open;
         let rows = Rc::new(self.rows_for(active_tab, cx));
-        let scroll_handle = &self.scroll_handles[active_tab.index()];
+
+        // Whether to show the create button for the active tab
+        let create_button = contacts_open && !self.selected_contacts.is_empty();
+
+        let (list_id, scroll_handle, list_title) = if contacts_open {
+            ("sidebar-contacts", &self.contacts_scroll, "Contacts")
+        } else if requests_open {
+            ("sidebar-requests", &self.requests_scroll, "Requests")
+        } else {
+            (
+                active_tab.list_id(),
+                &self.scroll_handles[active_tab.index()],
+                active_tab.list_title(),
+            )
+        };
+
+        let request_count = ChatRegistry::global(cx)
+            .read(cx)
+            .count(&RoomKind::Request, cx);
 
         v_flex()
             .size_full()
             .flex_1()
             .min_h_0()
+            .relative()
             .gap_2()
             .child(
                 div().px_2().child(
@@ -329,38 +526,58 @@ impl Sidebar {
                         .px_2()
                         .gap_1()
                         .child(
-                            NavItem::new(
-                                "new-chat",
-                                "New Chat",
-                                Icon::new(IconName::Message).small(),
-                            )
-                            .on_click(|_event, window, cx| {
-                                window.dispatch_action(Box::new(Command::NewChat), cx)
-                            }),
+                            NavItem::new("chat", "New Chat", Icon::new(IconName::Message).small())
+                                .on_click(|_event, window, cx| {
+                                    window.dispatch_action(Box::new(Command::NewChat), cx)
+                                }),
                         )
                         .child(
                             NavItem::new("reqs", "Requests", Icon::new(IconName::Invite).small())
-                                .when(self.new_requests, |this| {
-                                    this.suffix(div().size_1().rounded_full().bg(cx.theme().cursor))
+                                .when(request_count > 0, |this| {
+                                    this.suffix(
+                                        h_flex()
+                                            .gap_1()
+                                            .items_center()
+                                            .child(
+                                                h_flex()
+                                                    .py_0p5()
+                                                    .px_1()
+                                                    .min_w_6()
+                                                    .justify_center()
+                                                    .text_size(px(10.))
+                                                    .text_color(cx.theme().text_muted)
+                                                    .text_center()
+                                                    .rounded(cx.theme().radius)
+                                                    .bg(cx.theme().elevated_surface_background)
+                                                    .child(SharedString::from(
+                                                        request_count.to_string(),
+                                                    )),
+                                            )
+                                            .when(self.new_requests && !requests_open, |this| {
+                                                this.child(
+                                                    div()
+                                                        .size_1()
+                                                        .rounded_full()
+                                                        .bg(cx.theme().cursor),
+                                                )
+                                            }),
+                                    )
                                 })
-                                .on_click({
-                                    let sidebar = sidebar.clone();
-                                    move |_event, window, cx| {
-                                        if let Err(error) = sidebar.update(cx, |this, cx| {
-                                            this.new_requests = false;
-                                            cx.notify();
-                                        }) {
-                                            log::error!("Failed to clear new requests: {error}");
-                                        }
-                                        window.dispatch_action(Box::new(Command::ShowRequests), cx);
-                                    }
-                                }),
+                                .when(requests_open, |this| {
+                                    this.bg(cx.theme().ghost_element_active)
+                                })
+                                .on_click(cx.listener(|this, _event, _window, cx| {
+                                    this.toggle_requests(cx);
+                                })),
                         )
                         .child(
                             NavItem::new("contacts", "Contacts", Icon::new(IconName::Book).small())
-                                .on_click(|_event, window, cx| {
-                                    window.dispatch_action(Box::new(Command::ShowContactList), cx)
-                                }),
+                                .when(contacts_open, |this| {
+                                    this.bg(cx.theme().ghost_element_active)
+                                })
+                                .on_click(cx.listener(|this, _event, window, cx| {
+                                    this.toggle_contacts(window, cx);
+                                })),
                         ),
                 ),
                 SidebarTab::Communities => this.child(
@@ -391,7 +608,7 @@ impl Sidebar {
                     .text_xs()
                     .font_semibold()
                     .text_color(cx.theme().text_placeholder)
-                    .child(active_tab.list_title()),
+                    .child(list_title),
             )
             .child(
                 div()
@@ -399,7 +616,7 @@ impl Sidebar {
                     .flex_1()
                     .child(
                         uniform_list(
-                            active_tab.list_id(),
+                            list_id,
                             rows.len(),
                             cx.processor(move |this, range, _window, cx| {
                                 this.render_rows(range, rows.as_slice(), cx)
@@ -411,6 +628,43 @@ impl Sidebar {
                     )
                     .child(Scrollbar::vertical(scroll_handle)),
             )
+            .when(create_button, |this| {
+                this.child(
+                    v_flex()
+                        .absolute()
+                        .bottom_0()
+                        .left_0()
+                        .justify_center()
+                        .h_20()
+                        .w_full()
+                        .px_4()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().background)
+                        .child(
+                            Button::new("create-chat")
+                                .label(if self.selected_contacts.len() > 1 {
+                                    "Create Group Chat"
+                                } else {
+                                    "Create Chat"
+                                })
+                                .primary()
+                                .on_click(cx.listener(|this, _ev, window, cx| {
+                                    this.create_chat(window, cx);
+                                })),
+                        )
+                        .child(
+                            h_flex()
+                                .gap_1()
+                                .text_xs()
+                                .text_color(cx.theme().text_muted)
+                                .child("Selected")
+                                .child(div().font_semibold().child(SharedString::from(
+                                    self.selected_contacts.len().to_string(),
+                                ))),
+                        ),
+                )
+            })
             .into_any_element()
     }
 
@@ -537,6 +791,21 @@ impl Sidebar {
 
     fn rows_for(&self, tab: SidebarTab, cx: &App) -> Vec<SidebarRow> {
         match tab {
+            SidebarTab::Inbox if self.contacts_open => self
+                .contacts
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|public_key| SidebarRow::Contact { public_key })
+                .collect(),
+            SidebarTab::Inbox if self.requests_open => {
+                let chat = ChatRegistry::global(cx);
+                chat.read(cx)
+                    .rooms(&RoomKind::Request, cx)
+                    .into_iter()
+                    .map(|room| SidebarRow::Room { room })
+                    .collect()
+            }
             SidebarTab::Inbox => {
                 let chat = ChatRegistry::global(cx);
                 chat.read(cx)
@@ -564,6 +833,8 @@ impl Sidebar {
         rows: &[SidebarRow],
         cx: &Context<Sidebar>,
     ) -> Vec<AnyElement> {
+        let hide_avatar = AppSettings::get_hide_avatar(cx);
+
         rows.get(range.clone())
             .into_iter()
             .flatten()
@@ -577,15 +848,22 @@ impl Sidebar {
                         let picture = room.read(cx).display_image(cx);
                         let seed = room.read(cx).display_image_seed(cx);
                         let created_at = room.read(cx).created_at.to_ago();
+                        let kind = room.read(cx).kind;
+                        let peer = room.read(cx).display_member(cx).public_key();
                         let dock = self.dock.clone();
                         let room = room.clone();
 
-                        Nav::new(SharedString::from(format!("room-{index}")))
+                        Nav::new(index)
                             .label(name)
                             .text_sm()
                             .font_medium()
-                            .when_some(nav_avatar(Some(seed), picture, cx), |this, avatar| {
-                                this.prefix(avatar)
+                            .when(!hide_avatar, |this| {
+                                this.prefix(
+                                    Avatar::from_source(picture)
+                                        .seed(seed)
+                                        .small()
+                                        .flex_shrink_0(),
+                                )
                             })
                             .suffix(
                                 div()
@@ -602,6 +880,52 @@ impl Sidebar {
                                     window,
                                     cx,
                                 );
+                                if kind != RoomKind::Ongoing && AppSettings::get_screening(cx) {
+                                    let screening = screening::init(peer, window, cx);
+
+                                    window.open_dialog(cx, move |this, _window, _cx| {
+                                        this.confirm()
+                                            .child(screening.clone())
+                                            .button_props(
+                                                DialogButtonProps::default()
+                                                    .cancel_text("Ignore")
+                                                    .ok_text("Response"),
+                                            )
+                                            .on_cancel(move |_event, window, cx| {
+                                                window.dispatch_action(Box::new(ClosePanel), cx);
+                                                true
+                                            })
+                                    });
+                                }
+                            })
+                            .into_any_element()
+                    }
+                    SidebarRow::Contact { public_key } => {
+                        let persons = PersonRegistry::global(cx);
+                        let person = persons.read(cx).get(public_key, cx);
+                        let selected = self.selected_contacts.contains(public_key);
+                        let sidebar = cx.entity().downgrade();
+                        let public_key = public_key.to_owned();
+
+                        Nav::new(index)
+                            .label(person.name())
+                            .text_sm()
+                            .font_medium()
+                            .when(!hide_avatar, |this| {
+                                this.prefix(
+                                    Avatar::from_source(person.avatar())
+                                        .seed(person.avatar_seed())
+                                        .small()
+                                        .flex_shrink_0(),
+                                )
+                            })
+                            .selected(selected)
+                            .on_click(move |_event, _window, cx| {
+                                if let Err(error) = sidebar.update(cx, |this, cx| {
+                                    this.toggle_contact(&public_key, cx);
+                                }) {
+                                    log::error!("Failed to select contact: {error}");
+                                }
                             })
                             .into_any_element()
                     }
@@ -613,11 +937,16 @@ impl Sidebar {
                         let sidebar = cx.entity().downgrade();
                         let community = community.clone();
 
-                        Nav::new(SharedString::from(format!("com-{index}")))
+                        Nav::new(index)
                             .label(name)
                             .text_sm()
-                            .when_some(nav_avatar(Some(seed), picture, cx), |this, avatar| {
-                                this.prefix(avatar)
+                            .when(!hide_avatar, |this| {
+                                this.prefix(
+                                    Avatar::from_source(picture)
+                                        .seed(seed)
+                                        .small()
+                                        .flex_shrink_0(),
+                                )
                             })
                             .on_click(move |_event, window, cx| {
                                 ui::dock::add_panel_to(
@@ -708,6 +1037,7 @@ impl Sidebar {
     }
 
     fn member_row(&self, public_key: &PublicKey, cx: &App) -> AnyElement {
+        let hide_avatar = AppSettings::get_hide_avatar(cx);
         let persons = PersonRegistry::global(cx);
         let person = persons.read(cx).get(public_key, cx);
 
@@ -715,10 +1045,14 @@ impl Sidebar {
             .label(person.name())
             .text_sm()
             .font_medium()
-            .when_some(
-                nav_avatar(Some(person.avatar_seed()), person.avatar(), cx),
-                |this, avatar| this.prefix(avatar),
-            )
+            .when(!hide_avatar, |this| {
+                this.prefix(
+                    Avatar::from_source(person.avatar())
+                        .seed(person.avatar_seed())
+                        .small()
+                        .flex_shrink_0(),
+                )
+            })
             .into_any_element()
     }
 }

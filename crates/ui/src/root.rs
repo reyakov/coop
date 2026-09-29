@@ -13,23 +13,23 @@ use theme::{
     CLIENT_SIDE_DECORATION_SHADOW,
 };
 
-use crate::modal::Modal;
+use crate::dialog::Dialog;
 use crate::notification::{Notification, NotificationList};
 
 #[derive(Clone)]
 #[allow(clippy::type_complexity)]
-pub struct ActiveModal {
+pub struct ActiveDialog {
     focus_handle: FocusHandle,
-    /// The previous focused handle before opening the modal.
+    /// The previous focused handle before opening the dialog.
     previous_focused_handle: Option<WeakFocusHandle>,
-    builder: Rc<dyn Fn(Modal, &mut Window, &mut App) -> Modal + 'static>,
+    builder: Rc<dyn Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static>,
 }
 
-impl ActiveModal {
+impl ActiveDialog {
     fn new(
         focus_handle: FocusHandle,
         previous_focused_handle: Option<WeakFocusHandle>,
-        builder: impl Fn(Modal, &mut Window, &mut App) -> Modal + 'static,
+        builder: impl Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
     ) -> Self {
         Self {
             focus_handle,
@@ -41,10 +41,10 @@ impl ActiveModal {
 
 /// Root is a view for the App window for as the top level view (Must be the first view in the window).
 ///
-/// It is used to manage the Modal, and Notification.
+/// It is used to manage the Dialog, and Notification.
 pub struct Root {
-    /// All active models
-    pub(crate) active_modals: Vec<ActiveModal>,
+    /// All active dialogs
+    pub(crate) active_dialogs: Vec<ActiveDialog>,
 
     /// Notification layer
     pub(crate) notification: Entity<NotificationList>,
@@ -56,7 +56,7 @@ pub struct Root {
 impl Root {
     pub fn new(view: AnyView, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
-            active_modals: Vec::new(),
+            active_dialogs: Vec::new(),
             notification: cx.new(|cx| NotificationList::new(window, cx)),
             view,
         }
@@ -98,63 +98,63 @@ impl Root {
         )
     }
 
-    /// Render the modal layer.
-    pub fn render_modal_layer(
+    /// Render the dialog layer.
+    pub fn render_dialog_layer(
         window: &mut Window,
         cx: &mut App,
     ) -> Option<impl IntoElement + use<>> {
         let root = window.root::<Root>()??;
-        let active_modals = root.read(cx).active_modals.clone();
+        let active_dialogs = root.read(cx).active_dialogs.clone();
 
-        if active_modals.is_empty() {
+        if active_dialogs.is_empty() {
             return None;
         }
 
         let mut show_overlay_ix = None;
 
-        let mut modals = active_modals
+        let mut dialogs = active_dialogs
             .iter()
             .enumerate()
-            .map(|(i, active_modal)| {
-                let mut modal = Modal::new(window, cx);
+            .map(|(i, active_dialog)| {
+                let mut dialog = Dialog::new(window, cx);
 
-                modal = (active_modal.builder)(modal, window, cx);
+                dialog = (active_dialog.builder)(dialog, window, cx);
 
-                // Give the modal the focus handle, because `modal` is a temporary value, is not possible to
-                // keep the focus handle in the modal.
+                // Give the dialog the focus handle, because `dialog` is a temporary value, is not possible to
+                // keep the focus handle in the dialog.
                 //
-                // So we keep the focus handle in the `active_modal`, this is owned by the `Root`.
-                modal.focus_handle = active_modal.focus_handle.clone();
+                // So we keep the focus handle in the `active_dialog`, this is owned by the `Root`.
+                dialog.focus_handle = active_dialog.focus_handle.clone();
 
-                modal.layer_ix = i;
-                // Find the modal which one needs to show overlay.
-                if modal.has_overlay() {
+                dialog.layer_ix = i;
+                // Find the dialog which one needs to show overlay.
+                if dialog.has_overlay() {
                     show_overlay_ix = Some(i);
                 }
 
-                modal
+                dialog
             })
             .collect::<Vec<_>>();
 
         if let Some(ix) = show_overlay_ix
-            && let Some(modal) = modals.get_mut(ix)
+            && let Some(dialog) = dialogs.get_mut(ix)
         {
-            modal.overlay_visible = true;
+            dialog.overlay_visible = true;
         }
 
-        Some(div().children(modals))
+        Some(div().children(dialogs))
     }
 
-    /// Open a modal.
-    pub fn open_modal<F>(&mut self, builder: F, window: &mut Window, cx: &mut Context<'_, Self>)
+    /// Open a dialog.
+    pub fn open_dialog<F>(&mut self, builder: F, window: &mut Window, cx: &mut Context<'_, Self>)
     where
-        F: Fn(Modal, &mut Window, &mut App) -> Modal + 'static,
+        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
     {
         let previous_focused_handle = window.focused(cx).map(|h| h.downgrade());
         let focus_handle = cx.focus_handle();
         focus_handle.focus(window, cx);
 
-        self.active_modals.push(ActiveModal::new(
+        self.active_dialogs.push(ActiveDialog::new(
             focus_handle,
             previous_focused_handle,
             builder,
@@ -163,10 +163,10 @@ impl Root {
         cx.notify();
     }
 
-    /// Close the topmost modal.
-    pub fn close_modal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Close the topmost dialog.
+    pub fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(handle) = self
-            .active_modals
+            .active_dialogs
             .pop()
             .and_then(|d| d.previous_focused_handle)
             .and_then(|h| h.upgrade())
@@ -177,12 +177,12 @@ impl Root {
         cx.notify();
     }
 
-    /// Close all modals.
-    pub fn close_all_modals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.active_modals.clear();
+    /// Close all dialogs.
+    pub fn close_all_dialogs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.active_dialogs.clear();
 
         let previous_focused_handle = self
-            .active_modals
+            .active_dialogs
             .first()
             .and_then(|d| d.previous_focused_handle.clone());
 
@@ -193,9 +193,9 @@ impl Root {
         cx.notify();
     }
 
-    /// Check if there are any active modals.
-    pub fn has_active_modals(&self) -> bool {
-        !self.active_modals.is_empty()
+    /// Check if there are any active dialogs.
+    pub fn has_active_dialogs(&self) -> bool {
+        !self.active_dialogs.is_empty()
     }
 
     /// Push a notification to the notification layer.

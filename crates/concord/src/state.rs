@@ -235,6 +235,17 @@ impl CommunityState {
             None => BTreeMap::new(),
         };
 
+        let relays = material
+            .relays
+            .iter()
+            .filter_map(|relay| RelayUrl::parse(relay).ok())
+            .collect();
+
+        let control_root = match &material.control_root {
+            Some(root) => Some(decode_hex_32(root)?),
+            None => None,
+        };
+
         let mut channels = Vec::with_capacity(material.channels.len());
 
         for grant in &material.channels {
@@ -260,17 +271,10 @@ impl CommunityState {
             owner_salt: decode_hex_32(&material.owner_salt)?,
             community_root: decode_hex_32(&material.community_root)?,
             root_epoch: material.root_epoch,
-            control_root: match &material.control_root {
-                Some(root) => Some(decode_hex_32(root)?),
-                None => None,
-            },
+            control_root,
             control_pks,
             channels,
-            relays: material
-                .relays
-                .iter()
-                .filter_map(|relay| RelayUrl::parse(relay).ok())
-                .collect(),
+            relays,
             heads: Vec::new(),
             banned: BTreeSet::new(),
             cursors: BTreeMap::new(),

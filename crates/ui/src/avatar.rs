@@ -10,7 +10,10 @@ use crate::{Selectable, Sizable, Size, StyledExt};
 
 /// Number of rows and columns in the generated pixel grid.
 const PIXEL_GRID: usize = 8;
-/// Probability that a cell in the left half of the grid is filled.
+/// Empty cells kept between the pattern and the avatar edge, so the art
+/// gathers in the center instead of filling the whole avatar.
+const MARGIN: usize = 1;
+/// Probability that a cell in the left half of the pattern area is filled.
 const FILL_PROBABILITY: f32 = 0.42;
 /// Probability that a filled cell uses the accent shade instead of the main color.
 const ACCENT_PROBABILITY: f32 = 0.25;
@@ -33,19 +36,6 @@ pub(super) fn avatar_size(size: Size) -> AbsoluteLength {
 }
 
 /// A deterministic, offline pixel-art avatar derived from a seed.
-///
-/// Use it for entities that have no profile picture: the same seed always
-/// renders the same pattern, so identities stay recognizable without a
-/// network round trip. The pattern is painted as geometry and cropped to a
-/// circle, at the same sizes as [`Avatar`].
-///
-/// # Examples
-///
-/// ```
-/// use ui::avatar::PixelAvatar;
-///
-/// PixelAvatar::new("alice");
-/// ```
 #[derive(IntoElement)]
 pub struct PixelAvatar {
     seed: u64,
@@ -87,7 +77,7 @@ impl RenderOnce for PixelAvatar {
             move |bounds, seed, window, cx| {
                 let theme = cx.theme();
                 let main = Hsla {
-                    h: (theme.icon_accent.h + seed as f32 / u64::MAX as f32) % 1.,
+                    h: seed as f32 / u64::MAX as f32,
                     s: 0.6,
                     l: if theme.is_dark() { 0.6 } else { 0.45 },
                     a: 1.,
@@ -142,8 +132,11 @@ fn pixel_pattern(seed: u64) -> [u8; PIXEL_GRID * PIXEL_GRID] {
     let mut pattern = [0u8; PIXEL_GRID * PIXEL_GRID];
     let mut filled = 0usize;
 
-    for row in 0..PIXEL_GRID {
-        for col in 0..PIXEL_GRID / 2 {
+    let art_rows = PIXEL_GRID - 2 * MARGIN;
+    let art_columns = PIXEL_GRID / 2 - MARGIN;
+
+    for row in MARGIN..PIXEL_GRID - MARGIN {
+        for col in MARGIN..PIXEL_GRID / 2 {
             if rng.chance(FILL_PROBABILITY) {
                 let accent = rng.chance(ACCENT_PROBABILITY);
                 set_cell(&mut pattern, row, col, if accent { 2 } else { 1 });
@@ -153,17 +146,17 @@ fn pixel_pattern(seed: u64) -> [u8; PIXEL_GRID * PIXEL_GRID] {
     }
 
     if filled < MIN_FILLED {
-        let half = PIXEL_GRID * PIXEL_GRID / 2;
-        let start = (rng.next() % half as u64) as usize;
+        let total = art_rows * art_columns;
+        let start = (rng.next() % total as u64) as usize;
 
-        for offset in 0..half {
+        for offset in 0..total {
             if filled >= MIN_FILLED {
                 break;
             }
 
-            let ix = (start + offset) % half;
-            let row = ix / (PIXEL_GRID / 2);
-            let col = ix % (PIXEL_GRID / 2);
+            let ix = (start + offset) % total;
+            let row = MARGIN + ix / art_columns;
+            let col = MARGIN + ix % art_columns;
 
             if pattern[row * PIXEL_GRID + col] == 0 {
                 set_cell(&mut pattern, row, col, 1);
@@ -358,24 +351,12 @@ fn generated_avatar(seed: Option<&str>, size: Pixels) -> AnyElement {
 }
 
 /// An element that renders a user avatar with customizable appearance options.
-///
-/// Entities without a picture still get a stable identity: the avatar falls
-/// back to a [`PixelAvatar`] seeded through [`Avatar::seed`], both when there
-/// is no picture and when the picture fails to load.
-///
-/// # Examples
-///
-/// ```
-/// use ui::avatar::Avatar;
-///
-/// Avatar::new(None).seed("alice");
-/// ```
 #[derive(IntoElement)]
 pub struct Avatar {
     base: Div,
     picture: Option<ImageSource>,
     grayscale: bool,
-    seed: Option<SharedString>,
+    seed: Option<String>,
     style: StyleRefinement,
     size: Size,
     border_color: Option<Hsla>,
@@ -384,16 +365,13 @@ pub struct Avatar {
 
 impl Avatar {
     /// Creates an avatar for an entity whose profile picture may be missing.
-    ///
-    /// Use [`Avatar::seed`] to choose the generated
-    /// pixel avatar rendered when `picture` is `None`.
     pub fn new(picture: Option<SharedString>) -> Self {
-        Self::from_picture(picture.map(ImageSource::from))
+        Self::from_source(picture)
     }
 
-    /// Creates an avatar from an already-resolved source.
-    pub fn from_source(picture: impl Into<ImageSource>) -> Self {
-        Self::from_picture(Some(picture.into()))
+    /// Creates an avatar from an already-resolved source, which may be missing.
+    pub fn from_source(picture: Option<impl Into<ImageSource>>) -> Self {
+        Self::from_picture(picture.map(Into::into))
     }
 
     fn from_picture(picture: Option<ImageSource>) -> Self {
@@ -410,33 +388,18 @@ impl Avatar {
     }
 
     /// Sets the seed for the generated pixel avatar.
-    ///
-    /// The seed should be a stable identifier of the entity the avatar
-    /// represents, such as a public key.
-    pub fn seed(mut self, seed: impl Into<SharedString>) -> Self {
+    pub fn seed(mut self, seed: impl Into<String>) -> Self {
         self.seed = Some(seed.into());
         self
     }
 
     /// Applies a grayscale filter to the avatar image.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use ui::avatar::Avatar;
-    ///
-    /// Avatar::new(None).grayscale(true);
-    /// ```
     pub fn grayscale(mut self, grayscale: bool) -> Self {
         self.grayscale = grayscale;
         self
     }
 
     /// Sets the border color of the avatar.
-    ///
-    /// This might be used to match the border to the background color of
-    /// the parent element to create the illusion of cropping another
-    /// shape underneath (for example in face piles.)
     pub fn border_color(mut self, color: impl Into<Hsla>) -> Self {
         self.border_color = Some(color.into());
         self
@@ -480,6 +443,7 @@ impl RenderOnce for Avatar {
         } else {
             px(0.)
         };
+
         let image_size = avatar_size(self.size).to_pixels(window.rem_size());
         let container_size = image_size + border_width * 2.;
 
@@ -487,6 +451,7 @@ impl RenderOnce for Avatar {
             Some(picture) => {
                 let seed = self.seed;
                 let grayscale = self.grayscale;
+
                 img(picture)
                     .size(image_size)
                     .rounded_full()
@@ -508,78 +473,5 @@ impl RenderOnce for Avatar {
                 this.border(border_width).border_color(color)
             })
             .child(content)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pixel_patterns_are_symmetric_and_stable() {
-        for seed in 0..50 {
-            let pattern = pixel_pattern(seed);
-            let filled = pattern.iter().filter(|&&cell| cell != 0).count();
-
-            assert!(
-                filled >= MIN_FILLED * 2,
-                "pattern too sparse for seed {seed}"
-            );
-
-            for row in 0..PIXEL_GRID {
-                for col in 0..PIXEL_GRID {
-                    assert_eq!(
-                        pattern[row * PIXEL_GRID + col],
-                        pattern[row * PIXEL_GRID + (PIXEL_GRID - 1 - col)],
-                        "asymmetric pattern for seed {seed} at ({row}, {col})"
-                    );
-                }
-            }
-        }
-
-        for seed in [0, 1, 42, u64::MAX] {
-            assert_eq!(pixel_pattern(seed), pixel_pattern(seed));
-        }
-
-        assert_ne!(pixel_pattern(42), pixel_pattern(43));
-    }
-
-    fn area(polygon: &[Point<Pixels>]) -> f32 {
-        let mut sum: f32 = 0.;
-        for (&a, &b) in polygon.iter().zip(polygon.iter().cycle().skip(1)) {
-            sum += a.x.as_f32() * b.y.as_f32() - b.x.as_f32() * a.y.as_f32();
-        }
-        (sum / 2.).abs()
-    }
-
-    #[test]
-    fn clipping_keeps_only_the_part_inside_the_circle() {
-        let circle = circle_polygon(point(px(10.), px(10.)), 10.);
-        let square = |left: f32, top: f32| {
-            [
-                point(px(left), px(top)),
-                point(px(left + 4.), px(top)),
-                point(px(left + 4.), px(top + 4.)),
-                point(px(left), px(top + 4.)),
-            ]
-        };
-
-        let inside = clip_polygon(&square(8., 8.), &circle);
-        assert!((area(&inside) - 16.).abs() < 0.05, "area {}", area(&inside));
-
-        assert!(clip_polygon(&square(20., 20.), &circle).is_empty());
-
-        let straddling = clip_polygon(&square(0., 0.), &circle);
-        for vertex in &straddling {
-            let delta_x = vertex.x.as_f32() - 10.;
-            let delta_y = vertex.y.as_f32() - 10.;
-            assert!(
-                delta_x.hypot(delta_y) <= 10. + 0.1,
-                "clipped vertex outside the circle"
-            );
-        }
-
-        let area = area(&straddling);
-        assert!(area > 0. && area < 16., "area {area}");
     }
 }

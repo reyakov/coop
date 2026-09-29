@@ -134,7 +134,7 @@ pub struct Theme {
     /// Radius for the general elements.
     pub radius: Pixels,
 
-    /// Radius for the large elements, e.g.: modal, notification.
+    /// Radius for the large elements, e.g.: dialog, notification.
     pub radius_lg: Pixels,
 
     /// Enable shadow for the general elements. default is true

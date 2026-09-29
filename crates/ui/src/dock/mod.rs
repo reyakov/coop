@@ -16,7 +16,7 @@ use gpui_base::dock::{
     DockAreaRenderer, DockContext, DragPanel, DropIndicator, InsertTarget, NodeId, PaneNode,
     PaneRef, PanelId, TabGroupContext, TabGroupRenderer,
 };
-use gpui_base::{Placement, ResizeHandleContext, Side};
+use gpui_base::{HandleEdge, Placement, ResizeHandleContext};
 use theme::{ActiveTheme, TABBAR_HEIGHT};
 
 use crate::button::{Button, ButtonVariants as _};
@@ -225,12 +225,14 @@ impl DockSkin {
             DockPlacement::Center => "dock-resize-handle-center",
         };
 
+        let edge = match placement {
+            DockPlacement::Left => Some(HandleEdge::Trailing),
+            DockPlacement::Right | DockPlacement::Bottom => Some(HandleEdge::Leading),
+            DockPlacement::Center => None,
+        };
+
         resize_handle(id, placement.axis())
-            .placement(if placement.is_left() {
-                Side::Left
-            } else {
-                Side::Right
-            })
+            .when_some(edge, |this, edge| this.inside(edge))
             .with_appearance(resize_handle_appearance())
             .on_drag(DockResizeHandle, move |info, _, _, cx| {
                 cx.stop_propagation();

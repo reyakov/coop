@@ -65,8 +65,8 @@ impl RestoreEncryption {
             this.set_announcement(Keys::new(secret), cx);
         });
 
-        // Close the current modal
-        window.close_modal(cx);
+        // Close the current dialog
+        window.close_dialog(cx);
     }
 
     fn set_error<S>(&mut self, message: S, cx: &mut Context<Self>)

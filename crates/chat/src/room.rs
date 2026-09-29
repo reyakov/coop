@@ -299,9 +299,9 @@ impl Room {
     }
 
     /// A stable seed for the room's generated avatar
-    pub fn display_image_seed(&self, cx: &App) -> SharedString {
+    pub fn display_image_seed(&self, cx: &App) -> String {
         if self.is_group() {
-            SharedString::from(self.id.to_string())
+            self.id.to_string()
         } else {
             self.display_member(cx).avatar_seed()
         }

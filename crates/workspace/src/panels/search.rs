@@ -6,24 +6,24 @@ use chat::{ChatRegistry, Room, RoomKind};
 use common::DebouncedDelay;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, Context, ElementId, Entity, EventEmitter, FocusHandle, Focusable,
+    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, WeakEntity,
     Window, div, uniform_list,
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
+use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
 use state::{FIND_DELAY, NostrRegistry};
 use theme::ActiveTheme;
+use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelHandle};
 use ui::input::{Input, InputEvent, InputState};
 use ui::nav::Nav;
 use ui::notification::Notification;
 use ui::{Icon, IconName, Selectable, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
-
-use crate::sidebar::nav_avatar;
 
 const INPUT_PLACEHOLDER: &str = "Find or start a conversation";
 
@@ -337,6 +337,7 @@ impl SearchPanel {
         range: Range<usize>,
         cx: &Context<Self>,
     ) -> Vec<impl IntoElement + use<>> {
+        let hide_avatar = AppSettings::get_hide_avatar(cx);
         let persons = PersonRegistry::global(cx);
 
         // Get the results
@@ -358,20 +359,21 @@ impl SearchPanel {
                     this.select(&pkey_clone, cx);
                 });
 
-                Nav::new(ElementId::NamedInteger(
-                    "search-result".into(),
-                    (range.start + ix) as u64,
-                ))
-                .label(profile.name())
-                .text_sm()
-                .font_medium()
-                .when_some(
-                    nav_avatar(Some(profile.avatar_seed()), profile.avatar(), cx),
-                    |this, avatar| this.prefix(avatar),
-                )
-                .on_click(handler)
-                .selected(selected)
-                .into_any_element()
+                Nav::new(range.start + ix)
+                    .label(profile.name())
+                    .text_sm()
+                    .font_medium()
+                    .when(!hide_avatar, |this| {
+                        this.prefix(
+                            Avatar::from_source(profile.avatar())
+                                .seed(profile.avatar_seed())
+                                .small()
+                                .flex_shrink_0(),
+                        )
+                    })
+                    .on_click(handler)
+                    .selected(selected)
+                    .into_any_element()
             })
             .collect()
     }
@@ -382,6 +384,7 @@ impl SearchPanel {
         range: Range<usize>,
         cx: &Context<Self>,
     ) -> Vec<impl IntoElement + use<>> {
+        let hide_avatar = AppSettings::get_hide_avatar(cx);
         let persons = PersonRegistry::global(cx);
 
         // Get the contact list
@@ -403,20 +406,21 @@ impl SearchPanel {
                     this.select(&pkey_clone, cx);
                 });
 
-                Nav::new(ElementId::NamedInteger(
-                    "contact".into(),
-                    (range.start + ix) as u64,
-                ))
-                .label(profile.name().trim())
-                .text_sm()
-                .font_medium()
-                .when_some(
-                    nav_avatar(Some(profile.avatar_seed()), profile.avatar(), cx),
-                    |this, avatar| this.prefix(avatar),
-                )
-                .on_click(handler)
-                .selected(selected)
-                .into_any_element()
+                Nav::new(range.start + ix)
+                    .label(profile.name().trim())
+                    .text_sm()
+                    .font_medium()
+                    .when(!hide_avatar, |this| {
+                        this.prefix(
+                            Avatar::from_source(profile.avatar())
+                                .seed(profile.avatar_seed())
+                                .small()
+                                .flex_shrink_0(),
+                        )
+                    })
+                    .on_click(handler)
+                    .selected(selected)
+                    .into_any_element()
             })
             .collect()
     }

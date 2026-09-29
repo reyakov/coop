@@ -23,7 +23,7 @@ reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.5" }
 gpui_tokio = { path = "crates/gpui_tokio" }
 
 # Unstyled behavior, state, and infrastructure from GPUI Kit
-gpui-base = "0.6.1"
+gpui-base = "0.7.0"
 
 # Nostr
 nostr-lmdb = { git = "https://github.com/rust-nostr/nostr" }

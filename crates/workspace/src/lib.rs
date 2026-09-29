@@ -93,7 +93,7 @@ impl Workspace {
             // Subscribe to the nostr events
             cx.subscribe_in(&nostr, window, move |_this, _state, event, window, cx| {
                 if let StateEvent::SignerChanged = event {
-                    window.close_all_modals(cx);
+                    window.close_all_dialogs(cx);
                 }
             }),
         );
@@ -242,7 +242,7 @@ impl Workspace {
             Command::ShowSettings => {
                 let view = settings::init(window, cx);
 
-                window.open_modal(cx, move |this, _window, _cx| {
+                window.open_dialog(cx, move |this, _window, _cx| {
                     this.width(px(520.))
                         .show_close(true)
                         .pb_2()
@@ -387,7 +387,7 @@ impl Workspace {
         let device = DeviceRegistry::global(cx);
         let ent = device.downgrade();
 
-        window.open_modal(cx, move |this, _window, cx| {
+        window.open_dialog(cx, move |this, _window, cx| {
             let ent = ent.clone();
 
             this.confirm()
@@ -410,7 +410,7 @@ impl Workspace {
                         this.set_announcement(Keys::generate(), cx);
                     })
                     .ok();
-                    // true to close modal
+                    // true to close dialog
                     true
                 })
         });
@@ -418,7 +418,7 @@ impl Workspace {
 
     fn import_encryption(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let restore = cx.new(|cx| RestoreEncryption::new(window, cx));
-        window.open_modal(cx, move |this, _window, _cx| {
+        window.open_dialog(cx, move |this, _window, _cx| {
             this.width(px(420.))
                 .title("Restore Encryption")
                 .child(restore.clone())
@@ -426,7 +426,7 @@ impl Workspace {
     }
 
     fn theme_selector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.open_modal(cx, move |this, _window, cx| {
+        window.open_dialog(cx, move |this, _window, cx| {
             let registry = ThemeRegistry::global(cx);
             let themes = registry.read(cx).themes();
 
@@ -508,7 +508,7 @@ impl Workspace {
 
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let modal_layer = Root::render_modal_layer(window, cx);
+        let dialog_layer = Root::render_dialog_layer(window, cx);
         let notification_layer = Root::render_notification_layer(window, cx);
 
         div()
@@ -519,7 +519,7 @@ impl Render for Workspace {
             .child(self.dock.clone())
             // Notifications
             .children(notification_layer)
-            // Modals
-            .children(modal_layer)
+            // Dialogs
+            .children(dialog_layer)
     }
 }

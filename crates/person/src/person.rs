@@ -113,8 +113,8 @@ impl Person {
     }
 
     /// A stable seed for this profile's generated avatar
-    pub fn avatar_seed(&self) -> SharedString {
-        SharedString::from(self.public_key().to_hex())
+    pub fn avatar_seed(&self) -> String {
+        self.public_key().to_hex()
     }
 
     /// Get profile name
