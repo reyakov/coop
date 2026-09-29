@@ -24,10 +24,7 @@ mod sync;
 pub use community::*;
 pub use sync::*;
 
-/// How long a burst of relay notifications is collected before it is folded.
 const PUMP_WINDOW: Duration = Duration::from_millis(200);
-/// How long a community's relays may deliver nothing before
-/// its standing subscription is torn down and re-issued.
 const LIVE_ROTATE: Duration = Duration::from_secs(90);
 
 pub fn init(cx: &mut App) {

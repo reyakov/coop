@@ -19,7 +19,7 @@ use state::NostrRegistry;
 use crate::cache;
 use crate::history::{self, PageRegistry, Window, WrapPage};
 use crate::rekey::{self, Adoptions};
-use crate::sync::{self, Snapshot};
+use crate::sync::{self};
 
 /// Wraps one relay returns for one page request.
 const PAGE_WRAPS: usize = 50;
@@ -124,10 +124,6 @@ pub struct Community {
     icon_ref: Option<ImageRef>,
     banner: Option<PathBuf>,
     banner_ref: Option<ImageRef>,
-    dirty: bool,
-    refresh_task: Option<Task<Result<()>>>,
-    icon_task: Option<Task<Result<()>>>,
-    banner_task: Option<Task<Result<()>>>,
     rounds: HashMap<ChannelId, Round>,
     /// The last completed round per channel, for the panel's honest states.
     progress: HashMap<ChannelId, Progress>,
@@ -137,8 +133,6 @@ pub struct Community {
     last_round: HashMap<ChannelId, Instant>,
     pages: PageRegistry,
     rekey_task: Option<Task<Result<()>>>,
-    rekey_dirty: bool,
-    /// Spawned folds, round bookkeeping and publishes, cancelled on drop
     tasks: SmallVec<[Task<Result<()>>; 2]>,
 }
 
@@ -155,17 +149,12 @@ impl Community {
             icon_ref: None,
             banner: None,
             banner_ref: None,
-            dirty: false,
-            refresh_task: None,
-            icon_task: None,
-            banner_task: None,
             rounds: HashMap::new(),
             progress: HashMap::new(),
             unreadable: BTreeMap::new(),
             last_round: HashMap::new(),
             pages,
             rekey_task: None,
-            rekey_dirty: false,
             tasks: smallvec![],
         }
     }
@@ -620,7 +609,6 @@ impl Community {
             let (opened, _) = cord03::open(&wrap, &group, &channel, epoch)?;
             cache::cache_rumor(&client, &channel, &opened).await?;
 
-            sync::connect_relays(&client, &relays).await;
             sync::publish_wrap(&client, &wrap, &relays).await;
 
             Ok(opened.rumor_id)
@@ -631,16 +619,12 @@ impl Community {
     ///
     /// The caller re-folds afterwards; this only seeds the new planes.
     pub(crate) fn adopt(&mut self, state: CommunityState) {
-        // A fold already in flight would write its pre-adoption state back.
-        self.refresh_task = None;
-        self.dirty = false;
         self.state = state;
     }
 
     /// Adopt whatever the rekey watch has delivered, then re-page what it moved.
     pub fn rekey(&mut self, cx: &mut Context<Self>) {
         if self.rekey_task.is_some() {
-            self.rekey_dirty = true;
             return;
         }
 
@@ -651,6 +635,7 @@ impl Community {
 
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
+
         let state = self.state.clone();
         let roles = self.control.roles.clone();
 
@@ -746,11 +731,6 @@ impl Community {
             Ok(_) => {}
             Err(error) => cx.emit(CommunityEvent::Error(error.to_string())),
         }
-
-        if self.rekey_dirty {
-            self.rekey_dirty = false;
-            self.rekey(cx);
-        }
     }
 
     /// Fold an adoption into the held state, persist it, and re-page what moved.
@@ -818,8 +798,6 @@ impl Community {
                 continue;
             };
 
-            // `stepped` carries the key held before the walk plus every epoch it
-            // passed through, each with the cutoff its superseding rotation set.
             for key in channel.stepped {
                 if !held.priors.iter().any(|prior| prior.epoch == key.epoch) {
                     held.priors.push(key);
@@ -889,58 +867,45 @@ impl Community {
 
     /// Rebuilds the community from the wraps in the local database.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        if self.refresh_task.is_some() {
-            self.dirty = true;
-            return;
-        }
-
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
         let state = self.state.clone();
         let folded = cx.background_spawn(async move { sync::fold(&client, &state).await });
 
-        self.refresh_task = Some(cx.spawn(async move |this, cx| {
+        self.tasks.push(cx.spawn(async move |this, cx| {
             let result = folded.await;
-            this.update(cx, |this, cx| this.apply(result, cx))?;
+
+            this.update(cx, |this, cx| {
+                match result {
+                    Ok(Some(snapshot)) => {
+                        let mut state = snapshot.state;
+                        state.cursors = std::mem::take(&mut this.state.cursors);
+
+                        this.state = state;
+                        this.control = snapshot.control;
+                        this.members = snapshot.members;
+                        this.load_images(cx);
+
+                        let reported = !snapshot.unreadable.is_empty();
+                        this.unreadable = snapshot.unreadable;
+
+                        if reported {
+                            cx.emit(CommunityEvent::Unreadable(this.state.id));
+                        }
+
+                        cx.emit(CommunityEvent::Updated(this.state.id));
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        cx.emit(CommunityEvent::Error(error.to_string()));
+                    }
+                    _ => {}
+                };
+            })?;
+
             Ok(())
         }));
-    }
-
-    fn apply(&mut self, result: Result<Option<Snapshot>>, cx: &mut Context<Self>) {
-        self.refresh_task = None;
-
-        match result {
-            Ok(Some(snapshot)) => {
-                let mut state = snapshot.state;
-                state.cursors = std::mem::take(&mut self.state.cursors);
-                self.state = state;
-                self.control = snapshot.control;
-                self.members = snapshot.members;
-                self.load_images(cx);
-
-                // A fold reads every plane, so its count is the truth for every
-                // channel rather than a sample of the region one round read.
-                // Replacing it is what lets the count fall again once a key is
-                // adopted; a partial round only ever raises it.
-                let reported = !snapshot.unreadable.is_empty();
-                self.unreadable = snapshot.unreadable;
-
-                if reported {
-                    cx.emit(CommunityEvent::Unreadable(self.state.id));
-                }
-
-                cx.emit(CommunityEvent::Updated(self.state.id));
-                cx.notify();
-            }
-            Ok(None) => {}
-            Err(error) => cx.emit(CommunityEvent::Error(error.to_string())),
-        }
-
-        if self.dirty {
-            self.dirty = false;
-            self.refresh(cx);
-        }
     }
 
     /// Resolve the folded icon and banner into local files.
@@ -949,7 +914,6 @@ impl Community {
             Some(metadata) => (metadata.icon.clone(), metadata.banner.clone()),
             None => (None, None),
         };
-
         self.load_icon(icon, cx);
         self.load_banner(banner, cx);
     }
@@ -966,7 +930,7 @@ impl Community {
             return;
         };
 
-        self.icon_task = Some(cx.spawn(async move |this, cx| {
+        self.tasks.push(cx.spawn(async move |this, cx| {
             match sync::resolve_image(&icon, cx).await {
                 Ok(path) => {
                     this.update(cx, |this, cx| {
@@ -992,7 +956,7 @@ impl Community {
             return;
         };
 
-        self.banner_task = Some(cx.spawn(async move |this, cx| {
+        self.tasks.push(cx.spawn(async move |this, cx| {
             match sync::resolve_image(&banner, cx).await {
                 Ok(path) => {
                     this.update(cx, |this, cx| {

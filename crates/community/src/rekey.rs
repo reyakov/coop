@@ -29,8 +29,6 @@ pub struct Watch {
     pub epoch: Epoch,
 }
 
-/// The permission a rotation of `scope` is judged under, by whoever reads it and
-/// by this client when it publishes one.
 fn permissions(scope: RekeyScope) -> &'static [u64] {
     match scope {
         RekeyScope::Base => &[Permissions::BAN],
@@ -39,11 +37,6 @@ fn permissions(scope: RekeyScope) -> &'static [u64] {
 }
 
 /// Every address a community's rotations can arrive at.
-///
-/// The base scope watches the epoch after *every* held root, not only the
-/// current one: a rotation published while this client was away is read from
-/// the root it stepped off, and the npub that minted an epoch is only knowable
-/// from the rotation that minted it.
 pub fn watches(state: &CommunityState) -> Result<Vec<Watch>> {
     let mut watches = Vec::new();
     let roots = state.roots();
@@ -185,8 +178,8 @@ where
     S: AsyncNip44 + ?Sized,
 {
     let watches = watches(state)?;
-
     let mut authors: BTreeSet<PublicKey> = BTreeSet::new();
+
     for watch in &watches {
         authors.insert(watch.address);
     }
@@ -666,12 +659,6 @@ where
             .iter()
             .filter(|rotation| rotation.continuity(held_epoch, &held_key) == Continuity::Extends)
         {
-            // Who minted an epoch is proven by the rotation itself, not by a blob:
-            // a rotation is only a candidate after continuity against a key we
-            // hold, so its rotator minted this epoch whether or not it addressed
-            // us. A member who joined on a stale bundle never held the epochs
-            // between, and the snapshot that seeds them is only honored on this
-            // npub's authority (CORD-02 §5).
             if scope == RekeyScope::Base {
                 step.refounders.insert(rotation.rotator);
             }

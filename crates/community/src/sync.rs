@@ -214,8 +214,6 @@ where
 
 /// Best-effort publication of the genesis wraps to the community's relays.
 pub(crate) async fn publish_wraps(client: &Client, wraps: &[Event], relays: &[RelayUrl]) {
-    connect_relays(client, relays).await;
-
     for wrap in wraps {
         publish_wrap(client, wrap, relays).await;
     }
@@ -232,6 +230,8 @@ pub(crate) async fn connect_relays(client: &Client, relays: &[RelayUrl]) {
 
 /// Best-effort publication of a single wrap to the community's relays.
 pub(crate) async fn publish_wrap(client: &Client, wrap: &Event, relays: &[RelayUrl]) {
+    connect_relays(client, relays).await;
+
     let sent = if relays.is_empty() {
         client.send_event(wrap).broadcast().await
     } else {
