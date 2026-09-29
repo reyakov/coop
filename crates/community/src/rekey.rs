@@ -12,7 +12,6 @@ use concord::derive::{GroupKey, channel_rekey_group_key, epoch_key_commitment};
 use concord::state::{CommunityState, HeldKey};
 use concord::{ChannelId, CommunityId, Epoch};
 use nostr_sdk::prelude::*;
-use state::UniversalSigner;
 
 use crate::sync::{self, PlaneKind};
 
@@ -175,13 +174,16 @@ pub struct ChannelAdoption {
 }
 
 /// Read every rekey wrap the local database holds and adopt what is admissible.
-pub async fn adopt(
+pub async fn adopt<S>(
     client: &Client,
     state: &CommunityState,
     roles: &CommunityRoles,
-    signer: &UniversalSigner,
+    signer: &S,
     me: PublicKey,
-) -> Result<Adoptions> {
+) -> Result<Adoptions>
+where
+    S: AsyncNip44 + ?Sized,
+{
     let watches = watches(state)?;
 
     let mut authors: BTreeSet<PublicKey> = BTreeSet::new();
@@ -362,15 +364,18 @@ impl Rewrite {
 
 /// Publish this client's own rotation of one scope to its next epoch.
 #[allow(clippy::too_many_arguments)]
-pub async fn rotate(
+pub async fn rotate<S>(
     client: &Client,
     state: &CommunityState,
     roles: &CommunityRoles,
-    signer: &UniversalSigner,
+    signer: &S,
     me: PublicKey,
     rewrite: &Rewrite,
     at: Timestamp,
-) -> Result<Epoch> {
+) -> Result<Epoch>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
+{
     if rewrite.excluded.contains(&me) {
         bail!("a rotation cannot cut off the member who publishes it");
     }
@@ -611,18 +616,21 @@ struct Delivery {
 
 /// Walk a scope's rotations forward, one epoch at a time, off the key held.
 #[allow(clippy::too_many_arguments)]
-async fn walk(
+async fn walk<S>(
     scope: RekeyScope,
     permissions: &[u64],
     mut held_epoch: Epoch,
     mut held_key: [u8; 32],
     state: &CommunityState,
     roles: &CommunityRoles,
-    signer: &UniversalSigner,
+    signer: &S,
     me: PublicKey,
     rotations: &[Rotation],
     published: &BTreeMap<RotationKey, u64>,
-) -> Result<Step> {
+) -> Result<Step>
+where
+    S: AsyncNip44 + ?Sized,
+{
     let mut step = Step::default();
     let mut stepped: Vec<HeldKey> = Vec::new();
     let ceiling = held_epoch.0 + REKEY_LOOKAHEAD;
@@ -794,6 +802,7 @@ mod tests {
     };
     use concord::state::{ChannelKeyRef, HeldRoot};
     use nostr_memory::MemoryDatabase;
+    use state::UniversalSigner;
 
     use super::*;
 

@@ -1097,8 +1097,6 @@ dependencies = [
  "anyhow",
  "chat",
  "common",
- "flume 0.11.1",
- "futures",
  "gpui-pre",
  "itertools 0.13.0",
  "log",

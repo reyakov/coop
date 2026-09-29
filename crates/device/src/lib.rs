@@ -759,7 +759,10 @@ fn get_or_init_app_keys(cx: &App) -> Task<Result<Keys, Error>> {
 }
 
 /// Encrypt and store device keys in the local database.
-async fn set_keys(client: &Client, signer: &UniversalSigner, secret: &str) -> Result<(), Error> {
+async fn set_keys<S>(client: &Client, signer: &S, secret: &str) -> Result<(), Error>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
+{
     let public_key = signer.get_public_key_async().await?;
     let content = signer.nip44_encrypt_async(&public_key, secret).await?;
 
@@ -776,7 +779,10 @@ async fn set_keys(client: &Client, signer: &UniversalSigner, secret: &str) -> Re
 }
 
 /// Get device keys from the local database.
-async fn get_keys(client: &Client, signer: &UniversalSigner) -> Result<Keys, Error> {
+async fn get_keys<S>(client: &Client, signer: &S) -> Result<Keys, Error>
+where
+    S: AsyncGetPublicKey + AsyncNip44 + ?Sized,
+{
     let public_key = signer.get_public_key_async().await?;
 
     let filter = Filter::new()

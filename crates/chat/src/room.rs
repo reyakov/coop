@@ -10,92 +10,45 @@ use itertools::Itertools;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
 use settings::{RoomConfig, SignerKind};
-use state::{NostrRegistry, TIMEOUT, UniversalSigner};
+use state::{NostrRegistry, TIMEOUT};
 
 use crate::{FileAttachment, KIND_FILE_MESSAGE, NewMessage};
 
 const NO_DEKEY: &str = "User hasn't set up a decoupled encryption key yet.";
 const USER_NO_DEKEY: &str = "You haven't set up a decoupled encryption key or it's not available.";
 
+/// The outcome of delivering an encrypted rumor to a single receiver.
 #[derive(Debug, Clone)]
 pub struct SendReport {
+    /// The receiver the rumor was addressed to.
     pub receiver: PublicKey,
-    pub gift_wrap_id: Option<EventId>,
-    pub error: Option<SharedString>,
-    pub output: Option<Output<EventId, EventSendStatus>>,
+    /// The per-relay send output, or the error that prevented the send.
+    result: Result<Output<EventId, EventSendStatus>, SharedString>,
 }
 
 impl SendReport {
-    pub fn new(receiver: PublicKey) -> Self {
-        Self {
-            receiver,
-            gift_wrap_id: None,
-            error: None,
-            output: None,
-        }
+    /// The error that prevented the send, if any.
+    pub fn error(&self) -> Option<&SharedString> {
+        self.result.as_ref().err()
     }
 
-    /// Set the gift wrap ID.
-    pub fn gift_wrap_id(mut self, gift_wrap_id: EventId) -> Self {
-        self.gift_wrap_id = Some(gift_wrap_id);
-        self
+    /// The per-relay send output, if the gift wrap was dispatched.
+    pub fn output(&self) -> Option<&Output<EventId, EventSendStatus>> {
+        self.result.as_ref().ok()
     }
 
-    /// Set the output.
-    pub fn output(mut self, output: Output<EventId, EventSendStatus>) -> Self {
-        self.output = Some(output);
-        self
-    }
-
-    /// Set the error message.
-    pub fn error<T>(mut self, error: T) -> Self
-    where
-        T: Into<SharedString>,
-    {
-        self.error = Some(error.into());
-        self
-    }
-
-    /// Returns true if the send is pending.
-    pub fn pending(&self) -> bool {
-        self.error.is_none()
-            && self
-                .output
-                .as_ref()
-                .is_some_and(|o| o.success.is_empty() && o.failed.is_empty())
-    }
-
-    /// Returns true if the send was successful.
+    /// Whether at least one relay accepted the event.
     pub fn success(&self) -> bool {
-        self.error.is_none() && self.output.as_ref().is_some_and(|o| !o.success.is_empty())
+        self.output()
+            .is_some_and(|output| !output.success.is_empty())
     }
 
-    /// Returns true if the send failed.
+    /// Whether no relay accepted the event.
     pub fn failed(&self) -> bool {
-        self.error.is_some() && self.output.as_ref().is_some_and(|o| !o.failed.is_empty())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub enum SendStatus {
-    Ok {
-        id: EventId,
-        relay: RelayUrl,
-    },
-    Failed {
-        id: EventId,
-        relay: RelayUrl,
-        message: String,
-    },
-}
-
-impl SendStatus {
-    pub fn ok(id: EventId, relay: RelayUrl) -> Self {
-        Self::Ok { id, relay }
-    }
-
-    pub fn failed(id: EventId, relay: RelayUrl, message: String) -> Self {
-        Self::Failed { id, relay, message }
+        match &self.result {
+            Err(_) => true,
+            Ok(output) => output.success.is_empty(),
+        }
     }
 }
 
@@ -520,30 +473,28 @@ impl Room {
     }
 
     /// Select the appropriate signer based on signer kind and available keys.
-    fn select_signer(
+    fn select_signer<'a, S>(
         signer_kind: &SignerKind,
         has_announcement: bool,
-        encryption_signer: &Option<UniversalSigner>,
-        user_signer: &UniversalSigner,
-    ) -> UniversalSigner {
+        encryption_signer: &'a Option<S>,
+        user_signer: &'a S,
+    ) -> &'a S {
         match signer_kind {
             SignerKind::Auto => {
                 if has_announcement {
-                    encryption_signer
-                        .clone()
-                        .unwrap_or_else(|| user_signer.clone())
+                    encryption_signer.as_ref().unwrap_or(user_signer)
                 } else {
-                    user_signer.clone()
+                    user_signer
                 }
             }
             SignerKind::Encryption => encryption_signer
-                .clone()
+                .as_ref()
                 .expect("encryption signer must be set"),
-            SignerKind::User => user_signer.clone(),
+            SignerKind::User => user_signer,
         }
     }
 
-    /// Send rumor event to all members's messaging relays
+    /// Send the rumor to every member's messaging relays.
     pub fn send(&self, rumor: UnsignedEvent, cx: &App) -> Option<Task<Vec<SendReport>>> {
         let config = self.config.clone();
 
@@ -560,7 +511,7 @@ impl Room {
         let sender = persons.read(cx).get(&current_user, cx);
 
         // Get all members (excluding sender)
-        let members: Vec<Person> = self
+        let receivers: Vec<Person> = self
             .members
             .iter()
             .filter(|public_key| public_key != &&sender.public_key())
@@ -569,71 +520,33 @@ impl Room {
 
         Some(cx.background_spawn(async move {
             let signer_kind = config.signer_kind();
-            let backup = config.backup();
 
-            let mut sents = 0;
-            let mut reports = Vec::new();
-
-            // Process each member
-            for member in members {
-                let announcement = member.announcement();
-                let public_key = member.public_key();
-
-                // Handle encryption signer requirements
-                if signer_kind.encryption() {
-                    // Receiver didn't set up a decoupled encryption key
-                    if announcement.is_none() {
-                        reports.push(SendReport::new(public_key).error(NO_DEKEY));
-                        continue;
-                    }
-
-                    // Sender didn't set up a decoupled encryption key
-                    if encryption_signer.is_none() {
-                        reports.push(SendReport::new(sender.public_key()).error(USER_NO_DEKEY));
-                        continue;
-                    }
-                }
-
-                // Determine the signer to use
-                let signer = Self::select_signer(
+            // Deliver to every receiver concurrently
+            let sends = receivers.into_iter().map(|receiver| {
+                deliver(
+                    &client,
                     signer_kind,
-                    announcement.is_some(),
+                    receiver,
+                    &rumor,
                     &encryption_signer,
                     &user_signer,
+                )
+            });
+            let mut reports: Vec<SendReport> = futures::future::join_all(sends).await;
+
+            // Back up the message to ourselves once at least one receiver got it
+            if config.backup() && reports.iter().any(SendReport::success) {
+                reports.push(
+                    deliver(
+                        &client,
+                        signer_kind,
+                        sender,
+                        &rumor,
+                        &encryption_signer,
+                        &user_signer,
+                    )
+                    .await,
                 );
-
-                // Send the gift wrap event and collect the report
-                match send_gift_wrap(&client, &signer, &member, &rumor, signer_kind).await {
-                    Ok(report) => {
-                        reports.push(report);
-                        sents += 1;
-                    }
-                    Err(error) => {
-                        let report = SendReport::new(public_key).error(error.to_string());
-                        reports.push(report);
-                    }
-                }
-            }
-
-            // Send backup to current user if needed
-            if backup && sents >= 1 {
-                let public_key = sender.public_key();
-
-                // Determine the signer to use
-                let signer = Self::select_signer(
-                    signer_kind,
-                    sender.announcement().is_some(),
-                    &encryption_signer,
-                    &user_signer,
-                );
-
-                match send_gift_wrap(&client, &signer, &sender, &rumor, signer_kind).await {
-                    Ok(report) => reports.push(report),
-                    Err(error) => {
-                        let report = SendReport::new(public_key).error(error.to_string());
-                        reports.push(report);
-                    }
-                }
             }
 
             reports
@@ -641,55 +554,101 @@ impl Room {
     }
 }
 
-// Helper function to send a gift-wrapped event
-async fn send_gift_wrap(
+/// Deliver a rumor to a single receiver.
+async fn deliver<S>(
     client: &Client,
-    signer: &UniversalSigner,
+    signer_kind: &SignerKind,
+    receiver: Person,
+    rumor: &UnsignedEvent,
+    encryption_signer: &Option<S>,
+    user_signer: &S,
+) -> SendReport
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44,
+{
+    let public_key = receiver.public_key();
+    let announcement = receiver.announcement();
+
+    if signer_kind.encryption() {
+        // Receiver didn't set up a decoupled encryption key
+        if announcement.is_none() {
+            return SendReport {
+                receiver: public_key,
+                result: Err(NO_DEKEY.into()),
+            };
+        }
+
+        // Sender didn't set up a decoupled encryption key
+        if encryption_signer.is_none() {
+            return SendReport {
+                receiver: public_key,
+                result: Err(USER_NO_DEKEY.into()),
+            };
+        }
+    }
+
+    // Determine the signer to use
+    let signer = Room::select_signer(
+        signer_kind,
+        announcement.is_some(),
+        encryption_signer,
+        user_signer,
+    );
+
+    match send_gift_wrap(client, signer, &receiver, rumor, signer_kind).await {
+        Ok(output) => SendReport {
+            receiver: public_key,
+            result: Ok(output),
+        },
+        Err(error) => SendReport {
+            receiver: public_key,
+            result: Err(error.to_string().into()),
+        },
+    }
+}
+
+/// Build the gift-wrapped event for a rumor and send it.
+async fn send_gift_wrap<S>(
+    client: &Client,
+    signer: &S,
     receiver: &Person,
     rumor: &UnsignedEvent,
     config: &SignerKind,
-) -> Result<SendReport, Error> {
-    let k_tag = Tag::custom("k", [rumor.kind.to_string()]);
-    let mut extra_tags = vec![k_tag];
+) -> Result<Output<EventId, EventSendStatus>, Error>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44,
+{
+    let mut extra_tags = vec![Tag::custom("k", [rumor.kind.to_string()])];
 
     // Determine the receiver public key based on the config
-    let receiver = match config {
-        SignerKind::Auto => {
-            if let Some(announcement) = receiver.announcement().as_ref() {
+    let receiver_key = match config {
+        SignerKind::Auto => match receiver.announcement().as_ref() {
+            Some(announcement) => {
                 extra_tags.push(Tag::public_key(receiver.public_key()));
                 announcement.public_key()
-            } else {
-                receiver.public_key()
             }
-        }
-        SignerKind::Encryption => {
-            if let Some(announcement) = receiver.announcement().as_ref() {
+            None => receiver.public_key(),
+        },
+        SignerKind::Encryption => match receiver.announcement().as_ref() {
+            Some(announcement) => {
                 extra_tags.push(Tag::public_key(receiver.public_key()));
                 announcement.public_key()
-            } else {
-                return Err(anyhow!("User has no encryption announcement"));
             }
-        }
+            None => return Err(anyhow!("User has no encryption announcement")),
+        },
         SignerKind::User => receiver.public_key(),
     };
 
     // Construct the gift wrap event
-    let event = nip59::GiftWrapBuilder::new(receiver, rumor.clone())
+    let event = nip59::GiftWrapBuilder::new(receiver_key, rumor.clone())
         .extra_tags(extra_tags)
         .finalize_async(signer)
         .await?;
 
-    // Send the gift wrap event and collect the report
-    let report = client
+    // Send to the receiver's NIP-17 relays.
+    client
         .send_event(&event)
         .to_nip17()
-        .ack_policy(AckPolicy::none())
         .await
-        .map(|output| {
-            SendReport::new(receiver)
-                .gift_wrap_id(event.id)
-                .output(output)
-        })?;
-
-    Ok(report)
+        .map_err(Into::into)
 }

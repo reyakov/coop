@@ -14,7 +14,6 @@ use concord::state::{CommunityState, HeldKey, HeldRoot, list_entry};
 use concord::{ChannelId, CommunityId, Epoch, GroupKey, decode_hex_32};
 use gpui::AsyncApp;
 use nostr_sdk::prelude::*;
-use state::UniversalSigner;
 
 use crate::cache::{self, Observed};
 use crate::history::{CURSOR_OVERLAP, Window};
@@ -348,11 +347,10 @@ pub async fn subscribe_list(client: &Client, self_pk: PublicKey) -> Result<()> {
 ///
 /// A held membership is dropped only when the List carries a tombstone at least
 /// as new as it, because absence from the List is never a fact (§8).
-pub async fn load(
-    client: &Client,
-    signer: &UniversalSigner,
-    self_pk: PublicKey,
-) -> Result<Vec<CommunityState>> {
+pub async fn load<S>(client: &Client, signer: &S, self_pk: PublicKey) -> Result<Vec<CommunityState>>
+where
+    S: AsyncGetPublicKey + AsyncNip44 + ?Sized,
+{
     let list = match load_list(client, signer, self_pk).await? {
         Some(list) => list,
         None => return cache::load_states(client).await,
@@ -735,6 +733,7 @@ mod tests {
     use std::time::Duration;
 
     use nostr_memory::MemoryDatabase;
+    use state::UniversalSigner;
 
     use super::*;
 

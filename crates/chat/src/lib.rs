@@ -14,7 +14,7 @@ use gpui::{
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
-use state::{DEVICE_GIFTWRAP, NostrRegistry, USER_GIFTWRAP, UniversalSigner};
+use state::{DEVICE_GIFTWRAP, NostrRegistry, USER_GIFTWRAP};
 
 mod message;
 mod room;
@@ -73,41 +73,29 @@ impl Signal {
 pub struct ChatRegistry {
     /// Chat rooms
     rooms: Vec<Entity<Room>>,
-
     /// O(1) room lookup by room ID
     room_index: HashMap<u64, Entity<Room>>,
-
     /// Events that failed to unwrap for any reason
     trash: Entity<BTreeSet<FailedMessage>>,
-
     /// Tracking events seen on which relays in the current session
     seen: Arc<RwLock<HashMap<EventId, HashSet<RelayUrl>>>>,
-
     /// Mapping of unwrapped event ids to their gift wrap event ids
     event_map: Arc<RwLock<HashMap<EventId, EventId>>>,
-
     /// True while the initial event backlog is still loading
     tracking: Arc<AtomicBool>,
-
     /// Channel for sending signals to the UI.
     signal_tx: flume::Sender<Signal>,
-
     /// Channel for receiving signals from the UI.
     signal_rx: flume::Receiver<Signal>,
-
     /// Async tasks
     tasks: SmallVec<[Task<Result<(), Error>>; 2]>,
-
     /// Notification listener task (cancelled on signer change)
     notification_listener: Option<Task<Result<(), Error>>>,
-
     /// Signal consumer task (cancelled on signer change)
     signal_consumer: Option<Task<Result<(), Error>>>,
-
     /// Fuzzy matcher for room search (cached; intentionally excluded from Debug)
     #[allow(dead_code)]
     matcher: CachedMatcher,
-
     /// Subscriptions
     _subscriptions: SmallVec<[Subscription; 2]>,
 }
@@ -144,8 +132,9 @@ impl ChatRegistry {
 
     /// Create a new chat registry instance
     fn new(cx: &mut Context<Self>) -> Self {
-        let entity = cx.entity().downgrade();
         let nostr = NostrRegistry::global(cx);
+        let entity = cx.entity().downgrade();
+
         let (tx, rx) = flume::unbounded::<Signal>();
         let mut subscriptions = smallvec![];
 
@@ -162,11 +151,9 @@ impl ChatRegistry {
         );
 
         cx.defer(move |cx| {
-            entity
-                .update(cx, |this, cx| {
-                    this.get_rooms(cx);
-                })
-                .ok();
+            let _ = entity.update(cx, |this, cx| {
+                this.get_rooms(cx);
+            });
         });
 
         Self {
@@ -237,6 +224,7 @@ impl ChatRegistry {
                         if processed_events.len() >= MAX_PROCESSED {
                             processed_events.clear();
                         }
+
                         if !processed_events.insert(event.id) {
                             continue;
                         }
@@ -752,11 +740,14 @@ impl ChatRegistry {
 }
 
 /// Unwraps a gift-wrapped event and processes its contents.
-async fn extract_rumor(
+async fn extract_rumor<S>(
     client: &Client,
-    signer: &UniversalSigner,
+    signer: &S,
     gift_wrap: &Event,
-) -> Result<UnsignedEvent, Error> {
+) -> Result<UnsignedEvent, Error>
+where
+    S: AsyncNip44 + ?Sized,
+{
     // Try to get cached rumor first
     if let Ok(rumor) = get_rumor(client, gift_wrap.id).await {
         return Ok(rumor);
@@ -783,10 +774,10 @@ async fn extract_rumor(
 }
 
 /// Attempts to unwrap a gift wrap event with a given signer.
-async fn try_unwrap_with(
-    signer: &UniversalSigner,
-    gift_wrap: &Event,
-) -> Result<UnwrappedGift, Error> {
+async fn try_unwrap_with<S>(signer: &S, gift_wrap: &Event) -> Result<UnwrappedGift, Error>
+where
+    S: AsyncNip44 + ?Sized,
+{
     // Get the sealed event
     let seal = signer
         .nip44_decrypt_async(&gift_wrap.pubkey, &gift_wrap.content)

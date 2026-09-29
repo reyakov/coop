@@ -4,9 +4,8 @@ use std::sync::{Arc, LazyLock, RwLock};
 
 pub use actions::*;
 use anyhow::Error;
-use chat::{ChatRegistry, Message, Room, RoomEvent, SendReport, SendStatus};
+use chat::{ChatRegistry, Message, Room, RoomEvent, SendReport};
 use common::TimestampExt;
-use futures::lock::Mutex;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
@@ -95,9 +94,6 @@ pub struct ChatPanel {
     /// Subject bar visibility
     subject_bar: Entity<bool>,
 
-    /// Sent message ids
-    sent_ids: Arc<Mutex<Vec<EventId>>>,
-
     /// Replies to
     replies_to: Entity<HashSet<EventId>>,
 
@@ -181,7 +177,6 @@ impl ChatPanel {
         // Define all functions that will run after the current cycle
         cx.defer_in(window, |this, window, cx| {
             this.connect(cx);
-            this.handle_notifications(cx);
             this.subscribe_room_events(window, cx);
             this.get_messages(window, cx);
         });
@@ -203,7 +198,6 @@ impl ChatPanel {
             decrypted_files: HashMap::new(),
             rendered_texts_by_id: BTreeMap::new(),
             reports_by_id,
-            sent_ids: Arc::new(Mutex::new(Vec::new())),
             uploading: false,
             subscriptions,
             tasks: vec![],
@@ -216,78 +210,6 @@ impl ChatPanel {
             let task = room.read(cx).connect(cx);
             self.tasks.push(task);
         }
-    }
-
-    /// Handle nostr notifications
-    fn handle_notifications(&mut self, cx: &mut Context<Self>) {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-        let sent_ids = self.sent_ids.clone();
-        let reports = self.reports_by_id.clone();
-
-        let (tx, rx) = flume::bounded::<Arc<SendStatus>>(256);
-
-        self.tasks.push(cx.background_spawn(async move {
-            let mut notifications = client.notifications();
-
-            while let Some(notification) = notifications.next().await {
-                if let ClientNotification::Message { message, relay_url } = notification
-                    && let RelayMessage::Ok {
-                        event_id,
-                        status,
-                        message,
-                    } = *message
-                {
-                    let sent_ids = sent_ids.lock().await;
-
-                    if sent_ids.contains(&event_id) {
-                        let status = if status {
-                            SendStatus::ok(event_id, relay_url)
-                        } else {
-                            SendStatus::failed(event_id, relay_url, message.into())
-                        };
-                        tx.send_async(Arc::new(status)).await.ok();
-                    }
-                }
-            }
-
-            Ok(())
-        }));
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            while let Ok(status) = rx.recv_async().await {
-                {
-                    let mut map = reports.write().unwrap();
-                    let status_id = match &*status {
-                        SendStatus::Ok { id, .. } => *id,
-                        SendStatus::Failed { id, .. } => *id,
-                    };
-
-                    // Find the matching report and update it (exit early on first match)
-                    'outer: for reports_list in map.values_mut() {
-                        for report in reports_list.iter_mut() {
-                            let Some(output) = report.output.as_mut() else {
-                                continue;
-                            };
-                            if *output.id() != status_id {
-                                continue;
-                            }
-                            match &*status {
-                                SendStatus::Ok { relay, .. } => {
-                                    output.success.insert(relay.clone(), EventSendStatus::Sent);
-                                }
-                                SendStatus::Failed { relay, message, .. } => {
-                                    output.failed.insert(relay.clone(), message.clone());
-                                }
-                            }
-                            break 'outer;
-                        }
-                    }
-                }
-                this.update(cx, |_, cx| cx.notify()).ok();
-            }
-            Ok(())
-        }));
     }
 
     /// Subscribe to room events
@@ -513,7 +435,6 @@ impl ChatPanel {
         cx: &mut Context<Self>,
     ) {
         let id = rumor.id.expect("rumor must have an id");
-        let sent_ids = self.sent_ids.clone();
 
         // Insert optimistic message and clear input
         if rumor.kind != Kind::Reaction {
@@ -528,13 +449,10 @@ impl ChatPanel {
 
         // Spawn a single task to await the send and update reports
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            let outputs = send_task.await;
-
-            let mut sent_ids = sent_ids.lock().await;
-            sent_ids.extend(outputs.iter().filter_map(|output| output.gift_wrap_id));
+            let reports = send_task.await;
 
             this.update(cx, |this, cx| {
-                this.insert_reports(id, outputs, cx);
+                this.insert_reports(id, reports, cx);
             })?;
 
             Ok(())
@@ -1391,9 +1309,7 @@ impl ChatPanel {
     fn render_sent_reports(&self, id: &EventId, cx: &App) -> impl IntoElement {
         let reports = self.sent_reports(id);
 
-        let pending = reports
-            .as_ref()
-            .is_some_and(|reports| reports.is_empty() || reports.iter().any(|r| r.pending()));
+        let pending = reports.as_ref().is_some_and(|reports| reports.is_empty());
 
         let success = reports
             .as_ref()
@@ -1462,7 +1378,7 @@ impl ChatPanel {
                             .child(name.clone()),
                     ),
             )
-            .when_some(report.error.clone(), |this, error| {
+            .when_some(report.error().cloned(), |this, error| {
                 this.child(
                     h_flex()
                         .flex_wrap()
@@ -1477,7 +1393,7 @@ impl ChatPanel {
                         .child(div().flex_1().w_full().text_center().child(error)),
                 )
             })
-            .when_some(report.output.clone(), |this, output| {
+            .when_some(report.output().cloned(), |this, output| {
                 this.child(
                     v_flex()
                         .gap_2()
