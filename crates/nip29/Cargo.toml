@@ -1,0 +1,20 @@
+[package]
+name = "nip29"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+nostr.workspace = true
+nostr-sdk.workspace = true
+anyhow.workspace = true
+futures.workspace = true
+serde_json.workspace = true
+
+state = { path = "../state" }
+chat = { path = "../chat" }
+
+gpui.workspace = true
+flume.workspace = true
+log.workspace = true
+smallvec.workspace = true

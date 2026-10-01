@@ -1,16 +1,16 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SidebarTab {
     Inbox,
-    Communities,
+    Groups,
 }
 
 impl SidebarTab {
-    pub const ALL: [SidebarTab; 2] = [Self::Inbox, Self::Communities];
+    pub const ALL: [SidebarTab; 2] = [Self::Inbox, Self::Groups];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Inbox => "Inbox",
-            Self::Communities => "Communities",
+            Self::Groups => "Groups",
         }
     }
 
@@ -18,21 +18,21 @@ impl SidebarTab {
     pub fn list_title(self) -> &'static str {
         match self {
             Self::Inbox => "Direct Messages",
-            Self::Communities => "Communities",
+            Self::Groups => "Groups",
         }
     }
 
     pub fn list_id(self) -> &'static str {
         match self {
             Self::Inbox => "sidebar-inbox",
-            Self::Communities => "sidebar-communities",
+            Self::Groups => "sidebar-groups",
         }
     }
 
     pub fn index(self) -> usize {
         match self {
             Self::Inbox => 0,
-            Self::Communities => 1,
+            Self::Groups => 1,
         }
     }
 }

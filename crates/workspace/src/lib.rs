@@ -10,6 +10,7 @@ use gpui::{
     Action, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     Render, SharedString, Styled, Subscription, Task, Window, div, px,
 };
+use nip29::{GroupId, GroupKey};
 use nostr_sdk::prelude::*;
 use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
@@ -21,7 +22,7 @@ use ui::notification::{Notification, NotificationKind};
 use ui::{IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
 
 use crate::dialogs::restore::RestoreEncryption;
-use crate::dialogs::{new_chat, new_community, settings};
+use crate::dialogs::{join_group, new_chat, new_group, settings};
 use crate::panels::{
     backup, browse, contact_list, greeter, inbox, messaging_relays, profile, relay_list, requests,
     search,
@@ -60,11 +61,13 @@ enum Command {
     ShowBrowse,
     ShowSearch,
     NewChat,
-    NewCommunity,
+    NewGroup,
+    JoinGroup,
 }
 
 pub struct Workspace {
     dock: Entity<DockArea>,
+    sidebar: Entity<Sidebar>,
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
     /// Event subscriptions
@@ -79,6 +82,7 @@ impl Workspace {
 
         let (dock, _) = dock::dock_area("coop", window, cx);
         let sidebar = cx.new(|cx| Sidebar::new(window, dock.downgrade(), cx));
+        let left_sidebar = sidebar.clone();
 
         let mut subscriptions = smallvec![];
 
@@ -186,7 +190,7 @@ impl Workspace {
         );
 
         cx.defer_in(window, move |this, window, cx| {
-            let sidebar = PanelHandle::new(sidebar);
+            let sidebar = PanelHandle::new(left_sidebar);
             let greeter = PanelHandle::new(greeter::init(window, cx));
 
             this.dock.update(cx, |this, cx| {
@@ -200,8 +204,32 @@ impl Workspace {
             });
         });
 
+        // Listen app-wide, so a group panel can show or hide the sidebar without holding it.
+        let workspace = cx.entity().downgrade();
+
+        App::on_action(cx, {
+            let workspace = workspace.clone();
+
+            move |action: &nip29_ui::ShowGroupMeta, cx| {
+                let Some(workspace) = workspace.upgrade() else {
+                    return;
+                };
+
+                workspace.update(cx, |this, cx| this.show_group_meta(action, cx));
+            }
+        });
+
+        App::on_action(cx, move |action: &nip29_ui::HideGroupMeta, cx| {
+            let Some(workspace) = workspace.upgrade() else {
+                return;
+            };
+
+            workspace.update(cx, |this, cx| this.hide_group_meta(action, cx));
+        });
+
         Self {
             dock,
+            sidebar,
             tasks: vec![],
             _subscriptions: subscriptions,
         }
@@ -282,7 +310,8 @@ impl Workspace {
                 );
             }
             Command::ShowBrowse => {
-                self.add_panel_to_dock(browse::init(window, cx), DockPlacement::Center, window, cx);
+                let panel = browse::init(self.dock.downgrade(), window, cx);
+                self.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
             }
             Command::ShowSearch => {
                 let panel = search::init(self.dock.downgrade(), window, cx);
@@ -291,8 +320,11 @@ impl Workspace {
             Command::NewChat => {
                 new_chat::open(self.dock.downgrade(), window, cx);
             }
-            Command::NewCommunity => {
-                new_community::open(window, cx);
+            Command::NewGroup => {
+                new_group::open(window, cx);
+            }
+            Command::JoinGroup => {
+                join_group::open(window, cx);
             }
             Command::ShowBackup => {
                 self.add_panel_to_dock(backup::init(window, cx), DockPlacement::Left, window, cx);
@@ -375,6 +407,32 @@ impl Workspace {
                 }
             }
         }
+    }
+
+    /// Show the sidebar's information for the group a panel belongs to.
+    fn show_group_meta(&mut self, action: &nip29_ui::ShowGroupMeta, cx: &mut Context<Self>) {
+        let Ok(id) = GroupId::new(action.group.clone()) else {
+            return;
+        };
+
+        let key = GroupKey::new(action.relay.clone(), id);
+
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.show_group_meta(&key, cx);
+        });
+    }
+
+    /// Hide the sidebar's information for the group a panel belongs to.
+    fn hide_group_meta(&mut self, action: &nip29_ui::HideGroupMeta, cx: &mut Context<Self>) {
+        let Ok(id) = GroupId::new(action.group.clone()) else {
+            return;
+        };
+
+        let key = GroupKey::new(action.relay.clone(), id);
+
+        self.sidebar.update(cx, |sidebar, cx| {
+            sidebar.hide_group_meta(&key, cx);
+        });
     }
 
     fn confirm_reset_encryption(&mut self, window: &mut Window, cx: &mut Context<Self>) {

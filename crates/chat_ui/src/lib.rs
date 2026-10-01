@@ -53,7 +53,7 @@ static EMOJI_RE: LazyLock<Regex> =
 
 mod actions;
 mod file;
-mod text;
+pub mod text;
 
 pub fn init(room: WeakEntity<Room>, window: &mut Window, cx: &mut App) -> Entity<ChatPanel> {
     cx.new(|cx| ChatPanel::new(room, window, cx))

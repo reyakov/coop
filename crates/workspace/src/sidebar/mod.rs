@@ -6,14 +6,14 @@ use anyhow::Error;
 use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
 use common::TimestampExt;
-use community::{ChannelId, Community, CommunityEvent, CommunityRegistry};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, Context, Div, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ObjectFit, ParentElement, Render, SharedString, Stateful,
-    Styled, StyledImage, Subscription, Task, UniformListScrollHandle, WeakEntity, Window, div, img,
-    px, retain_all, uniform_list,
+    AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, ObjectFit, ParentElement, Render, SharedString,
+    Stateful, Styled, StyledImage, Subscription, Task, UniformListScrollHandle, WeakEntity, Window,
+    div, img, px, relative, retain_all, uniform_list,
 };
+use nip29::{Group, GroupKey, GroupsEvent, GroupsRegistry, Membership};
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use settings::AppSettings;
@@ -38,70 +38,79 @@ use ui::{
 };
 
 use crate::Command;
-use crate::dialogs::{import, screening};
+use crate::dialogs::{import, profile, screening};
 
 mod tab;
 mod utils;
 
 use tab::SidebarTab;
-pub(crate) use utils::{nav_icon, pick_banner};
+pub(crate) use utils::pick_banner;
 
 pub enum SidebarRow {
     Room { room: Entity<Room> },
-    Community { community: Entity<Community> },
+    Group { group: Entity<Group> },
     Contact { public_key: PublicKey },
 }
 
-/// A collapsible group of rows in the sidebar's community view.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum CommunitySection {
-    Channels,
+/// A collapsible section of the group view that replaces the tab list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GroupSection {
     Admins,
     Members,
 }
 
-/// A row in the sidebar's community view.
-pub enum CommunityRow {
-    Section(CommunitySection),
-    Channel {
-        id: ChannelId,
-        name: SharedString,
-        private: bool,
-        selected: bool,
-    },
+impl GroupSection {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Admins => "Admins",
+            Self::Members => "Members",
+        }
+    }
+}
+
+/// A row in the group view.
+enum GroupRow {
+    Section(GroupSection),
     Member {
         public_key: PublicKey,
+        roles: Vec<String>,
     },
 }
 
 pub struct Sidebar {
     focus_handle: FocusHandle,
     scroll_handles: [UniformListScrollHandle; 2],
-    /// Scroll state of the community's channel and member lists
-    community_scroll: UniformListScrollHandle,
-    /// The dock the sidebar opens its panels in
     dock: WeakEntity<DockArea>,
-    /// Background shown behind the signed-out screen, picked at random
+    /// Random background shown behind the signed-out screen.
     banner: SharedString,
     active_tab: SidebarTab,
-    /// The community the sidebar is browsing, if any
-    community: Option<WeakEntity<Community>>,
-    /// Whether the inbox list is showing contacts to start a chat with
-    contacts_open: bool,
-    /// The signed-in user's contacts, loaded when the contact picker opens
-    contacts: Option<Vec<PublicKey>>,
-    /// Contacts selected in the contact picker
-    selected_contacts: HashSet<PublicKey>,
-    /// Scroll state of the contact picker's list
-    contacts_scroll: UniformListScrollHandle,
-    /// Whether the inbox list is showing chat requests instead of rooms
-    requests_open: bool,
-    /// Scroll state of the requests list
-    requests_scroll: UniformListScrollHandle,
-    channels_open: bool,
+
+    /// The group whose information the sidebar is browsing, if any.
+    group: Option<WeakEntity<Group>>,
+    /// Whether the sidebar is showing the group's information instead of its tabs.
+    group_open: bool,
+    /// Scroll state of the group's member list.
+    group_scroll: UniformListScrollHandle,
+    /// Whether the group view's admins section is expanded.
     admins_open: bool,
+    /// Whether the group view's members section is expanded.
     members_open: bool,
+
+    /// Whether the inbox list is showing contacts to start a chat with.
+    contacts_open: bool,
+    /// The signed-in user's contacts, loaded when the contact picker opens.
+    contacts: Option<Vec<PublicKey>>,
+    /// Contacts selected in the contact picker.
+    selected_contacts: HashSet<PublicKey>,
+    /// Scroll state of the contact picker's list.
+    contacts_scroll: UniformListScrollHandle,
+
+    /// Whether the inbox list is showing chat requests instead of rooms.
+    requests_open: bool,
+    /// Scroll state of the requests list.
+    requests_scroll: UniformListScrollHandle,
     new_requests: bool,
+
     tasks: SmallVec<[Task<Result<(), Error>>; 1]>,
     _subscriptions: SmallVec<[Subscription; 4]>,
 }
@@ -109,7 +118,7 @@ pub struct Sidebar {
 impl Sidebar {
     pub fn new(window: &mut Window, dock: WeakEntity<DockArea>, cx: &mut Context<Self>) -> Self {
         let chat = ChatRegistry::global(cx);
-        let communities = CommunityRegistry::global(cx);
+        let groups = GroupsRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
 
         let mut subscriptions = smallvec![];
@@ -123,23 +132,23 @@ impl Sidebar {
             }),
         );
 
-        // Keep the room and request counts in sync with the chat registry.
-        subscriptions.push(cx.observe(&chat, |_this, _chat, cx| {
-            cx.notify();
-        }));
-
-        subscriptions.push(cx.subscribe_in(
-            &communities,
-            window,
-            |_this, _communities, event, window, cx| {
-                if let CommunityEvent::Error(error) = event {
-                    window.push_notification(Notification::error(error.clone()), cx);
-                }
-            },
-        ));
+        subscriptions.push(
+            cx.subscribe_in(&groups, window, |_this, _, event, window, cx| {
+                match event {
+                    GroupsEvent::Updated => {
+                        // TODO: find a better way?
+                        cx.notify();
+                    }
+                    GroupsEvent::Error(error) => {
+                        window.push_notification(Notification::error(error.clone()), cx);
+                    }
+                    _ => {}
+                };
+            }),
+        );
 
         subscriptions.push(
-            cx.subscribe_in(&nostr, window, |this, _nostr, event, _window, cx| {
+            cx.subscribe_in(&nostr, window, |this, _, event, _window, cx| {
                 // Re-pick the background each time the signed-out screen is shown.
                 if let StateEvent::NoSigner = event {
                     this.banner = pick_banner();
@@ -154,24 +163,65 @@ impl Sidebar {
                 UniformListScrollHandle::new(),
                 UniformListScrollHandle::new(),
             ],
-            community_scroll: UniformListScrollHandle::new(),
             dock,
             banner: pick_banner(),
             active_tab: SidebarTab::Inbox,
-            community: None,
+            group: None,
+            group_open: false,
+            group_scroll: UniformListScrollHandle::new(),
+            admins_open: true,
+            members_open: true,
             contacts_open: false,
             contacts: None,
             selected_contacts: HashSet::new(),
             contacts_scroll: UniformListScrollHandle::new(),
             requests_open: false,
             requests_scroll: UniformListScrollHandle::new(),
-            channels_open: true,
-            admins_open: true,
-            members_open: true,
             new_requests: false,
             tasks: smallvec![],
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Show the group view, replacing the tab list.
+    fn show_group(&mut self, group: &Entity<Group>, cx: &mut Context<Self>) {
+        self.group = Some(group.downgrade());
+        self.group_open = true;
+        cx.notify();
+    }
+
+    /// Show the group view without toggling it closed.
+    pub(crate) fn show_group_meta(&mut self, key: &GroupKey, cx: &mut Context<Self>) {
+        let groups = GroupsRegistry::global(cx);
+
+        let Some(group) = groups.read(cx).group(key, cx) else {
+            return;
+        };
+
+        self.show_group(&group, cx);
+    }
+
+    /// Hide the group view if the sidebar is showing the given group.
+    pub(crate) fn hide_group_meta(&mut self, key: &GroupKey, cx: &mut Context<Self>) {
+        let showing = self
+            .group
+            .as_ref()
+            .and_then(|group| group.upgrade())
+            .is_some_and(|group| group.read(cx).key() == key);
+
+        if showing {
+            self.hide_group(cx);
+        }
+    }
+
+    /// Leave the group view, returning the sidebar to its tab list.
+    fn hide_group(&mut self, cx: &mut Context<Self>) {
+        if !self.group_open {
+            return;
+        }
+
+        self.group_open = false;
+        cx.notify();
     }
 
     fn select_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
@@ -328,14 +378,6 @@ impl Sidebar {
         }));
     }
 
-    /// Leave the community view, returning the sidebar to its tab list.
-    fn reset_community(&mut self, cx: &mut Context<Self>) {
-        if self.community.take().is_none() {
-            return;
-        }
-        cx.notify();
-    }
-
     fn render_user(&self, current_user: &PublicKey, cx: &mut Context<Self>) -> Stateful<Div> {
         let persons = PersonRegistry::global(cx);
         let profile = persons.read(cx).get(current_user, cx);
@@ -418,7 +460,7 @@ impl Sidebar {
             .when_some(AutoUpdater::try_global(cx), |this, updater| {
                 this.child(self.render_updater(updater, cx))
             })
-            .when(self.community.is_some(), |this| {
+            .when(self.group_open, |this| {
                 this.child(
                     Button::new("sidebar-back")
                         .icon(IconName::ArrowLeft)
@@ -426,7 +468,7 @@ impl Sidebar {
                         .ghost()
                         .small()
                         .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.reset_community(cx);
+                            this.hide_group(cx);
                         })),
                 )
             })
@@ -504,7 +546,7 @@ impl Sidebar {
                         .segmented(true)
                         .selected_index(active_tab.index())
                         .child(Tab::new().label(SidebarTab::Inbox.label()))
-                        .child(Tab::new().label(SidebarTab::Communities.label()))
+                        .child(Tab::new().label(SidebarTab::Groups.label()))
                         .on_click({
                             let sidebar = sidebar.clone();
                             move |index, _window, cx| {
@@ -580,18 +622,28 @@ impl Sidebar {
                                 })),
                         ),
                 ),
-                SidebarTab::Communities => this.child(
+                SidebarTab::Groups => this.child(
                     v_flex()
                         .px_2()
                         .gap_1()
                         .child(
                             NavItem::new(
-                                "new-community",
-                                "New Community",
+                                "new-group",
+                                "New Group",
                                 Icon::new(IconName::Group).small(),
                             )
                             .on_click(|_, window, cx| {
-                                window.dispatch_action(Box::new(Command::NewCommunity), cx)
+                                window.dispatch_action(Box::new(Command::NewGroup), cx)
+                            }),
+                        )
+                        .child(
+                            NavItem::new(
+                                "join-group",
+                                "Join Group",
+                                Icon::new(IconName::Door).small(),
+                            )
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(Command::JoinGroup), cx)
                             }),
                         )
                         .child(
@@ -668,127 +720,6 @@ impl Sidebar {
             .into_any_element()
     }
 
-    fn render_community(
-        &mut self,
-        community: Entity<Community>,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let (banner, rows) = {
-            let community = community.read(cx);
-            let owner = community.state().owner;
-
-            let mut admins = Vec::new();
-            let mut members = Vec::new();
-
-            for public_key in community.members() {
-                if community.control().roles.is_staff(public_key, &owner) {
-                    admins.push(*public_key);
-                } else {
-                    members.push(*public_key);
-                }
-            }
-
-            let active = community.active_channel();
-            let banner = community.banner();
-
-            let mut rows = vec![CommunityRow::Section(CommunitySection::Channels)];
-            if self.channels_open {
-                rows.extend(
-                    community
-                        .channels()
-                        .iter()
-                        .map(|channel| CommunityRow::Channel {
-                            id: channel.id,
-                            name: channel.name.clone().into(),
-                            private: channel.private,
-                            selected: active == Some(channel.id),
-                        }),
-                );
-            }
-
-            rows.push(CommunityRow::Section(CommunitySection::Admins));
-            if self.admins_open {
-                rows.extend(
-                    admins
-                        .into_iter()
-                        .map(|public_key| CommunityRow::Member { public_key }),
-                );
-            }
-
-            rows.push(CommunityRow::Section(CommunitySection::Members));
-            if self.members_open {
-                rows.extend(
-                    members
-                        .into_iter()
-                        .map(|public_key| CommunityRow::Member { public_key }),
-                );
-            }
-
-            (banner, rows)
-        };
-
-        let rows = Rc::new(rows);
-
-        v_flex()
-            .flex_1()
-            .min_h_0()
-            .w_full()
-            .gap_2()
-            .when_some(banner, |this, banner| {
-                this.child(
-                    div().px_2().flex_shrink_0().child(
-                        img(banner)
-                            .w_full()
-                            .h_20()
-                            .rounded(cx.theme().radius_lg)
-                            .object_fit(ObjectFit::Cover),
-                    ),
-                )
-            })
-            .child(
-                div()
-                    .min_h_0()
-                    .flex_1()
-                    .child(
-                        uniform_list(
-                            "community-rows",
-                            rows.len(),
-                            cx.processor(move |this, range, _window, cx| {
-                                this.render_community_rows(range, rows.as_slice(), &community, cx)
-                            }),
-                        )
-                        .track_scroll(&self.community_scroll)
-                        .h_full()
-                        .px_2(),
-                    )
-                    .child(Scrollbar::vertical(&self.community_scroll)),
-            )
-            .into_any_element()
-    }
-
-    fn render_community_rows(
-        &self,
-        range: Range<usize>,
-        rows: &[CommunityRow],
-        community: &Entity<Community>,
-        cx: &mut Context<Self>,
-    ) -> Vec<AnyElement> {
-        rows.get(range)
-            .into_iter()
-            .flatten()
-            .map(|row| match row {
-                CommunityRow::Section(section) => self.section_row(section, cx),
-                CommunityRow::Member { public_key } => self.member_row(public_key, cx),
-                CommunityRow::Channel {
-                    id,
-                    name,
-                    private,
-                    selected,
-                } => self.channel_row(*id, name.clone(), *private, *selected, community, cx),
-            })
-            .collect()
-    }
-
     fn rows_for(&self, tab: SidebarTab, cx: &App) -> Vec<SidebarRow> {
         match tab {
             SidebarTab::Inbox if self.contacts_open => self
@@ -814,14 +745,14 @@ impl Sidebar {
                     .map(|room| SidebarRow::Room { room })
                     .collect()
             }
-            SidebarTab::Communities => {
-                let registry = CommunityRegistry::global(cx);
+            SidebarTab::Groups => {
+                let registry = GroupsRegistry::global(cx);
                 registry
                     .read(cx)
-                    .communities()
+                    .groups()
                     .iter()
                     .cloned()
-                    .map(|community| SidebarRow::Community { community })
+                    .map(|group| SidebarRow::Group { group })
                     .collect()
             }
         }
@@ -929,17 +860,28 @@ impl Sidebar {
                             })
                             .into_any_element()
                     }
-                    SidebarRow::Community { community } => {
-                        let name = community.read(cx).name();
-                        let seed = community.read(cx).id().to_hex();
-                        let picture = community.read(cx).icon();
+                    SidebarRow::Group { group } => {
                         let dock = self.dock.clone();
                         let sidebar = cx.entity().downgrade();
-                        let community = community.clone();
+                        let group = group.clone();
+
+                        let name = group.read(cx).display_name();
+                        let picture = group.read(cx).display_image();
+                        let seed = group.read(cx).key().cache_tag();
+
+                        let suffix = match group.read(cx).membership() {
+                            Membership::Pending { .. } => Some("Requested"),
+                            Membership::Refused { .. } => Some("Refused"),
+                            Membership::Removed => Some("Removed"),
+                            Membership::Unknown | Membership::Member => None,
+                        }
+                        .or_else(|| group.read(cx).elsewhere().map(|_| "Moved"))
+                        .map(SharedString::from);
 
                         Nav::new(index)
                             .label(name)
                             .text_sm()
+                            .font_medium()
                             .when(!hide_avatar, |this| {
                                 this.prefix(
                                     Avatar::from_source(picture)
@@ -948,24 +890,28 @@ impl Sidebar {
                                         .flex_shrink_0(),
                                 )
                             })
+                            .when_some(suffix, |this, suffix| {
+                                this.suffix(
+                                    div()
+                                        .font_normal()
+                                        .text_xs()
+                                        .text_color(cx.theme().text_placeholder)
+                                        .child(suffix),
+                                )
+                            })
                             .on_click(move |_event, window, cx| {
                                 ui::dock::add_panel_to(
                                     &dock,
-                                    PanelHandle::new(community_ui::init(
-                                        community.clone(),
-                                        window,
-                                        cx,
-                                    )),
+                                    PanelHandle::new(nip29_ui::init(group.clone(), window, cx)),
                                     DockPlacement::Center,
                                     window,
                                     cx,
                                 );
 
                                 if let Err(error) = sidebar.update(cx, |this, cx| {
-                                    this.community = Some(community.downgrade());
-                                    cx.notify();
+                                    this.show_group(&group, cx);
                                 }) {
-                                    log::error!("Failed to show community in sidebar: {error}");
+                                    log::error!("Failed to show the group in the sidebar: {error}");
                                 }
                             })
                             .into_any_element()
@@ -975,83 +921,242 @@ impl Sidebar {
             .collect()
     }
 
-    fn section_row(&self, section: &CommunitySection, cx: &mut Context<Sidebar>) -> AnyElement {
-        let section = *section;
-        let (label, open) = match section {
-            CommunitySection::Channels => ("Channels", self.channels_open),
-            CommunitySection::Admins => ("Admins", self.admins_open),
-            CommunitySection::Members => ("Members", self.members_open),
+    fn render_group(&mut self, group: Entity<Group>, cx: &mut Context<Self>) -> AnyElement {
+        let admin = NostrRegistry::global(cx)
+            .read(cx)
+            .current_user()
+            .is_some_and(|me| group.read(cx).admins().contains(&me));
+
+        let (name, seed, picture, total_members, rows) = {
+            let group = group.read(cx);
+            let admins = group.admins();
+
+            let mut admin_rows = Vec::new();
+            let mut member_rows = Vec::new();
+
+            for (public_key, roles) in admins.entries() {
+                admin_rows.push(GroupRow::Member {
+                    public_key: *public_key,
+                    roles: roles.clone(),
+                });
+            }
+
+            for public_key in group.members().iter() {
+                if admins.contains(public_key) {
+                    continue;
+                }
+
+                member_rows.push(GroupRow::Member {
+                    public_key: *public_key,
+                    roles: Vec::new(),
+                });
+            }
+
+            let mut rows = Vec::new();
+
+            if !admin_rows.is_empty() {
+                rows.push(GroupRow::Section(GroupSection::Admins));
+                if self.admins_open {
+                    rows.append(&mut admin_rows);
+                }
+            }
+
+            if !member_rows.is_empty() {
+                rows.push(GroupRow::Section(GroupSection::Members));
+                if self.members_open {
+                    rows.append(&mut member_rows);
+                }
+            }
+
+            (
+                group.display_name(),
+                group.key().cache_tag(),
+                group.display_image(),
+                SharedString::from(format!("{} members", group.total_members())),
+                rows,
+            )
+        };
+
+        let rows = Rc::new(rows);
+        let member_group = group.downgrade();
+
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .gap_2()
+            .child(
+                h_flex()
+                    .px_2()
+                    .flex_shrink_0()
+                    .justify_between()
+                    .child(
+                        h_flex()
+                            .pl_0p5()
+                            .gap_1()
+                            .flex_shrink_1()
+                            .child(Avatar::from_source(picture).seed(seed).small())
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_xs()
+                                            .truncate()
+                                            .line_height(relative(1.2))
+                                            .font_semibold()
+                                            .child(name),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(10.))
+                                            .text_color(cx.theme().text_muted)
+                                            .child(total_members),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .child(nip29_ui::actions(group.downgrade(), cx)),
+                    ),
+            )
+            .child(
+                div()
+                    .min_h_0()
+                    .flex_1()
+                    .child(
+                        uniform_list(
+                            "group-rows",
+                            rows.len(),
+                            cx.processor(move |this, range, _window, cx| {
+                                this.render_group_rows(
+                                    range,
+                                    rows.as_slice(),
+                                    &member_group,
+                                    admin,
+                                    cx,
+                                )
+                            }),
+                        )
+                        .track_scroll(&self.group_scroll)
+                        .h_full()
+                        .px_2(),
+                    )
+                    .child(Scrollbar::vertical(&self.group_scroll)),
+            )
+            .into_any_element()
+    }
+
+    fn render_group_rows(
+        &self,
+        range: Range<usize>,
+        rows: &[GroupRow],
+        group: &WeakEntity<Group>,
+        admin: bool,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        rows.get(range)
+            .into_iter()
+            .flatten()
+            .map(|row| match row {
+                GroupRow::Section(section) => self.section_row(*section, cx),
+                GroupRow::Member { public_key, roles } => {
+                    self.member_row(public_key, roles, group, admin, cx)
+                }
+            })
+            .collect()
+    }
+
+    fn section_row(&self, section: GroupSection, cx: &mut Context<Self>) -> AnyElement {
+        let open = match section {
+            GroupSection::Admins => self.admins_open,
+            GroupSection::Members => self.members_open,
         };
         let icon = if open {
             IconName::CaretDown
         } else {
             IconName::CaretRight
         };
+        let label = section.label();
 
         Nav::new(label)
             .label(label)
-            .suffix(nav_icon(icon, cx))
+            .suffix(Icon::new(icon).small().text_color(cx.theme().icon_muted))
             .text_xs()
             .font_semibold()
             .text_color(cx.theme().text_placeholder)
-            .on_click(cx.listener(move |this, _ev, _window, cx| {
+            .on_click(cx.listener(move |this, _event, _window, cx| {
                 match section {
-                    CommunitySection::Channels => this.channels_open = !this.channels_open,
-                    CommunitySection::Admins => this.admins_open = !this.admins_open,
-                    CommunitySection::Members => this.members_open = !this.members_open,
+                    GroupSection::Admins => this.admins_open = !this.admins_open,
+                    GroupSection::Members => this.members_open = !this.members_open,
                 }
                 cx.notify();
             }))
             .into_any_element()
     }
 
-    fn channel_row(
+    fn member_row(
         &self,
-        id: ChannelId,
-        name: SharedString,
-        private: bool,
-        selected: bool,
-        community: &Entity<Community>,
-        cx: &mut Context<Sidebar>,
+        public_key: &PublicKey,
+        roles: &[String],
+        group: &WeakEntity<Group>,
+        admin: bool,
+        cx: &mut Context<Self>,
     ) -> AnyElement {
-        let community = community.clone();
-        let icon = if private {
-            IconName::Lock
-        } else {
-            IconName::Hashtag
-        };
-
-        Nav::new(id.to_hex())
-            .label(name)
-            .prefix(nav_icon(icon, cx))
-            .text_sm()
-            .font_medium()
-            .selected(selected)
-            .on_click(cx.listener(move |_this, _event, _window, cx| {
-                community.update(cx, |community, cx| {
-                    community.set_active_channel(id, cx);
-                });
-                cx.notify();
-            }))
-            .into_any_element()
-    }
-
-    fn member_row(&self, public_key: &PublicKey, cx: &App) -> AnyElement {
         let hide_avatar = AppSettings::get_hide_avatar(cx);
         let persons = PersonRegistry::global(cx);
         let person = persons.read(cx).get(public_key, cx);
+        let public_key = *public_key;
+
+        let group = group.clone();
 
         Nav::new(public_key.to_hex())
             .label(person.name())
             .text_sm()
             .font_medium()
+            .clickable(true)
             .when(!hide_avatar, |this| {
                 this.prefix(
-                    Avatar::from_source(person.avatar())
+                    Avatar::new(person.avatar())
                         .seed(person.avatar_seed())
                         .small()
                         .flex_shrink_0(),
                 )
+            })
+            .when(!roles.is_empty(), |this| {
+                this.suffix(
+                    div()
+                        .truncate()
+                        .text_xs()
+                        .text_color(cx.theme().text_placeholder)
+                        .child(SharedString::from(roles.join(", "))),
+                )
+            })
+            .dropdown_menu(move |menu, _window, _cx| {
+                let menu = menu
+                    .item(
+                        PopupMenuItem::new("View profile").on_click(move |_, window, cx| {
+                            profile::open(public_key, window, cx);
+                        }),
+                    )
+                    .item(PopupMenuItem::new("Copy").on_click(move |_, _, cx| {
+                        let npub = public_key.to_bech32().unwrap_or_default();
+                        cx.write_to_clipboard(ClipboardItem::new_string(npub));
+                    }));
+
+                if !admin {
+                    return menu;
+                }
+
+                menu.separator()
+                    .item(PopupMenuItem::new("Remove").on_click({
+                        let group = group.clone();
+                        move |_event, window, cx| {
+                            nip29_ui::remove_member(group.clone(), public_key, window, cx);
+                        }
+                    }))
             })
             .into_any_element()
     }
@@ -1092,10 +1197,7 @@ impl Render for Sidebar {
         let chat = ChatRegistry::global(cx);
         let loading = chat.read(cx).loading();
 
-        let community = self
-            .community
-            .clone()
-            .and_then(|community| community.upgrade());
+        let group = self.group.clone().and_then(|group| group.upgrade());
 
         v_flex()
             .image_cache(retain_all("sidebar"))
@@ -1157,9 +1259,9 @@ impl Render for Sidebar {
                             ),
                     )
             })
-            .map(|this| match community {
-                Some(community) => this.child(self.render_community(community, cx)),
-                None => this.child(self.render_tabs(cx)),
+            .map(|this| match group {
+                Some(group) if self.group_open => this.child(self.render_group(group, cx)),
+                _ => this.child(self.render_tabs(cx)),
             })
             .when(loading && logged_in, |this| {
                 this.child(

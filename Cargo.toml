@@ -32,7 +32,7 @@ nostr-blossom = { git = "https://github.com/rust-nostr/nostr" }
 nostr-gossip-memory = { git = "https://github.com/rust-nostr/nostr" }
 nostr-connect = { git = "https://github.com/rust-nostr/nostr" }
 nostr-sdk = { git = "https://github.com/rust-nostr/nostr" }
-nostr = { git = "https://github.com/rust-nostr/nostr", features = [ "nip59", "nip49", "nip44" ] }
+nostr = { git = "https://github.com/rust-nostr/nostr", features = [ "nip59", "nip49", "nip44", "nip98" ] }
 
 # Crypto (NIP-17 encrypted file messages)
 aes-gcm = "0.10"

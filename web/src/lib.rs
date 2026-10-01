@@ -70,8 +70,8 @@ pub fn run() -> Result<(), JsValue> {
         // Initialize app registry
         chat::init(cx);
 
-        // Initialize community registry
-        community::init(cx);
+        // Initialize groups registry
+        nip29::init(cx);
 
         cx.open_window(WindowOptions::default(), |window, cx| {
             cx.new(|cx| Root::new(workspace::init(window, cx).into(), window, cx))

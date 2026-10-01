@@ -16,7 +16,7 @@ common = { path = "../crates/common" }
 state = { path = "../crates/state" }
 device = { path = "../crates/device" }
 chat = { path = "../crates/chat" }
-community = { path = "../crates/community" }
+nip29 = { path = "../crates/nip29" }
 settings = { path = "../crates/settings" }
 person = { path = "../crates/person" }
 

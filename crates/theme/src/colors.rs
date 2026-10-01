@@ -117,7 +117,7 @@ impl ThemeColors {
             window_border: hsl(240.0, 5.9, 78.0),
 
             border: neutral().light().step_6(),
-            border_variant: neutral().light().step_5(),
+            border_variant: neutral().light().step_4(),
             border_focused: brand().light().step_7(),
             border_selected: brand().light().step_7(),
             border_transparent: gpui::transparent_black(),
@@ -203,7 +203,7 @@ impl ThemeColors {
             window_border: hsl(240.0, 3.7, 28.0),
 
             border: neutral().dark().step_6(),
-            border_variant: neutral().dark().step_5(),
+            border_variant: neutral().dark().step_4(),
             border_focused: brand().dark().step_7(),
             border_selected: brand().dark().step_7(),
             border_transparent: gpui::transparent_black(),

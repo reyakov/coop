@@ -48,7 +48,7 @@ pub trait Panel: EventEmitter<PanelEvent> + Render + Focusable {
     /// This method will be called when the panel is active or inactive.
     ///
     /// The last_active_panel and current_active_panel will be touched when the panel is active.
-    fn set_active(&self, _active: bool, _cx: &mut App) {}
+    fn set_active(&self, _active: bool, _window: &mut Window, _cx: &mut App) {}
 
     /// Set zoomed state of the panel.
     ///
@@ -74,7 +74,7 @@ pub trait PanelView: 'static + Send + Sync {
     fn closable(&self, cx: &App) -> bool;
     fn zoomable(&self, cx: &App) -> bool;
     fn visible(&self, cx: &App) -> bool;
-    fn set_active(&self, active: bool, cx: &mut App);
+    fn set_active(&self, active: bool, window: &mut Window, cx: &mut App);
     fn set_zoomed(&self, zoomed: bool, cx: &mut App);
     fn popup_menu(&self, menu: PopupMenu, cx: &App) -> PopupMenu;
     fn toolbar_buttons(&self, window: &Window, cx: &App) -> Vec<Button>;
@@ -103,9 +103,9 @@ impl<T: Panel> PanelView for Entity<T> {
         self.read(cx).visible(cx)
     }
 
-    fn set_active(&self, active: bool, cx: &mut App) {
+    fn set_active(&self, active: bool, window: &mut Window, cx: &mut App) {
         self.update(cx, |this, cx| {
-            this.set_active(active, cx);
+            this.set_active(active, window, cx);
         })
     }
 
@@ -196,8 +196,8 @@ impl gpui_base::dock::PanelView for PanelHandle {
         self.panel.visible(cx)
     }
 
-    fn set_active(&self, active: bool, _: &mut Window, cx: &mut App) {
-        self.panel.set_active(active, cx);
+    fn set_active(&self, active: bool, window: &mut Window, cx: &mut App) {
+        self.panel.set_active(active, window, cx);
     }
 
     fn set_zoomed(&self, zoomed: bool, _: &mut Window, cx: &mut App) {

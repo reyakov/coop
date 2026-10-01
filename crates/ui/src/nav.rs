@@ -2,9 +2,9 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, Window,
-    div,
+    AnyElement, App, ClickEvent, ElementId, InteractiveElement, Interactivity, IntoElement,
+    ParentElement, RenderOnce, SharedString, StatefulInteractiveElement as _, StyleRefinement,
+    Styled, Window, div,
 };
 use theme::ActiveTheme;
 
@@ -14,26 +14,41 @@ use crate::{Selectable, StyledExt, h_flex, v_flex};
 #[derive(IntoElement)]
 pub struct Nav {
     id: ElementId,
+    interactivity: Interactivity,
     style: StyleRefinement,
     prefix: Option<AnyElement>,
     label: SharedString,
     suffix: Option<AnyElement>,
     selected: bool,
+    clickable: bool,
     #[allow(clippy::type_complexity)]
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
 }
 
 impl Nav {
     pub fn new(id: impl Into<ElementId>) -> Self {
+        let id = id.into();
+        let mut interactivity = Interactivity::default();
+        interactivity.element_id = Some(id.clone());
+
         Self {
-            id: id.into(),
+            id,
+            interactivity,
             style: StyleRefinement::default(),
             prefix: None,
             label: SharedString::default(),
             suffix: None,
             selected: false,
+            clickable: false,
             on_click: None,
         }
+    }
+
+    /// Marks the row as clickable even when it has no `on_click` handler, so it
+    /// still shows the hover affordance. Used by rows whose click opens a menu.
+    pub fn clickable(mut self, clickable: bool) -> Self {
+        self.clickable = clickable;
+        self
     }
 
     /// Sets the element shown before the label, such as an avatar or icon.
@@ -74,6 +89,12 @@ impl Selectable for Nav {
     }
 }
 
+impl InteractiveElement for Nav {
+    fn interactivity(&mut self) -> &mut Interactivity {
+        &mut self.interactivity
+    }
+}
+
 impl Styled for Nav {
     fn style(&mut self) -> &mut StyleRefinement {
         &mut self.style
@@ -82,7 +103,7 @@ impl Styled for Nav {
 
 impl RenderOnce for Nav {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let clickable = self.on_click.is_some();
+        let clickable = self.on_click.is_some() || self.clickable;
 
         v_flex().w_full().h_10().child(
             h_flex()

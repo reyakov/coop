@@ -46,10 +46,7 @@ setting_accessors! {
     pub nip4e: bool,
     pub trusted_relays: Vec<String>,
     pub file_server: Url,
-    pub recent_communities: Vec<String>,
 }
-
-const RECENT_COMMUNITIES_CAP: usize = 10;
 
 /// Signer kind
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -133,10 +130,6 @@ pub struct Settings {
 
     /// Server for blossom media attachments
     pub file_server: Url,
-
-    /// Recently opened community ids, newest first
-    #[serde(default)]
-    pub recent_communities: Vec<String>,
 }
 
 impl Default for Settings {
@@ -149,7 +142,6 @@ impl Default for Settings {
             nip4e: false,
             trusted_relays: vec![],
             file_server: Url::parse(DEFAULT_FILE_SERVER).unwrap(),
-            recent_communities: vec![],
         }
     }
 }
@@ -330,16 +322,6 @@ impl AppSettings {
                     .push(url.as_str_without_trailing_slash().to_string());
                 cx.notify();
             }
-        });
-    }
-
-    /// Move a community to the front of the recently opened list
-    pub fn record_recent_community(&mut self, id: String, cx: &mut Context<Self>) {
-        self.inner.update(cx, |this, cx| {
-            this.recent_communities.retain(|existing| existing != &id);
-            this.recent_communities.insert(0, id);
-            this.recent_communities.truncate(RECENT_COMMUNITIES_CAP);
-            cx.notify();
         });
     }
 }

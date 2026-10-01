@@ -1,0 +1,925 @@
+use std::collections::hash_map::DefaultHasher;
+use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::str::FromStr;
+
+use anyhow::{Result, anyhow, bail};
+use nostr_sdk::prelude::*;
+
+pub const TIMELINE_WINDOW: usize = 50;
+
+const PREVIOUS_REFS: usize = 3;
+const PREVIOUS_REF_LEN: usize = 8;
+
+pub const RENDER_KINDS: [Kind; 5] = [
+    Kind::TextNote,
+    Kind::ChatMessage,
+    Kind::Thread,
+    Kind::Comment,
+    Kind::Reaction,
+];
+
+pub const PIN_LIST: u16 = 39_005;
+pub const UPDATE_PIN_LIST: u16 = 9_010;
+
+pub const STATE_KINDS: [Kind; 6] = [
+    Kind::GroupMetadata,
+    Kind::GroupAdmins,
+    Kind::GroupMembers,
+    Kind::GroupRoles,
+    Kind::GroupLivekitParticipants,
+    Kind::Custom(PIN_LIST),
+];
+
+pub const MEMBERSHIP_KINDS: [Kind; 2] = [Kind::GroupPutUser, Kind::GroupRemoveUser];
+
+pub const ACTIVITY_KINDS: [Kind; 4] = [
+    Kind::GroupPutUser,
+    Kind::GroupRemoveUser,
+    Kind::GroupJoinRequest,
+    Kind::GroupLeaveRequest,
+];
+
+fn has_tag(tags: &Tags, name: &str) -> bool {
+    tags.iter().any(|tag| tag.kind() == name)
+}
+
+fn tag_value<'a>(tags: &'a Tags, name: &str) -> Option<&'a str> {
+    tags.iter()
+        .find(|tag| tag.kind() == name)
+        .and_then(|tag| tag.content())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GroupId(String);
+
+impl GroupId {
+    pub fn new(id: impl Into<String>) -> Result<Self> {
+        let id = id.into();
+        let id = id.trim();
+
+        if id.is_empty() {
+            bail!("group id is empty");
+        }
+
+        Ok(Self(id.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn h_tag(&self) -> Tag {
+        Tag::custom("h", [self.0.clone()])
+    }
+
+    pub fn timeline_filter(&self, limit: usize) -> Filter {
+        Filter::new()
+            .custom_tag(SingleLetterTag::LOWERCASE_H, self.0.clone())
+            .kinds(RENDER_KINDS)
+            .kinds(ACTIVITY_KINDS)
+            .limit(limit)
+    }
+
+    pub fn timeline_page(&self, limit: usize, until: Timestamp) -> Filter {
+        self.timeline_filter(limit).until(until)
+    }
+
+    pub fn state_filters(&self) -> Vec<Filter> {
+        STATE_KINDS
+            .iter()
+            .map(|kind| Filter::new().identifier(self.0.clone()).kind(*kind))
+            .collect()
+    }
+
+    pub fn membership_filter(&self, me: PublicKey) -> Filter {
+        Filter::new()
+            .custom_tag(SingleLetterTag::LOWERCASE_H, self.0.clone())
+            .custom_tag(SingleLetterTag::LOWERCASE_P, me.to_hex())
+            .kinds(MEMBERSHIP_KINDS)
+    }
+
+    pub fn message(
+        &self,
+        content: &str,
+        replies: &[EventId],
+        previous: Option<Tag>,
+    ) -> EventBuilder {
+        EventBuilder::new(Kind::ChatMessage, content)
+            .tag(self.h_tag())
+            .tags(replies.iter().copied().map(Tag::event))
+            .tag_maybe(previous)
+    }
+
+    pub fn reaction(&self, target: EventId, emoji: &str, previous: Option<Tag>) -> EventBuilder {
+        EventBuilder::new(Kind::Reaction, emoji)
+            .tag(self.h_tag())
+            .tag(Tag::event(target))
+            .tag_maybe(previous)
+    }
+
+    pub fn join_request(&self, code: Option<&str>, reason: &str) -> EventBuilder {
+        EventBuilder::new(Kind::GroupJoinRequest, reason)
+            .tag(self.h_tag())
+            .tag_maybe(code.map(|code| Tag::custom("code", [code])))
+    }
+
+    pub fn leave_request(&self, reason: &str) -> EventBuilder {
+        EventBuilder::new(Kind::GroupLeaveRequest, reason).tag(self.h_tag())
+    }
+
+    pub fn put_user(
+        &self,
+        public_key: PublicKey,
+        roles: &[String],
+        previous: Option<Tag>,
+    ) -> EventBuilder {
+        let mut values = Vec::with_capacity(1 + roles.len());
+        values.push(public_key.to_hex());
+        values.extend(roles.iter().cloned());
+
+        EventBuilder::new(Kind::GroupPutUser, "")
+            .tag(self.h_tag())
+            .tag(Tag::custom("p", values))
+            .tag_maybe(previous)
+    }
+
+    pub fn remove_user(&self, public_key: PublicKey, previous: Option<Tag>) -> EventBuilder {
+        EventBuilder::new(Kind::GroupRemoveUser, "")
+            .tag(self.h_tag())
+            .tag(Tag::public_key(public_key))
+            .tag_maybe(previous)
+    }
+
+    pub fn edit_metadata(&self, metadata: &GroupMetadata, previous: Option<Tag>) -> EventBuilder {
+        EventBuilder::new(Kind::GroupEditMetadata, "")
+            .tags(self.metadata_tags(metadata))
+            .tag_maybe(previous)
+    }
+
+    pub fn create_group(&self, metadata: &GroupMetadata, previous: Option<Tag>) -> EventBuilder {
+        EventBuilder::new(Kind::GroupCreateGroup, "")
+            .tags(self.metadata_tags(metadata))
+            .tag_maybe(previous)
+    }
+
+    fn metadata_tags(&self, metadata: &GroupMetadata) -> Vec<Tag> {
+        let mut tags = vec![self.h_tag()];
+
+        for (name, value) in [
+            ("name", &metadata.name),
+            ("picture", &metadata.picture),
+            ("banner", &metadata.banner),
+            ("about", &metadata.about),
+        ] {
+            if let Some(value) = value {
+                tags.push(Tag::custom(name, [value.clone()]));
+            }
+        }
+
+        for (name, set) in [
+            ("private", metadata.private),
+            ("restricted", metadata.restricted),
+            ("hidden", metadata.hidden),
+            ("closed", metadata.closed),
+            ("livekit", metadata.livekit),
+        ] {
+            if set {
+                tags.push(Tag::custom(name, Vec::<String>::new()));
+            }
+        }
+
+        if let Some(parent) = &metadata.parent {
+            tags.push(Tag::custom("parent", [parent.as_str()]));
+        }
+
+        for child in &metadata.children {
+            tags.push(Tag::custom("child", [child.as_str()]));
+        }
+
+        if let Some(kinds) = &metadata.supported_kinds {
+            tags.push(Tag::custom(
+                "supported_kinds",
+                kinds.iter().map(ToString::to_string),
+            ));
+        }
+
+        tags
+    }
+
+    pub fn delete_event(&self, id: EventId, previous: Option<Tag>) -> EventBuilder {
+        EventBuilder::new(Kind::GroupDeleteEvent, "")
+            .tag(self.h_tag())
+            .tag(Tag::event(id))
+            .tag_maybe(previous)
+    }
+
+    pub fn create_invite(&self, code: &str, previous: Option<Tag>) -> EventBuilder {
+        EventBuilder::new(Kind::GroupCreateInvite, "")
+            .tag(self.h_tag())
+            .tag(Tag::custom("code", [code]))
+            .tag_maybe(previous)
+    }
+
+    pub fn update_pin_list(&self, pins: &[Pin], previous: Option<Tag>) -> EventBuilder {
+        EventBuilder::new(Kind::Custom(UPDATE_PIN_LIST), "")
+            .tag(self.h_tag())
+            .tags(pins.iter().map(Pin::tag))
+            .tag_maybe(previous)
+    }
+}
+
+impl fmt::Display for GroupId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GroupKey {
+    relay: RelayUrl,
+    id: GroupId,
+}
+
+impl GroupKey {
+    pub fn new(relay: RelayUrl, id: GroupId) -> Self {
+        Self { relay, id }
+    }
+
+    pub fn relay(&self) -> &RelayUrl {
+        &self.relay
+    }
+
+    pub fn id(&self) -> &GroupId {
+        &self.id
+    }
+
+    pub fn cache_tag(&self) -> String {
+        format!("{}|{}", self.relay.as_str(), self.id)
+    }
+
+    pub fn uniq_id(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        self.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    pub fn livekit_token_url(&self) -> Result<Url> {
+        self.livekit_url(Some(self.id.as_str()))
+    }
+
+    pub fn livekit_probe_url(&self) -> Result<Url> {
+        self.livekit_url(None)
+    }
+
+    fn livekit_url(&self, group: Option<&str>) -> Result<Url> {
+        let mut url: Url = self.relay.clone().into();
+        let scheme = if self.relay.scheme().is_secure() {
+            "https"
+        } else {
+            "http"
+        };
+
+        url.set_path("/");
+        url.set_query(None);
+        url.set_fragment(None);
+        url.set_scheme(scheme)
+            .map_err(|_| anyhow!("{scheme} is not available for {}", self.relay))?;
+
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .map_err(|_| anyhow!("{} cannot carry a path", self.relay))?;
+
+            segments
+                .pop_if_empty()
+                .push(".well-known")
+                .push("nip29")
+                .push("livekit");
+
+            if let Some(group) = group {
+                segments.push(group);
+            }
+        }
+
+        Ok(url)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupReference {
+    id: GroupId,
+    relay: RelayUrl,
+    invite: Option<String>,
+}
+
+impl GroupReference {
+    pub fn parse(input: &str) -> Result<Self> {
+        let input = input.trim();
+
+        let (address, query) = match input.split_once('?') {
+            Some((address, query)) => (address, Some(query)),
+            None => (input, None),
+        };
+
+        let coordinate = Nip19Coordinate::from_bech32(address)?;
+
+        if coordinate.kind != Kind::GroupMetadata {
+            bail!("not a group reference: kind {}", coordinate.kind);
+        }
+
+        let relay = coordinate
+            .relays
+            .first()
+            .cloned()
+            .ok_or_else(|| anyhow!("group reference has no relay hint"))?;
+
+        let id = GroupId::new(coordinate.identifier.as_str())?;
+
+        let invite = query
+            .and_then(|query| {
+                query
+                    .split('&')
+                    .find_map(|pair| pair.strip_prefix("invite="))
+            })
+            .map(str::to_owned);
+
+        Ok(Self { id, relay, invite })
+    }
+
+    pub fn id(&self) -> &GroupId {
+        &self.id
+    }
+
+    pub fn relay(&self) -> &RelayUrl {
+        &self.relay
+    }
+
+    pub fn invite(&self) -> Option<&str> {
+        self.invite.as_deref()
+    }
+
+    pub fn key(&self) -> GroupKey {
+        GroupKey::new(self.relay.clone(), self.id.clone())
+    }
+}
+
+impl FromStr for GroupReference {
+    type Err = anyhow::Error;
+
+    fn from_str(input: &str) -> Result<Self> {
+        Self::parse(input)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GroupMetadata {
+    pub name: Option<String>,
+    pub picture: Option<String>,
+    pub banner: Option<String>,
+    pub about: Option<String>,
+    pub private: bool,
+    pub restricted: bool,
+    pub hidden: bool,
+    pub closed: bool,
+    pub livekit: bool,
+    pub parent: Option<GroupId>,
+    pub children: Vec<GroupId>,
+    pub supported_kinds: Option<Vec<Kind>>,
+    id: Option<GroupId>,
+    author: Option<PublicKey>,
+}
+
+impl GroupMetadata {
+    pub fn parse(event: &Event) -> Result<Self> {
+        if event.kind != Kind::GroupMetadata {
+            bail!("not a group metadata event: kind {}", event.kind);
+        }
+
+        let identifier = event
+            .tags
+            .identifier()
+            .ok_or_else(|| anyhow!("group metadata has no d tag"))?;
+
+        let mut supported_kinds: Option<Vec<Kind>> = None;
+
+        for tag in event
+            .tags
+            .iter()
+            .filter(|tag| tag.kind() == "supported_kinds")
+        {
+            let kinds = supported_kinds.get_or_insert_with(Vec::new);
+
+            for value in tag.as_slice().iter().skip(1) {
+                kinds.push(Kind::from_str(value)?);
+            }
+        }
+
+        let parent = match tag_value(&event.tags, "parent") {
+            Some(parent) => Some(GroupId::new(parent)?),
+            None => None,
+        };
+
+        let mut children = Vec::new();
+
+        for tag in event.tags.iter().filter(|tag| tag.kind() == "child") {
+            if let Some(child) = tag.content() {
+                children.push(GroupId::new(child)?);
+            }
+        }
+
+        Ok(Self {
+            name: tag_value(&event.tags, "name").map(str::to_owned),
+            picture: tag_value(&event.tags, "picture").map(str::to_owned),
+            banner: tag_value(&event.tags, "banner").map(str::to_owned),
+            about: tag_value(&event.tags, "about").map(str::to_owned),
+            private: has_tag(&event.tags, "private"),
+            restricted: has_tag(&event.tags, "restricted"),
+            hidden: has_tag(&event.tags, "hidden"),
+            closed: has_tag(&event.tags, "closed"),
+            livekit: has_tag(&event.tags, "livekit"),
+            parent,
+            children,
+            supported_kinds,
+            id: Some(GroupId::new(identifier)?),
+            author: Some(event.pubkey),
+        })
+    }
+
+    pub(crate) fn id(&self) -> Option<&GroupId> {
+        self.id.as_ref()
+    }
+
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub fn supports(&self, kind: Kind) -> bool {
+        match &self.supported_kinds {
+            None => true,
+            Some(kinds) => kinds.contains(&kind),
+        }
+    }
+
+    pub fn naddr(&self, relay: &RelayUrl, invite: Option<&str>) -> Result<String> {
+        let id = self.id.as_ref().ok_or_else(|| anyhow!("no id"))?;
+        let author = self.author.ok_or_else(|| anyhow!("no author"))?;
+
+        let coordinate = Coordinate::new(Kind::GroupMetadata, author).identifier(id.as_str());
+        let address = Nip19Coordinate::new(coordinate, [relay.clone()]).to_bech32()?;
+
+        Ok(match invite {
+            Some(invite) => format!("{address}?invite={invite}"),
+            None => address,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct GroupCandidate {
+    pub key: GroupKey,
+    pub metadata: GroupMetadata,
+}
+
+impl GroupCandidate {
+    pub fn display_name(&self) -> &str {
+        self.metadata
+            .name()
+            .unwrap_or_else(|| self.key.id().as_str())
+    }
+
+    pub fn display_image(&self) -> Option<&str> {
+        self.metadata.picture.as_deref()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GroupAdmins(Vec<(PublicKey, Vec<String>)>);
+
+impl GroupAdmins {
+    pub fn parse(event: &Event) -> Result<Self> {
+        if event.kind != Kind::GroupAdmins {
+            bail!("not a group admins event: kind {}", event.kind);
+        }
+
+        let mut admins = Vec::new();
+
+        for tag in event.tags.iter().filter(|tag| tag.kind() == "p") {
+            let mut fields = tag.as_slice().iter().skip(1);
+
+            let public_key = fields
+                .next()
+                .ok_or_else(|| anyhow!("admin tag has no public key"))?;
+            let public_key = PublicKey::from_hex(public_key)?;
+
+            admins.push((public_key, fields.cloned().collect()));
+        }
+
+        Ok(Self(admins))
+    }
+
+    pub fn entries(&self) -> &[(PublicKey, Vec<String>)] {
+        &self.0
+    }
+
+    pub fn contains(&self, public_key: &PublicKey) -> bool {
+        self.0.iter().any(|(key, _)| key == public_key)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GroupMembers(Vec<PublicKey>);
+
+impl GroupMembers {
+    pub fn parse(event: &Event) -> Result<Self> {
+        if event.kind != Kind::GroupMembers {
+            bail!("not a group members event: kind {}", event.kind);
+        }
+
+        Ok(Self(event.tags.public_keys().collect()))
+    }
+
+    pub fn contains(&self, public_key: &PublicKey) -> bool {
+        self.0.contains(public_key)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &PublicKey> {
+        self.0.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Role {
+    pub name: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GroupRoles(Vec<Role>);
+
+impl GroupRoles {
+    pub fn parse(event: &Event) -> Result<Self> {
+        if event.kind != Kind::GroupRoles {
+            bail!("not a group roles event: kind {}", event.kind);
+        }
+
+        let mut roles = Vec::new();
+
+        for tag in event.tags.iter().filter(|tag| tag.kind() == "role") {
+            let mut fields = tag.as_slice().iter().skip(1);
+            let name = fields
+                .next()
+                .ok_or_else(|| anyhow!("role tag has no name"))?;
+
+            roles.push(Role {
+                name: name.clone(),
+                description: fields.next().cloned(),
+            });
+        }
+
+        Ok(Self(roles))
+    }
+
+    pub fn roles(&self) -> &[Role] {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GroupParticipants(Vec<PublicKey>);
+
+impl GroupParticipants {
+    pub fn parse(event: &Event) -> Result<Self> {
+        if event.kind != Kind::GroupLivekitParticipants {
+            bail!("not a group participants event: kind {}", event.kind);
+        }
+
+        let mut participants = Vec::new();
+
+        for tag in event.tags.iter().filter(|tag| tag.kind() == "participant") {
+            let Some(public_key) = tag.content() else {
+                continue;
+            };
+
+            participants.push(PublicKey::parse(public_key)?);
+        }
+
+        Ok(Self(participants))
+    }
+
+    pub fn contains(&self, public_key: &PublicKey) -> bool {
+        self.0.contains(public_key)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &PublicKey> {
+        self.0.iter()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pin {
+    Event(EventId),
+    Address(Coordinate),
+}
+
+impl Pin {
+    fn tag(&self) -> Tag {
+        match self {
+            Pin::Event(id) => Tag::event(*id),
+            Pin::Address(coordinate) => Tag::coordinate(coordinate.clone(), None),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GroupPins(Vec<Pin>);
+
+impl GroupPins {
+    pub fn parse(event: &Event) -> Result<Self> {
+        if event.kind != Kind::Custom(PIN_LIST) {
+            bail!("not a pinned list event: kind {}", event.kind);
+        }
+
+        let mut pins = Vec::new();
+
+        for tag in event.tags.iter() {
+            match tag.kind() {
+                "e" => {
+                    let Some(id) = tag.content() else {
+                        continue;
+                    };
+
+                    pins.push(Pin::Event(EventId::from_hex(id)?));
+                }
+                "a" => {
+                    let Some(address) = tag.content() else {
+                        continue;
+                    };
+
+                    pins.push(Pin::Address(Coordinate::from_str(address)?));
+                }
+                _ => {}
+            }
+        }
+
+        Ok(Self(pins))
+    }
+
+    pub fn pins(&self) -> &[Pin] {
+        &self.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LivekitSession {
+    pub token: String,
+    pub server_url: String,
+}
+
+impl LivekitSession {
+    pub fn parse(body: &[u8]) -> Result<Self> {
+        let value: serde_json::Value = serde_json::from_slice(body)?;
+
+        let token = value
+            .get("token")
+            .or_else(|| value.get("jwt"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow!("the AV response carries no token"))?;
+
+        let server_url = value
+            .get("url")
+            .or_else(|| value.get("server_url"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| anyhow!("the AV response carries no server url"))?;
+
+        Ok(Self {
+            token: token.to_owned(),
+            server_url: server_url.to_owned(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupListEntry {
+    pub id: GroupId,
+    pub relay: RelayUrl,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct GroupList(Vec<GroupListEntry>);
+
+impl GroupList {
+    pub fn parse(event: &Event) -> Result<Self> {
+        if event.kind != Kind::SimpleGroups {
+            bail!("not a group list event: kind {}", event.kind);
+        }
+
+        let mut entries = Vec::new();
+
+        for tag in event.tags.iter().filter(|tag| tag.kind() == "group") {
+            let fields = tag.as_slice();
+
+            let (Some(id), Some(relay)) = (fields.get(1), fields.get(2)) else {
+                continue;
+            };
+
+            let Ok(id) = GroupId::new(id.as_str()) else {
+                continue;
+            };
+            let Ok(relay) = RelayUrl::parse(relay.as_str()) else {
+                continue;
+            };
+
+            entries.push(GroupListEntry {
+                id,
+                relay,
+                name: fields.get(3).cloned(),
+            });
+        }
+
+        Ok(Self(entries))
+    }
+
+    pub fn entries(&self) -> &[GroupListEntry] {
+        &self.0
+    }
+
+    pub fn upsert(&mut self, entry: GroupListEntry) {
+        match self
+            .0
+            .iter_mut()
+            .find(|existing| existing.id == entry.id && existing.relay == entry.relay)
+        {
+            Some(existing) => *existing = entry,
+            None => self.0.push(entry),
+        }
+    }
+
+    pub fn remove(&mut self, key: &GroupKey) {
+        self.0
+            .retain(|entry| entry.id != *key.id() || entry.relay != *key.relay());
+    }
+
+    pub fn to_builder(&self) -> EventBuilder {
+        let mut tags: Vec<Tag> = Vec::with_capacity(self.0.len() * 2);
+
+        for entry in &self.0 {
+            let mut values = vec![
+                entry.id.as_str().to_owned(),
+                entry.relay.as_str().to_owned(),
+            ];
+
+            if let Some(name) = &entry.name {
+                values.push(name.clone());
+            }
+
+            tags.push(Tag::custom("group", values));
+            tags.push(Tag::custom("r", [entry.relay.as_str()]));
+        }
+
+        EventBuilder::new(Kind::SimpleGroups, "").tags(tags)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Membership {
+    Unknown,
+    Pending { since: Timestamp },
+    Member,
+    Refused { reason: Option<String> },
+    Removed,
+}
+
+impl Membership {
+    pub fn from_events(events: &[Event], me: PublicKey) -> Self {
+        let mut latest: Option<&Event> = None;
+
+        for event in events {
+            if !MEMBERSHIP_KINDS.contains(&event.kind) {
+                continue;
+            }
+
+            if !event.tags.public_keys().any(|key| key == me) {
+                continue;
+            }
+
+            let newer = match latest {
+                None => true,
+                Some(current) => {
+                    event.created_at > current.created_at
+                        || (event.created_at == current.created_at
+                            && current.kind == Kind::GroupPutUser
+                            && event.kind == Kind::GroupRemoveUser)
+                }
+            };
+
+            if newer {
+                latest = Some(event);
+            }
+        }
+
+        match latest {
+            Some(event) if event.kind == Kind::GroupRemoveUser => Membership::Removed,
+            Some(_) => Membership::Member,
+            None => Membership::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Activity {
+    pub id: EventId,
+    pub kind: Kind,
+    pub author: PublicKey,
+    pub target: Option<PublicKey>,
+    pub roles: Vec<String>,
+    pub created_at: Timestamp,
+}
+
+impl Activity {
+    pub fn parse(event: &Event) -> Result<Self> {
+        if !ACTIVITY_KINDS.contains(&event.kind) {
+            bail!("not a group activity event: kind {}", event.kind);
+        }
+
+        let mut fields = event
+            .tags
+            .iter()
+            .find(|tag| tag.kind() == "p")
+            .map(|tag| tag.as_slice().iter().skip(1))
+            .into_iter()
+            .flatten();
+
+        let target = match fields.next() {
+            Some(value) => Some(PublicKey::from_hex(value)?),
+            None => None,
+        };
+
+        if target.is_none() && MEMBERSHIP_KINDS.contains(&event.kind) {
+            bail!("a membership event has no p tag");
+        }
+
+        Ok(Self {
+            id: event.id,
+            kind: event.kind,
+            author: event.pubkey,
+            target,
+            roles: fields.cloned().collect(),
+            created_at: event.created_at,
+        })
+    }
+
+    pub fn subject(&self) -> PublicKey {
+        match self.kind {
+            Kind::GroupPutUser | Kind::GroupRemoveUser => self.target.unwrap_or(self.author),
+            _ => self.author,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TimelineWindow(Vec<Event>);
+
+impl TimelineWindow {
+    pub fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    pub fn push(&mut self, event: Event) {
+        self.0.retain(|existing| existing.id != event.id);
+        let position = self.0.partition_point(|e| e.created_at > event.created_at);
+
+        self.0.insert(position, event);
+        self.0.truncate(TIMELINE_WINDOW);
+    }
+
+    pub fn remove(&mut self, id: EventId) {
+        self.0.retain(|event| event.id != id);
+    }
+
+    pub fn previous_tag(&self, me: PublicKey) -> Option<Tag> {
+        let references: Vec<String> = self
+            .0
+            .iter()
+            .filter(|event| event.pubkey != me)
+            .take(PREVIOUS_REFS)
+            .map(|event| event.id.to_hex().chars().take(PREVIOUS_REF_LEN).collect())
+            .collect();
+
+        if references.is_empty() {
+            None
+        } else {
+            Some(Tag::custom("previous", references))
+        }
+    }
+}

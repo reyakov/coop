@@ -78,8 +78,8 @@ fn main() {
             // Initialize app registry
             chat::init(cx);
 
-            // Initialize community registry
-            community::init(cx);
+            // Initialize groups registry
+            nip29::init(cx);
 
             // Initialize auto update
             auto_update::init(cx);

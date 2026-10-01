@@ -1277,41 +1277,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "community"
-version = "1.0.2"
-dependencies = [
- "anyhow",
- "concord",
- "flume 0.11.1",
- "futures",
- "gpui-pre",
- "log",
- "nostr-memory",
- "nostr-sdk",
- "serde_json",
- "smallvec",
- "smol",
- "state",
-]
-
-[[package]]
-name = "community_ui"
-version = "1.0.2"
-dependencies = [
- "anyhow",
- "common",
- "community",
- "gpui-pre",
- "nostr-sdk",
- "person",
- "settings",
- "smallvec",
- "state",
- "theme",
- "ui",
-]
-
-[[package]]
 name = "compression-codecs"
 version = "0.4.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1449,7 +1414,6 @@ dependencies = [
  "auto_update",
  "chat",
  "common",
- "community",
  "device",
  "gpui-pre",
  "gpui-pre-linux",
@@ -1458,6 +1422,7 @@ dependencies = [
  "gpui-pre-reqwest-client",
  "gpui-pre-windows",
  "log",
+ "nip29",
  "nostr-sdk",
  "person",
  "settings",
@@ -1475,7 +1440,6 @@ dependencies = [
  "assets",
  "chat",
  "common",
- "community",
  "console_error_panic_hook",
  "console_log",
  "device",
@@ -1487,6 +1451,7 @@ dependencies = [
  "gpui-pre-web",
  "instant",
  "log",
+ "nip29",
  "person",
  "settings",
  "state",
@@ -4592,6 +4557,44 @@ name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
+
+[[package]]
+name = "nip29"
+version = "1.0.2"
+dependencies = [
+ "anyhow",
+ "chat",
+ "flume 0.11.1",
+ "futures",
+ "gpui-pre",
+ "log",
+ "nostr",
+ "nostr-sdk",
+ "serde_json",
+ "smallvec",
+ "state",
+]
+
+[[package]]
+name = "nip29_ui"
+version = "1.0.2"
+dependencies = [
+ "anyhow",
+ "chat",
+ "chat_ui",
+ "common",
+ "gpui-pre",
+ "log",
+ "nip29",
+ "nostr-sdk",
+ "person",
+ "serde",
+ "settings",
+ "smallvec",
+ "state",
+ "theme",
+ "ui",
+]
 
 [[package]]
 name = "no_std_io2"
@@ -9479,12 +9482,12 @@ dependencies = [
  "chat",
  "chat_ui",
  "common",
- "community",
- "community_ui",
  "device",
  "gpui-pre",
  "instant",
  "log",
+ "nip29",
+ "nip29_ui",
  "nostr-connect",
  "nostr-sdk",
  "person",
