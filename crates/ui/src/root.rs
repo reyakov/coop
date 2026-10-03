@@ -8,6 +8,7 @@ use gpui::{
     ParentElement as _, Pixels, Point, Render, ResizeEdge, Size, Styled, Tiling, WeakFocusHandle,
     Window, canvas, div, point, px, size,
 };
+use gpui_base::TextSelectionLayer;
 use theme::{
     ActiveTheme, CLIENT_SIDE_DECORATION_BORDER, CLIENT_SIDE_DECORATION_ROUNDING,
     CLIENT_SIDE_DECORATION_SHADOW,
@@ -382,6 +383,7 @@ impl Render for Root {
                     .font_family(font_family)
                     .bg(cx.theme().surface_background)
                     .text_color(cx.theme().text)
+                    .child(TextSelectionLayer)
                     .child(self.view.clone()),
             )
     }

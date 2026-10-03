@@ -66,8 +66,8 @@ impl Kbd {
 
     /// Return the Platform specific keybinding string by KeyStroke
     ///
-    /// macOS: https://support.apple.com/en-us/HT201236
-    /// Windows: https://support.microsoft.com/en-us/windows/keyboard-shortcuts-in-windows-dcc61a57-8ff0-cffe-9796-cb9706c75eec
+    /// - macOS: https://support.apple.com/en-us/HT201236
+    /// - Windows: https://support.microsoft.com/en-us/windows/keyboard-shortcuts-in-windows-dcc61a57-8ff0-cffe-9796-cb9706c75eec
     pub fn format(key: &Keystroke) -> String {
         #[cfg(target_os = "macos")]
         const DIVIDER: &str = "";
@@ -75,9 +75,6 @@ impl Kbd {
         const DIVIDER: &str = "+";
 
         let mut parts = vec![];
-
-        // The key map order in macOS is: ⌃⌥⇧⌘
-        // And in Windows is: Ctrl+Alt+Shift+Win
 
         if key.modifiers.control {
             #[cfg(target_os = "macos")]
@@ -113,6 +110,7 @@ impl Kbd {
 
         let mut keys = String::new();
         let key_str = key.key.as_str();
+
         match key_str {
             #[cfg(target_os = "macos")]
             "ctrl" => keys.push('⌃'),

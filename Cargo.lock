@@ -2544,15 +2544,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "getopts"
-version = "0.2.24"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfe4fbac503b8d1f88e6676011885f34b7174f46e59956bba534ba83abded4df"
-dependencies = [
- "unicode-width",
-]
-
-[[package]]
 name = "getrandom"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4146,15 +4137,6 @@ name = "link-section"
 version = "0.19.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39c29a617ce3df32c08497bdc1ab6e2376e0b17948ac166a2fbe5977c5954cd9"
-
-[[package]]
-name = "linkify"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1dfa36d52c581e9ec783a7ce2a5e0143da6237be5811a0b3153fedfdbe9f780"
-dependencies = [
- "memchr",
-]
 
 [[package]]
 name = "linktime-proc-macro"
@@ -5844,25 +5826,6 @@ dependencies = [
  "quote",
  "syn 2.0.119",
 ]
-
-[[package]]
-name = "pulldown-cmark"
-version = "0.13.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9f068eba8e7071c5f9511831b44f32c740d5adf574e990f946ddb53db2f314e"
-dependencies = [
- "bitflags 2.13.2",
- "getopts",
- "memchr",
- "pulldown-cmark-escape",
- "unicase",
-]
-
-[[package]]
-name = "pulldown-cmark-escape"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "007d8adb5ddab6f8e3f491ac63566a7d5002cc7ed73901f72057943fa71ae1ae"
 
 [[package]]
 name = "pulp"
@@ -8017,19 +7980,13 @@ dependencies = [
 name = "ui"
 version = "1.0.2"
 dependencies = [
- "anyhow",
  "common",
  "gpui-base",
  "gpui-pre",
  "instant",
- "itertools 0.13.0",
- "linkify",
  "log",
- "pulldown-cmark",
- "regex",
  "serde",
  "smallvec",
- "smol",
  "theme",
  "uuid",
 ]

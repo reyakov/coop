@@ -1094,7 +1094,7 @@ impl ChatPanel {
                 .rendered_texts_by_id
                 .entry(message.id)
                 .or_insert_with(|| {
-                    text::rendered_text(&message.content, &message.mentions, &persons, true, cx)
+                    text::rendered_text(&message.content, &message.mentions, &persons, cx)
                 })
                 .element(ix.into(), window, cx);
 

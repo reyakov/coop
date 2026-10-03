@@ -10,8 +10,7 @@ use crate::{Selectable, Sizable, Size, StyledExt};
 
 /// Number of rows and columns in the generated pixel grid.
 const PIXEL_GRID: usize = 8;
-/// Empty cells kept between the pattern and the avatar edge, so the art
-/// gathers in the center instead of filling the whole avatar.
+/// Empty cells kept between the pattern and the avatar edge.
 const MARGIN: usize = 1;
 /// Probability that a cell in the left half of the pattern area is filled.
 const FILL_PROBABILITY: f32 = 0.42;

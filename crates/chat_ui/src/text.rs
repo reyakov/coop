@@ -4,14 +4,11 @@ use person::PersonRegistry;
 use ui::markdown::InlineReplacement;
 pub use ui::markdown::RenderedText;
 
-/// Render message `content` to text, replacing mentions with their display names.
-///
-/// When `markdown` is set the content is parsed as markdown.
+/// Render message `content`, replacing mentions with their display names.
 pub fn rendered_text(
     content: &str,
     mentions: &[Mention],
     persons: &Entity<PersonRegistry>,
-    markdown: bool,
     cx: &App,
 ) -> RenderedText {
     let replacements = mentions
@@ -24,5 +21,5 @@ pub fn rendered_text(
         })
         .collect::<Vec<_>>();
 
-    RenderedText::new(content, &replacements, markdown)
+    RenderedText::new(content, &replacements)
 }
