@@ -1,5 +1,5 @@
-use gpui::{App, DefiniteLength, Div, Edges, Pixels, Refineable, StyleRefinement, Styled, div, px};
-pub use gpui_base::component_traits::{Collapsible, Disableable, Selectable};
+use gpui::{App, Div, Pixels, Refineable, StyleRefinement, Styled, div, px};
+pub use gpui_base::component_traits::{Disableable, Selectable};
 use serde::{Deserialize, Serialize};
 use theme::ActiveTheme;
 
@@ -47,39 +47,9 @@ pub trait StyledExt: Styled + Sized {
         self.flex().flex_col()
     }
 
-    /// Apply paddings to the element.
-    fn paddings<L>(self, paddings: impl Into<Edges<L>>) -> Self
-    where
-        L: Into<DefiniteLength> + Clone + Default + std::fmt::Debug + PartialEq,
-    {
-        let paddings = paddings.into();
-        self.pt(paddings.top.into())
-            .pb(paddings.bottom.into())
-            .pl(paddings.left.into())
-            .pr(paddings.right.into())
-    }
-
-    /// Apply margins to the element.
-    fn margins<L>(self, margins: impl Into<Edges<L>>) -> Self
-    where
-        L: Into<DefiniteLength> + Clone + Default + std::fmt::Debug + PartialEq,
-    {
-        let margins = margins.into();
-        self.mt(margins.top.into())
-            .mb(margins.bottom.into())
-            .ml(margins.left.into())
-            .mr(margins.right.into())
-    }
-
-    font_weight!(font_thin, THIN);
-    font_weight!(font_extralight, EXTRA_LIGHT);
-    font_weight!(font_light, LIGHT);
     font_weight!(font_normal, NORMAL);
     font_weight!(font_medium, MEDIUM);
     font_weight!(font_semibold, SEMIBOLD);
-    font_weight!(font_bold, BOLD);
-    font_weight!(font_extrabold, EXTRA_BOLD);
-    font_weight!(font_black, BLACK);
 
     /// Set as Popover style
     #[inline]
@@ -140,55 +110,13 @@ pub trait Sizable: Sized {
     }
 }
 
-#[allow(unused)]
-pub trait StyleSized<T: Styled> {
-    fn input_font_size(self, size: Size) -> Self;
-    fn input_size(self, size: Size) -> Self;
-    fn input_pl(self, size: Size) -> Self;
-    fn input_pr(self, size: Size) -> Self;
+pub(crate) trait StyleSized<T: Styled> {
     fn input_px(self, size: Size) -> Self;
     fn input_py(self, size: Size) -> Self;
     fn input_h(self, size: Size) -> Self;
-    fn list_size(self, size: Size) -> Self;
-    fn list_px(self, size: Size) -> Self;
-    fn list_py(self, size: Size) -> Self;
-    /// Apply size with the given `Size`.
-    fn size_with(self, size: Size) -> Self;
 }
 
 impl<T: Styled> StyleSized<T> for T {
-    fn input_font_size(self, size: Size) -> Self {
-        match size {
-            Size::XSmall => self.text_xs(),
-            Size::Small => self.text_sm(),
-            Size::Medium => self.text_base(),
-            Size::Large => self.text_lg(),
-            Size::Size(size) => self.text_size(size),
-        }
-    }
-
-    fn input_size(self, size: Size) -> Self {
-        self.input_px(size).input_py(size).input_h(size)
-    }
-
-    fn input_pl(self, size: Size) -> Self {
-        match size {
-            Size::XSmall => self.pl_1(),
-            Size::Medium => self.pl_3(),
-            Size::Large => self.pl_5(),
-            _ => self.pl_2(),
-        }
-    }
-
-    fn input_pr(self, size: Size) -> Self {
-        match size {
-            Size::XSmall => self.pr_1(),
-            Size::Medium => self.pr_3(),
-            Size::Large => self.pr_5(),
-            _ => self.pr_2(),
-        }
-    }
-
     fn input_px(self, size: Size) -> Self {
         match size {
             Size::XSmall => self.px_1(),
@@ -209,42 +137,11 @@ impl<T: Styled> StyleSized<T> for T {
 
     fn input_h(self, size: Size) -> Self {
         match size {
-            Size::XSmall => self.h_6(),
-            Size::Small => self.h_8(),
-            Size::Medium => self.h_9(),
-            Size::Large => self.h_12(),
-            _ => self.h(px(24.)),
-        }
-        .input_font_size(size)
-    }
-
-    fn list_size(self, size: Size) -> Self {
-        self.list_px(size).list_py(size).input_font_size(size)
-    }
-
-    fn list_px(self, size: Size) -> Self {
-        match size {
-            Size::Small => self.px_2(),
-            _ => self.px_3(),
-        }
-    }
-
-    fn list_py(self, size: Size) -> Self {
-        match size {
-            Size::Large => self.py_2(),
-            Size::Medium => self.py_1(),
-            Size::Small => self.py_0p5(),
-            _ => self.py_1(),
-        }
-    }
-
-    fn size_with(self, size: Size) -> Self {
-        match size {
-            Size::Large => self.size_11(),
-            Size::Medium => self.size_8(),
-            Size::Small => self.size_5(),
-            Size::XSmall => self.size_4(),
-            Size::Size(size) => self.size(size),
+            Size::XSmall => self.h_6().text_xs(),
+            Size::Small => self.h_8().text_sm(),
+            Size::Medium => self.h_9().text_base(),
+            Size::Large => self.h_12().text_lg(),
+            Size::Size(size) => self.h(px(24.)).text_size(size),
         }
     }
 }

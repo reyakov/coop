@@ -18,7 +18,7 @@ use crate::notification::{Notification, NotificationList};
 
 #[derive(Clone)]
 #[allow(clippy::type_complexity)]
-pub struct ActiveDialog {
+pub(crate) struct ActiveDialog {
     focus_handle: FocusHandle,
     /// The previous focused handle before opening the dialog.
     previous_focused_handle: Option<WeakFocusHandle>,
@@ -191,11 +191,6 @@ impl Root {
         }
 
         cx.notify();
-    }
-
-    /// Check if there are any active dialogs.
-    pub fn has_active_dialogs(&self) -> bool {
-        !self.active_dialogs.is_empty()
     }
 
     /// Push a notification to the notification layer.
@@ -393,7 +388,7 @@ impl Render for Root {
 }
 
 /// Get the window paddings.
-pub fn window_paddings(window: &Window, _cx: &App) -> Edges<Pixels> {
+pub(crate) fn window_paddings(window: &Window, _cx: &App) -> Edges<Pixels> {
     match window.window_decorations() {
         Decorations::Server => Edges::all(px(0.0)),
         Decorations::Client { tiling } => {

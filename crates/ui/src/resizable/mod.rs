@@ -3,10 +3,6 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{App, InteractiveElement as _, IntoElement, Pixels, Styled as _, Window, div, px};
 pub(crate) use gpui_base::resize_handle;
-pub use gpui_base::{
-    ResizablePanel, ResizablePanelEvent, ResizablePanelGroup, ResizableState, h_resizable,
-    resizable_panel, v_resizable,
-};
 use gpui_base::{ResizeHandleContext, ResizeHandleRenderer};
 use theme::{ActiveTheme as _, AxisExt as _};
 

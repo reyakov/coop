@@ -37,7 +37,7 @@ pub(super) fn avatar_size(size: Size) -> AbsoluteLength {
 
 /// A deterministic, offline pixel-art avatar derived from a seed.
 #[derive(IntoElement)]
-pub struct PixelAvatar {
+pub(crate) struct PixelAvatar {
     seed: u64,
     size: Size,
     style: StyleRefinement,

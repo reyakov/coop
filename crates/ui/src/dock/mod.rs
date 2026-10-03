@@ -31,33 +31,14 @@ pub use panel::*;
 
 actions!(dock, [ToggleZoom, ClosePanel]);
 
-pub type TitleBarRenderer = fn(&mut Window, &mut App) -> AnyElement;
-
-#[derive(Default)]
-pub struct TitleBarChrome {
-    trailing: Cell<Option<TitleBarRenderer>>,
-}
-
-impl TitleBarChrome {
-    pub fn set_trailing(&self, renderer: TitleBarRenderer) {
-        self.trailing.set(Some(renderer));
-    }
-
-    fn trailing(&self, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
-        self.trailing.get().map(|render| render(window, cx))
-    }
-}
-
 pub fn dock_area(
     id: impl Into<SharedString>,
     window: &mut Window,
     cx: &mut App,
-) -> (Entity<DockArea>, Rc<TitleBarChrome>) {
-    let chrome = Rc::new(TitleBarChrome::default());
+) -> Entity<DockArea> {
     let shared = Rc::new(SkinShared {
         area: RefCell::new(None),
         resizing: Cell::new(None),
-        chrome: chrome.clone(),
     });
     let area = cx.new(|cx| {
         DockArea::new(id, None, window, cx).with_renderer(Rc::new(DockSkin {
@@ -66,7 +47,7 @@ pub fn dock_area(
     });
 
     *shared.area.borrow_mut() = Some(area.downgrade());
-    (area, chrome)
+    area
 }
 
 pub fn add_panel(
@@ -148,33 +129,6 @@ fn find_panel(area: &DockArea, key: &SharedString, cx: &App) -> Option<(PanelId,
     None
 }
 
-pub fn focus_tab_panel(area: &DockArea, window: &mut Window, cx: &mut App) {
-    let Some(tree) = area.layout(DockPlacement::Center) else {
-        return;
-    };
-    let Some(node) = left_top_group(tree.root()) else {
-        return;
-    };
-    let Some(PaneRef::Tabs { panels, active_ix }) = tree.find_node(node).map(PaneNode::kind) else {
-        return;
-    };
-
-    let displayed = match panels.get(active_ix) {
-        Some(panel) if area.panel(*panel).is_some_and(|panel| panel.visible(cx)) => Some(*panel),
-        _ => panels
-            .iter()
-            .copied()
-            .find(|id| area.panel(*id).is_some_and(|panel| panel.visible(cx))),
-    };
-
-    let Some(panel) = displayed.and_then(|id| area.panel(id).cloned()) else {
-        return;
-    };
-
-    let focus_handle = panel.focus_handle(cx);
-    window.focus(&focus_handle, cx);
-}
-
 fn left_top_group(node: &PaneNode) -> Option<NodeId> {
     match node.kind() {
         PaneRef::Tabs { .. } => Some(node.id()),
@@ -200,7 +154,6 @@ fn right_top_group(node: &PaneNode) -> Option<NodeId> {
 struct SkinShared {
     area: RefCell<Option<WeakEntity<DockArea>>>,
     resizing: Cell<Option<DockPlacement>>,
-    chrome: Rc<TitleBarChrome>,
 }
 
 impl SkinShared {
@@ -487,10 +440,6 @@ impl TabGroupSkin {
         let needs_traffic_light_padding =
             cfg!(target_os = "macos") && self.is_leftmost_top_group(group, cx);
 
-        let trailing_chrome = is_title_bar
-            .then(|| self.shared.chrome.trailing(window, cx))
-            .flatten();
-
         let empty_space = div()
             .id("tab-bar-empty-space")
             .h_full()
@@ -610,8 +559,7 @@ impl TabGroupSkin {
                         .h_full()
                         .px_0p5()
                         .gap_1()
-                        .children(right_button)
-                        .children(trailing_chrome),
+                        .children(right_button),
                 )
             });
 

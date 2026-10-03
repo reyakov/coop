@@ -13,9 +13,6 @@ pub trait WindowExtension: Sized {
     where
         F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static;
 
-    /// Return true, if there is an active Dialog.
-    fn has_active_dialog(&mut self, cx: &mut App) -> bool;
-
     /// Closes the last active Dialog.
     fn close_dialog(&mut self, cx: &mut App);
 
@@ -53,11 +50,6 @@ impl WindowExtension for Window {
         Root::update(self, cx, move |root, window, cx| {
             root.open_dialog(builder, window, cx);
         })
-    }
-
-    #[inline]
-    fn has_active_dialog(&mut self, cx: &mut App) -> bool {
-        Root::read(self, cx).has_active_dialogs()
     }
 
     #[inline]

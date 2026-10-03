@@ -1,6 +1,6 @@
 use gpui::{
-    div, relative, Action, AsKeystroke, FocusHandle, IntoElement, KeyContext, Keystroke,
-    ParentElement as _, RenderOnce, StyleRefinement, Styled, Window,
+    Action, AsKeystroke, FocusHandle, IntoElement, KeyContext, Keystroke, ParentElement as _,
+    RenderOnce, StyleRefinement, Styled, Window, div, relative,
 };
 use theme::ActiveTheme;
 
@@ -11,7 +11,6 @@ use crate::StyledExt;
 pub struct Kbd {
     style: StyleRefinement,
     stroke: Keystroke,
-    appearance: bool,
 }
 
 impl From<Keystroke> for Kbd {
@@ -19,7 +18,6 @@ impl From<Keystroke> for Kbd {
         Self {
             style: StyleRefinement::default(),
             stroke,
-            appearance: true,
         }
     }
 }
@@ -29,14 +27,7 @@ impl Kbd {
         Self {
             style: StyleRefinement::default(),
             stroke,
-            appearance: true,
         }
-    }
-
-    /// Set the appearance of the keybinding.
-    pub fn appearance(mut self, appearance: bool) -> Self {
-        self.appearance = appearance;
-        self
     }
 
     /// Return the first keybinding for the given action and context.
@@ -206,10 +197,6 @@ impl Styled for Kbd {
 
 impl RenderOnce for Kbd {
     fn render(self, _: &mut gpui::Window, cx: &mut gpui::App) -> impl gpui::IntoElement {
-        if !self.appearance {
-            return Self::format(&self.stroke).into_any_element();
-        }
-
         div()
             .border_1()
             .border_color(cx.theme().border)

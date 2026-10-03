@@ -469,7 +469,7 @@ impl Render for Notification {
 }
 
 /// A list of notifications.
-pub struct NotificationList {
+pub(crate) struct NotificationList {
     /// Notifications that will be auto hidden.
     pub(crate) notifications: ToastManager<NotificationId, Entity<Notification>>,
 

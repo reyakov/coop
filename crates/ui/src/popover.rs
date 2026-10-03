@@ -2,8 +2,8 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Anchor, AnyElement, App, Context, Div, ElementId, FocusHandle, InteractiveElement as _,
-    IntoElement, MouseButton, ParentElement, RenderOnce, Stateful, StyleRefinement, Styled, Window,
+    Anchor, AnyElement, App, Context, Div, ElementId, InteractiveElement as _, IntoElement,
+    MouseButton, ParentElement, RenderOnce, Stateful, StyleRefinement, Styled, Window,
 };
 use gpui_base::Popover as BasePopover;
 pub use gpui_base::PopoverState;
@@ -16,9 +16,6 @@ pub struct Popover {
     id: ElementId,
     style: StyleRefinement,
     anchor: Anchor,
-    default_open: bool,
-    open: Option<bool>,
-    tracked_focus_handle: Option<FocusHandle>,
     #[allow(clippy::type_complexity)]
     trigger: Option<Box<dyn FnOnce(bool, &Window, &App) -> AnyElement + 'static>>,
     #[allow(clippy::type_complexity)]
@@ -35,8 +32,6 @@ pub struct Popover {
     mouse_button: MouseButton,
     appearance: bool,
     overlay_closable: bool,
-    #[allow(clippy::type_complexity)]
-    on_open_change: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
 }
 
 impl Popover {
@@ -49,14 +44,10 @@ impl Popover {
             trigger: None,
             trigger_style: None,
             content: None,
-            tracked_focus_handle: None,
             children: vec![],
             mouse_button: MouseButton::Left,
             appearance: true,
             overlay_closable: true,
-            default_open: false,
-            open: None,
-            on_open_change: None,
         }
     }
 
@@ -100,39 +91,6 @@ impl Popover {
         self
     }
 
-    /// Set the default open state of the popover, default is `false`.
-    ///
-    /// This is only used to initialize the open state of the popover.
-    ///
-    /// And please note that if you use the `open` method, this value will be ignored.
-    pub fn default_open(mut self, open: bool) -> Self {
-        self.default_open = open;
-        self
-    }
-
-    /// Force set the open state of the popover.
-    ///
-    /// If this is set, the popover will be controlled by this value.
-    ///
-    /// NOTE: You must be used in conjunction with `on_open_change` to handle state changes.
-    pub fn open(mut self, open: bool) -> Self {
-        self.open = Some(open);
-        self
-    }
-
-    /// Add a callback to be called when the open state changes.
-    ///
-    /// The first `&bool` parameter is the **new open state**.
-    ///
-    /// This is useful when using the `open` method to control the popover state.
-    pub fn on_open_change<F>(mut self, callback: F) -> Self
-    where
-        F: Fn(&bool, &mut Window, &mut App) + 'static,
-    {
-        self.on_open_change = Some(Rc::new(callback));
-        self
-    }
-
     /// Set the style for the trigger element.
     pub fn trigger_style(mut self, style: StyleRefinement) -> Self {
         self.trigger_style = Some(style);
@@ -168,15 +126,6 @@ impl Popover {
     /// - The click out of the popover will not dismiss it.
     pub fn appearance(mut self, appearance: bool) -> Self {
         self.appearance = appearance;
-        self
-    }
-
-    /// Bind the focus handle to receive focus when the popover is opened.
-    /// If you not set this, a new focus handle will be created for the popover to
-    ///
-    /// If popover is opened, the focus will be moved to the focus handle.
-    pub fn track_focus(mut self, handle: &FocusHandle) -> Self {
-        self.tracked_focus_handle = Some(handle.clone());
         self
     }
 }
@@ -224,7 +173,6 @@ impl RenderOnce for Popover {
         BasePopover::new(self.id)
             .anchor(anchor)
             .mouse_button(self.mouse_button)
-            .default_open(self.default_open)
             .overlay_closable(self.overlay_closable)
             .content(move |state, window, cx| {
                 Self::render_popover_content(anchor, appearance, window, cx)
@@ -235,13 +183,6 @@ impl RenderOnce for Popover {
                     .refine_style(&style)
             })
             .when_some(self.trigger, |this, trigger| this.trigger_with(trigger))
-            .when_some(self.open, |this, open| this.open(open))
-            .when_some(self.tracked_focus_handle, |this, handle| {
-                this.track_focus(&handle)
-            })
-            .when_some(self.on_open_change, |this, callback| {
-                this.on_open_change(move |open, window, cx| callback(open, window, cx))
-            })
             .into_any_element()
     }
 }

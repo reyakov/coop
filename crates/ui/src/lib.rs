@@ -1,18 +1,13 @@
-pub use gpui_base::{ElementExt, IndexPath, InteractiveElementExt};
+pub(crate) use gpui_base::{ElementExt, InteractiveElementExt};
 pub use icon::*;
-pub use kbd::*;
-pub use root::{Root, window_paddings};
+pub use root::Root;
 pub use styled::*;
-pub use title_bar::*;
+pub use title_bar::{TRAFFIC_LIGHT_PADDING, title_bar_drag_handlers};
 pub use window_ext::*;
 
-pub use crate::Disableable;
-
-pub mod animation;
 pub mod avatar;
 pub mod button;
 pub mod dialog;
-pub mod divider;
 pub mod dock;
 pub mod group_box;
 pub mod indicator;
@@ -23,16 +18,16 @@ pub mod message;
 pub mod nav;
 pub mod nav_item;
 pub mod notification;
-pub mod popover;
-pub mod resizable;
 pub mod scroll;
-pub mod skeleton;
 pub mod switch;
 pub mod tab;
 pub mod tooltip;
 
+mod animation;
 mod icon;
 mod kbd;
+mod popover;
+mod resizable;
 mod root;
 mod styled;
 mod title_bar;

@@ -510,43 +510,6 @@ impl PopupMenu {
         self
     }
 
-    /// Add Menu Item with custom element render.
-    pub fn menu_element<F, E>(self, action: Box<dyn Action>, builder: F) -> Self
-    where
-        F: Fn(&mut Window, &mut App) -> E + 'static,
-        E: IntoElement,
-    {
-        self.menu_element_with_check(false, action, builder)
-    }
-
-    /// Add Menu Item with custom element render with disabled state.
-    pub fn menu_element_with_disabled<F, E>(
-        self,
-        action: Box<dyn Action>,
-        disabled: bool,
-        builder: F,
-    ) -> Self
-    where
-        F: Fn(&mut Window, &mut App) -> E + 'static,
-        E: IntoElement,
-    {
-        self.menu_element_with_check_and_disabled(false, action, disabled, builder)
-    }
-
-    /// Add Menu Item with custom element render with icon.
-    pub fn menu_element_with_icon<F, E>(
-        self,
-        icon: impl Into<Icon>,
-        action: Box<dyn Action>,
-        builder: F,
-    ) -> Self
-    where
-        F: Fn(&mut Window, &mut App) -> E + 'static,
-        E: IntoElement,
-    {
-        self.menu_element_with_icon_and_disabled(icon, action, false, builder)
-    }
-
     /// Add Menu Item with custom element render with check state
     pub fn menu_element_with_check<F, E>(
         self,
@@ -559,27 +522,6 @@ impl PopupMenu {
         E: IntoElement,
     {
         self.menu_element_with_check_and_disabled(checked, action, false, builder)
-    }
-
-    /// Add Menu Item with custom element render with icon and disabled state
-    fn menu_element_with_icon_and_disabled<F, E>(
-        mut self,
-        icon: impl Into<Icon>,
-        action: Box<dyn Action>,
-        disabled: bool,
-        builder: F,
-    ) -> Self
-    where
-        F: Fn(&mut Window, &mut App) -> E + 'static,
-        E: IntoElement,
-    {
-        self.menu_items.push(
-            PopupMenuItem::element(builder)
-                .action(action)
-                .icon(icon)
-                .disabled(disabled),
-        );
-        self
     }
 
     /// Add Menu Item with custom element render with check state and disabled state

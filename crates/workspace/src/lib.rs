@@ -80,7 +80,7 @@ impl Workspace {
         let device = DeviceRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
 
-        let (dock, _) = dock::dock_area("coop", window, cx);
+        let dock = dock::dock_area("coop", window, cx);
         let sidebar = cx.new(|cx| Sidebar::new(window, dock.downgrade(), cx));
         let left_sidebar = sidebar.clone();
 

@@ -301,9 +301,9 @@ dependencies = [
 
 [[package]]
 name = "async-compression"
-version = "0.4.48"
+version = "0.4.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb61aea1a7def73ee7c350a184f0e70b32c182344e2e75bf70c9b621b83417fd"
+checksum = "ee19bd99b43e3691acbad4e840420a4881cea6c0b66a208125a824f8fd53f5a1"
 dependencies = [
  "compression-codecs",
  "compression-core",
@@ -941,14 +941,13 @@ dependencies = [
 
 [[package]]
 name = "calloop"
-version = "0.14.4"
+version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4dbf9978365bac10f54d1d4b04f7ce4427e51f71d61f2fe15e3fed5166474df7"
+checksum = "43b32313e937c8721c9d17ee9bf60699a6402b4b7c2cb6ac1bee0ffcaa4b4e5e"
 dependencies = [
  "bitflags 2.13.2",
  "polling",
  "rustix",
- "slab",
  "tracing",
 ]
 
@@ -993,9 +992,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.5.1"
+version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f360145194ee8e21db5ee7f3fcd4fe52210864c75c985dae33218202c8bbe040"
+checksum = "f74872d07caf508b30a21f6836e7d7016a2eaf7d9ff4f48deaa58cd8a0407630"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1278,9 +1277,9 @@ dependencies = [
 
 [[package]]
 name = "compression-codecs"
-version = "0.4.43"
+version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bef16c47ba2797aa6a909cc37d39911f3a6743811fe7408ac0b0cc0276b656e9"
+checksum = "98fc98460ba0ad5317075d3632b8dfc45d0be8c4a49347c2a38272019717614a"
 dependencies = [
  "bzip2",
  "compression-core",
@@ -2308,9 +2307,9 @@ dependencies = [
 
 [[package]]
 name = "font-types"
-version = "0.12.5"
+version = "0.12.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8eb065f3251655b3c90e22e5e363f310fc5332fb3402e37bbc94752283248f6"
+checksum = "6c92d9081c7ab3bd83ef1eecdfad090f3d966e3ce74106779664114cfe1a6274"
 dependencies = [
  "bytemuck",
 ]
@@ -4064,9 +4063,9 @@ dependencies = [
 
 [[package]]
 name = "lazy_static"
-version = "1.5.0"
+version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+checksum = "20870f649af7073d53e38067b2a84312175d56ea15217e1b15bc83506ec50afb"
 
 [[package]]
 name = "leak"
@@ -4097,9 +4096,9 @@ checksum = "34b357333733e8260735ba5894eb928c02ecc69c78715f01a8019e7fa7f2db4c"
 
 [[package]]
 name = "libc"
-version = "0.2.189"
+version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
+checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 
 [[package]]
 name = "libfuzzer-sys"
@@ -4633,7 +4632,7 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 [[package]]
 name = "nostr"
 version = "0.45.5"
-source = "git+https://github.com/rust-nostr/nostr#01f1950c671b35f3d1186ca907373dd86ee3b336"
+source = "git+https://github.com/rust-nostr/nostr#1c687bb852eb6dc90cd5e05a9571d0b20becc4b8"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -4659,7 +4658,7 @@ dependencies = [
 [[package]]
 name = "nostr-blossom"
 version = "0.45.1"
-source = "git+https://github.com/rust-nostr/nostr#01f1950c671b35f3d1186ca907373dd86ee3b336"
+source = "git+https://github.com/rust-nostr/nostr#1c687bb852eb6dc90cd5e05a9571d0b20becc4b8"
 dependencies = [
  "base64 0.22.1",
  "bitcoin_hashes 1.2.0",
@@ -4672,7 +4671,7 @@ dependencies = [
 [[package]]
 name = "nostr-connect"
 version = "0.45.2"
-source = "git+https://github.com/rust-nostr/nostr#01f1950c671b35f3d1186ca907373dd86ee3b336"
+source = "git+https://github.com/rust-nostr/nostr#1c687bb852eb6dc90cd5e05a9571d0b20becc4b8"
 dependencies = [
  "async-utility",
  "futures-core",
@@ -4686,7 +4685,7 @@ dependencies = [
 [[package]]
 name = "nostr-database"
 version = "0.45.2"
-source = "git+https://github.com/rust-nostr/nostr#01f1950c671b35f3d1186ca907373dd86ee3b336"
+source = "git+https://github.com/rust-nostr/nostr#1c687bb852eb6dc90cd5e05a9571d0b20becc4b8"
 dependencies = [
  "nostr",
  "opaquerr 0.2.0",
@@ -4695,7 +4694,7 @@ dependencies = [
 [[package]]
 name = "nostr-gossip"
 version = "0.45.1"
-source = "git+https://github.com/rust-nostr/nostr#01f1950c671b35f3d1186ca907373dd86ee3b336"
+source = "git+https://github.com/rust-nostr/nostr#1c687bb852eb6dc90cd5e05a9571d0b20becc4b8"
 dependencies = [
  "nostr",
  "opaquerr 0.2.0",
@@ -4704,7 +4703,7 @@ dependencies = [
 [[package]]
 name = "nostr-gossip-memory"
 version = "0.45.1"
-source = "git+https://github.com/rust-nostr/nostr#01f1950c671b35f3d1186ca907373dd86ee3b336"
+source = "git+https://github.com/rust-nostr/nostr#1c687bb852eb6dc90cd5e05a9571d0b20becc4b8"
 dependencies = [
  "indexmap",
  "lru",
@@ -4716,7 +4715,7 @@ dependencies = [
 [[package]]
 name = "nostr-lmdb"
 version = "0.45.3"
-source = "git+https://github.com/rust-nostr/nostr#01f1950c671b35f3d1186ca907373dd86ee3b336"
+source = "git+https://github.com/rust-nostr/nostr#1c687bb852eb6dc90cd5e05a9571d0b20becc4b8"
 dependencies = [
  "async-utility",
  "flatbuffers",
@@ -4731,7 +4730,7 @@ dependencies = [
 [[package]]
 name = "nostr-memory"
 version = "0.45.2"
-source = "git+https://github.com/rust-nostr/nostr#01f1950c671b35f3d1186ca907373dd86ee3b336"
+source = "git+https://github.com/rust-nostr/nostr#1c687bb852eb6dc90cd5e05a9571d0b20becc4b8"
 dependencies = [
  "btreecap",
  "nostr",
@@ -4742,7 +4741,7 @@ dependencies = [
 [[package]]
 name = "nostr-sdk"
 version = "0.45.4"
-source = "git+https://github.com/rust-nostr/nostr#01f1950c671b35f3d1186ca907373dd86ee3b336"
+source = "git+https://github.com/rust-nostr/nostr#1c687bb852eb6dc90cd5e05a9571d0b20becc4b8"
 dependencies = [
  "async-utility",
  "async-wsocket",
@@ -5949,9 +5948,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-proto"
-version = "0.11.18"
+version = "0.11.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9746dbde176634f4f2f1faf2404e30a31b2bc1e9cafb5329c95d8177a18c9fc"
+checksum = "0e750cca55fe4f0439a15d0bb529da9651e79993e8e72c61a899a36d462befbe"
 dependencies = [
  "bytes",
  "getrandom 0.4.3",
@@ -5971,9 +5970,9 @@ dependencies = [
 
 [[package]]
 name = "quinn-udp"
-version = "0.5.15"
+version = "0.5.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "35a133f956daabe89a61a685c2649f13d82d5aa4bd5d12d1277e1072a21c0694"
+checksum = "af66907df18639dcf4db56ca65490cabc4b27a97dbadd96f2926cca73298f016"
 dependencies = [
  "cfg_aliases",
  "libc",
@@ -6216,7 +6215,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "046a7d674daf459825b32f5062056d6882db0d2f5a479fbd76ccfc870ac18709"
 dependencies = [
  "bytemuck",
- "font-types 0.12.5",
+ "font-types 0.12.6",
  "once_cell",
 ]
 
@@ -8241,9 +8240,9 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "uuid"
-version = "1.26.1"
+version = "1.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ef6dac1e96601b4fb3acccccff2139741fcb757cb9a36089bf5be91cfb285ce"
+checksum = "97277d36b9c3ace13e58fa6e753f8b0bbbf302a18dd193240d70f9e29681059a"
 dependencies = [
  "getrandom 0.4.3",
  "js-sys",
@@ -9658,9 +9657,9 @@ dependencies = [
 
 [[package]]
 name = "yoke-derive"
-version = "0.8.3"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33811428bee40dbceb6d545e95754741d17a6aef9a4849f0fd62e2ba4f412a78"
+checksum = "ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71"
 dependencies = [
  "proc-macro2",
  "quote",

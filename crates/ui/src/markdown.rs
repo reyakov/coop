@@ -34,7 +34,7 @@ impl InlineReplacement {
 
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Highlight {
+pub(crate) enum Highlight {
     Code,
     InlineCode(bool),
     Replacement,
@@ -53,10 +53,10 @@ impl From<HighlightStyle> for Highlight {
 /// into plain text plus highlight ranges, ready to hand to an `InteractiveText`.
 #[derive(Default)]
 pub struct RenderedText {
-    pub text: SharedString,
-    pub highlights: Vec<(Range<usize>, Highlight)>,
-    pub link_ranges: Vec<Range<usize>>,
-    pub link_urls: Arc<[String]>,
+    pub(crate) text: SharedString,
+    pub(crate) highlights: Vec<(Range<usize>, Highlight)>,
+    pub(crate) link_ranges: Vec<Range<usize>>,
+    pub(crate) link_urls: Arc<[String]>,
 }
 
 impl RenderedText {
