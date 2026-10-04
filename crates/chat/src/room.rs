@@ -3,19 +3,19 @@ use std::hash::{Hash, Hasher};
 
 use anyhow::{Error, anyhow};
 use common::EventExt;
-use device::DeviceRegistry;
 use gpui::{App, AppContext, Context, EventEmitter, SharedString, Task};
 use instant::Duration;
 use itertools::Itertools;
+use nip4e::DeviceRegistry;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry};
 use settings::{RoomConfig, SignerKind};
-use state::{NostrRegistry, TIMEOUT};
+use state::{NostrRegistry, TIMEOUT, UniversalSigner};
 
 use crate::{FileAttachment, KIND_FILE_MESSAGE, NewMessage};
 
 const NO_DEKEY: &str = "User hasn't set up a decoupled encryption key yet.";
-const USER_NO_DEKEY: &str = "You haven't set up a decoupled encryption key or it's not available.";
+const USER_NO_DEKEY: &str = "You haven't set up a decoupled encryption key yet. Set one up in the settings to message them.";
 
 /// The outcome of delivering an encrypted rumor to a single receiver.
 #[derive(Debug, Clone)]
@@ -472,28 +472,6 @@ impl Room {
         tags
     }
 
-    /// Select the appropriate signer based on signer kind and available keys.
-    fn select_signer<'a, S>(
-        signer_kind: &SignerKind,
-        has_announcement: bool,
-        encryption_signer: &'a Option<S>,
-        user_signer: &'a S,
-    ) -> &'a S {
-        match signer_kind {
-            SignerKind::Auto => {
-                if has_announcement {
-                    encryption_signer.as_ref().unwrap_or(user_signer)
-                } else {
-                    user_signer
-                }
-            }
-            SignerKind::Encryption => encryption_signer
-                .as_ref()
-                .expect("encryption signer must be set"),
-            SignerKind::User => user_signer,
-        }
-    }
-
     /// Send the rumor to every member's messaging relays.
     pub fn send(&self, rumor: UnsignedEvent, cx: &App) -> Option<Task<Vec<SendReport>>> {
         let config = self.config.clone();
@@ -528,21 +506,23 @@ impl Room {
                     signer_kind,
                     receiver,
                     &rumor,
-                    &encryption_signer,
+                    encryption_signer.as_ref(),
                     &user_signer,
                 )
             });
+
             let mut reports: Vec<SendReport> = futures::future::join_all(sends).await;
+            let minimum_success = reports.iter().any(SendReport::success);
 
             // Back up the message to ourselves once at least one receiver got it
-            if config.backup() && reports.iter().any(SendReport::success) {
+            if config.backup() && minimum_success {
                 reports.push(
                     deliver(
                         &client,
                         signer_kind,
                         sender,
                         &rumor,
-                        &encryption_signer,
+                        encryption_signer.as_ref(),
                         &user_signer,
                     )
                     .await,
@@ -560,7 +540,7 @@ async fn deliver<S>(
     signer_kind: &SignerKind,
     receiver: Person,
     rumor: &UnsignedEvent,
-    encryption_signer: &Option<S>,
+    encryption_signer: Option<&UniversalSigner>,
     user_signer: &S,
 ) -> SendReport
 where
@@ -587,15 +567,16 @@ where
         }
     }
 
-    // Determine the signer to use
-    let signer = Room::select_signer(
+    match send_gift_wrap(
+        client,
+        &receiver,
+        rumor,
         signer_kind,
-        announcement.is_some(),
         encryption_signer,
         user_signer,
-    );
-
-    match send_gift_wrap(client, signer, &receiver, rumor, signer_kind).await {
+    )
+    .await
+    {
         Ok(output) => SendReport {
             receiver: public_key,
             result: Ok(output),
@@ -610,10 +591,11 @@ where
 /// Build the gift-wrapped event for a rumor and send it.
 async fn send_gift_wrap<S>(
     client: &Client,
-    signer: &S,
     receiver: &Person,
     rumor: &UnsignedEvent,
     config: &SignerKind,
+    encryption_signer: Option<&UniversalSigner>,
+    user_signer: &S,
 ) -> Result<Output<EventId, EventSendStatus>, Error>
 where
     S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44,
@@ -639,11 +621,51 @@ where
         SignerKind::User => receiver.public_key(),
     };
 
-    // Construct the gift wrap event
-    let event = nip59::GiftWrapBuilder::new(receiver_key, rumor.clone())
-        .extra_tags(extra_tags)
-        .finalize_async(signer)
-        .await?;
+    // Make sure the rumor carries an event ID before it's serialized
+    let mut rumor = rumor.clone();
+    rumor.ensure_id();
+
+    let rumor_json = rumor.as_json();
+    let has_encryption_announcement = receiver.announcement().is_some();
+
+    let seal: Event = match (encryption_signer, has_encryption_announcement) {
+        (Some(encryption_signer), true) => {
+            let encryption_pubkey = encryption_signer.get_public_key_async().await?;
+            let content = encryption_signer
+                .nip44_encrypt_async(&receiver_key, &rumor_json)
+                .await?;
+
+            EventBuilder::new(Kind::Seal, content)
+                .tags(vec![Tag::custom("n", [encryption_pubkey.to_hex()])])
+                .custom_created_at(tweaked_timestamp())
+                .finalize_async(user_signer)
+                .await?
+        }
+        _ => {
+            let content = user_signer
+                .nip44_encrypt_async(&receiver_key, &rumor_json)
+                .await?;
+
+            EventBuilder::new(Kind::Seal, content)
+                .custom_created_at(tweaked_timestamp())
+                .finalize_async(user_signer)
+                .await?
+        }
+    };
+
+    let ephemeral_keys = Keys::generate();
+    let content = nip44::encrypt(
+        ephemeral_keys.secret_key(),
+        &receiver_key,
+        seal.as_json(),
+        nip44::Version::default(),
+    )?;
+    extra_tags.push(Tag::public_key(receiver_key));
+
+    let event = EventBuilder::new(Kind::GiftWrap, content)
+        .tags(extra_tags)
+        .custom_created_at(tweaked_timestamp())
+        .finalize(&ephemeral_keys)?;
 
     // Send to the receiver's NIP-17 relays.
     client
@@ -651,4 +673,12 @@ where
         .to_nip17()
         .await
         .map_err(Into::into)
+}
+
+/// A tweaked timestamp to thwart time-analysis attacks, per NIP-59
+fn tweaked_timestamp() -> Timestamp {
+    const MAX_TWEAK_SECONDS: u64 = 2 * 24 * 60 * 60;
+
+    let seconds = rand::random_range(0..=MAX_TWEAK_SECONDS);
+    Timestamp::from_secs(Timestamp::now().as_secs().saturating_sub(seconds))
 }

@@ -1073,7 +1073,6 @@ version = "1.0.2"
 dependencies = [
  "anyhow",
  "common",
- "device",
  "flume 0.11.1",
  "futures",
  "fuzzy-matcher",
@@ -1081,8 +1080,10 @@ dependencies = [
  "instant",
  "itertools 0.13.0",
  "log",
+ "nip4e",
  "nostr-sdk",
  "person",
+ "rand 0.10.3",
  "settings",
  "smallvec",
  "smol",
@@ -1413,7 +1414,6 @@ dependencies = [
  "auto_update",
  "chat",
  "common",
- "device",
  "gpui-pre",
  "gpui-pre-linux",
  "gpui-pre-macos",
@@ -1422,6 +1422,7 @@ dependencies = [
  "gpui-pre-windows",
  "log",
  "nip29",
+ "nip4e",
  "nostr-sdk",
  "person",
  "settings",
@@ -1441,7 +1442,6 @@ dependencies = [
  "common",
  "console_error_panic_hook",
  "console_log",
- "device",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "getrandom 0.4.3",
@@ -1451,6 +1451,7 @@ dependencies = [
  "instant",
  "log",
  "nip29",
+ "nip4e",
  "person",
  "settings",
  "state",
@@ -1821,26 +1822,6 @@ dependencies = [
  "rustc_version",
  "syn 2.0.119",
  "unicode-xid",
-]
-
-[[package]]
-name = "device"
-version = "1.0.2"
-dependencies = [
- "anyhow",
- "common",
- "flume 0.11.1",
- "gpui-pre",
- "instant",
- "log",
- "nostr-sdk",
- "person",
- "settings",
- "smallvec",
- "smol",
- "state",
- "theme",
- "ui",
 ]
 
 [[package]]
@@ -4572,6 +4553,26 @@ dependencies = [
  "serde",
  "settings",
  "smallvec",
+ "state",
+ "theme",
+ "ui",
+]
+
+[[package]]
+name = "nip4e"
+version = "1.0.2"
+dependencies = [
+ "anyhow",
+ "common",
+ "flume 0.11.1",
+ "gpui-pre",
+ "instant",
+ "log",
+ "nostr-sdk",
+ "person",
+ "settings",
+ "smallvec",
+ "smol",
  "state",
  "theme",
  "ui",
@@ -9438,12 +9439,12 @@ dependencies = [
  "chat",
  "chat_ui",
  "common",
- "device",
  "gpui-pre",
  "instant",
  "log",
  "nip29",
  "nip29_ui",
+ "nip4e",
  "nostr-connect",
  "nostr-sdk",
  "person",

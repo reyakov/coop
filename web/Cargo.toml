@@ -14,7 +14,7 @@ ui = { path = "../crates/ui" }
 theme = { path = "../crates/theme" }
 common = { path = "../crates/common" }
 state = { path = "../crates/state" }
-device = { path = "../crates/device" }
+nip4e = { path = "../crates/nip4e" }
 chat = { path = "../crates/chat" }
 nip29 = { path = "../crates/nip29" }
 settings = { path = "../crates/settings" }

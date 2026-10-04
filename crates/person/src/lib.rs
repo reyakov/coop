@@ -216,7 +216,10 @@ impl PersonRegistry {
 
     /// Set profile encryption keys announcement
     fn set_announcement(&mut self, event: &Event, cx: &mut App) {
-        let announcement = Announcement::from(event);
+        let Some(announcement) = Announcement::from_event(event) else {
+            log::warn!("Ignoring announcement with missing or invalid key tag");
+            return;
+        };
 
         if let Some(person) = self.persons.get(&event.pubkey) {
             person.update(cx, |person, cx| {

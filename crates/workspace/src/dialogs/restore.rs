@@ -1,12 +1,11 @@
-use instant::Duration;
-
 use anyhow::Error;
-use device::DeviceRegistry;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
     Subscription, Task, Window, div,
 };
+use instant::Duration;
+use nip4e::DeviceRegistry;
 use nostr_sdk::prelude::*;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
@@ -52,8 +51,9 @@ impl RestoreEncryption {
         let device = DeviceRegistry::global(cx);
         let content = self.key_input.read(cx).value();
 
-        if !content.is_empty() {
+        if content.is_empty() {
             self.set_error("Secret Key cannot be empty.", cx);
+            return;
         }
 
         let Ok(secret) = SecretKey::parse(&content) else {

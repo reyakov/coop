@@ -12,6 +12,7 @@ use gpui::{
     WeakEntity,
 };
 use instant::Duration;
+use nip4e::{DeviceEvent, DeviceRegistry};
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use state::{DEVICE_GIFTWRAP, NostrRegistry, USER_GIFTWRAP};
@@ -138,17 +139,24 @@ impl ChatRegistry {
         let (tx, rx) = flume::unbounded::<Signal>();
         let mut subscriptions = smallvec![];
 
-        subscriptions.push(
-            // Subscribe to the signer event
-            cx.subscribe(&nostr, |this, _nostr, event, cx| {
-                if event.signer_changed() {
-                    this.reset(cx);
-                    this.handle_notifications(cx);
-                    this.get_metadata(cx);
-                    this.get_rooms(cx);
-                };
-            }),
-        );
+        let device = DeviceRegistry::global(cx);
+
+        subscriptions.push(cx.subscribe(&nostr, |this, _nostr, event, cx| {
+            if event.signer_changed() {
+                this.reset(cx);
+                this.handle_notifications(cx);
+                this.get_metadata(cx);
+                this.get_rooms(cx);
+            };
+        }));
+
+        subscriptions.push(cx.subscribe(&device, |this, _device, event, cx| {
+            if matches!(event, DeviceEvent::Set) {
+                this.handle_notifications(cx);
+                this.get_messages(cx);
+                this.reprocess_trash(cx);
+            }
+        }));
 
         cx.defer(move |cx| {
             let _ = entity.update(cx, |this, cx| {
@@ -182,6 +190,9 @@ impl ChatRegistry {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
+
+        let device = DeviceRegistry::global(cx);
+        let device_signer = device.read(cx).signer(cx);
 
         let seen = self.seen.clone();
         let event_map = self.event_map.clone();
@@ -249,7 +260,14 @@ impl ChatRegistry {
                         }
 
                         // Extract the rumor from the gift wrap event
-                        match extract_rumor(&client, &signer, event.as_ref()).await {
+                        match extract_rumor(
+                            &client,
+                            &signer,
+                            device_signer.as_ref(),
+                            event.as_ref(),
+                        )
+                        .await
+                        {
                             Ok(rumor) => {
                                 let Some(rumor_id) = rumor.id else {
                                     log::error!("Rumor missing id after ensure_id");
@@ -385,6 +403,9 @@ impl ChatRegistry {
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
 
+        let device = DeviceRegistry::global(cx);
+        let device_signer = device.read(cx).signer(cx);
+
         self.tasks.push(cx.spawn(async move |this, cx| {
             let task: Task<Result<(), Error>> = cx.background_spawn(async move {
                 let public_key = signer.get_public_key_async().await?;
@@ -417,12 +438,69 @@ impl ChatRegistry {
 
                 client.subscribe(target).with_id(id).await?;
 
+                // Also pick up gift wraps addressed to this account's decoupled encryption key
+                if let Some(device_signer) = device_signer.as_ref() {
+                    let device_public_key = device_signer.get_public_key_async().await?;
+
+                    let filter = Filter::new().kind(Kind::GiftWrap).pubkey(device_public_key);
+                    let id = SubscriptionId::new(DEVICE_GIFTWRAP);
+
+                    let target: HashMap<RelayUrl, Filter> = nip17::extract_relay_list(&event)
+                        .map(|relay| (relay, filter.clone()))
+                        .collect();
+
+                    client.subscribe(target).with_id(id).await?;
+                }
+
                 Ok(())
             });
 
             if let Err(e) = task.await {
                 this.update(cx, |_this, cx| {
                     cx.emit(ChatEvent::Error(e.to_string()));
+                })?;
+            }
+
+            Ok(())
+        }));
+    }
+
+    /// Retry unwrapping trashed gift wraps with the newly available encryption key.
+    fn reprocess_trash(&mut self, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
+        let device_signer = DeviceRegistry::global(cx).read(cx).signer(cx);
+
+        let failed: Vec<FailedMessage> = self.trash.read(cx).iter().cloned().collect();
+
+        if failed.is_empty() {
+            return;
+        }
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            for message in failed {
+                let Ok(event) = Event::from_json(message.raw_event.as_str()) else {
+                    continue;
+                };
+
+                if extract_rumor(&client, &signer, device_signer.as_ref(), &event)
+                    .await
+                    .is_err()
+                {
+                    continue;
+                }
+
+                let Ok(rumor) = get_rumor(&client, event.id).await else {
+                    continue;
+                };
+
+                this.update(cx, |this, cx| {
+                    this.trash.update(cx, |trash, cx| {
+                        trash.remove(&message);
+                        cx.notify();
+                    });
+                    this.new_message(NewMessage::new(event.id, rumor), cx);
                 })?;
             }
 
@@ -740,21 +818,30 @@ impl ChatRegistry {
 }
 
 /// Unwraps a gift-wrapped event and processes its contents.
-async fn extract_rumor<S>(
+async fn extract_rumor<S, D>(
     client: &Client,
     signer: &S,
+    device_signer: Option<&D>,
     gift_wrap: &Event,
 ) -> Result<UnsignedEvent, Error>
 where
     S: AsyncNip44 + ?Sized,
+    D: AsyncNip44 + ?Sized,
 {
     // Try to get cached rumor first
     if let Ok(rumor) = get_rumor(client, gift_wrap.id).await {
         return Ok(rumor);
     }
 
-    // Try to unwrap with the available signer
-    let unwrapped = try_unwrap_with(signer, gift_wrap).await?;
+    let unwrapped = match try_unwrap_with(signer, gift_wrap).await {
+        Ok(unwrapped) => unwrapped,
+        Err(error) => {
+            let Some(device_signer) = device_signer else {
+                return Err(error);
+            };
+            try_unwrap_with(device_signer, gift_wrap).await?
+        }
+    };
     let mut rumor = unwrapped.rumor;
 
     // Verify rumor author matches the seal sender (as per mobile implementation)
@@ -787,9 +874,17 @@ where
     let seal: Event = Event::from_json(seal)?;
     seal.verify()?;
 
+    let sender_encryption_key = seal
+        .tags
+        .iter()
+        .find(|tag| tag.kind() == "n")
+        .and_then(|tag| tag.content())
+        .and_then(|content| PublicKey::parse(content).ok())
+        .unwrap_or(seal.pubkey);
+
     // Get the rumor event
     let rumor = signer
-        .nip44_decrypt_async(&seal.pubkey, &seal.content)
+        .nip44_decrypt_async(&sender_encryption_key, &seal.content)
         .await?;
 
     let rumor = UnsignedEvent::from_json(rumor)?;

@@ -126,6 +126,7 @@ impl GroupsRegistry {
             if event.signer_changed() {
                 this.reset(cx);
                 this.handle_notifications(cx);
+                this.load_cached(cx);
                 this.load(cx);
             }
         }));
@@ -133,6 +134,7 @@ impl GroupsRegistry {
         cx.defer(move |cx| {
             if let Err(error) = this.update(cx, |this, cx| {
                 this.handle_notifications(cx);
+                this.load_cached(cx);
 
                 if nostr.read(cx).current_user().is_some() {
                     this.load(cx);
@@ -349,19 +351,20 @@ impl GroupsRegistry {
         cx.notify();
     }
 
-    fn load(&mut self, cx: &mut Context<Self>) {
+    fn load_cached(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
+
+        if nostr.read(cx).current_user().is_none() {
+            return;
+        }
+
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
 
+        // Show the cached groups before the relays answer.
         let task: Task<Result<GroupList, Error>> = cx.background_spawn(async move {
             let me = signer.get_public_key_async().await?;
             let filter = Filter::new().author(me).kind(Kind::SimpleGroups).limit(1);
-
-            client
-                .subscribe(ReqTarget::auto([filter.clone()]))
-                .with_id(list_subscription_id())
-                .await?;
 
             match client.database().query(filter).await?.into_iter().next() {
                 Some(event) => GroupList::parse(&event),
@@ -373,11 +376,37 @@ impl GroupsRegistry {
             .push(cx.spawn(async move |this, cx| match task.await {
                 Ok(list) => {
                     if let Err(error) = this.update(cx, |this, cx| this.merge(list, cx)) {
-                        log::warn!("nip29: applying the group list failed: {error}");
+                        log::warn!("nip29: applying the cached group list failed: {error}");
                     }
                 }
-                Err(error) => log::warn!("nip29: loading the group list failed: {error}"),
+                Err(error) => log::warn!("nip29: loading the cached group list failed: {error}"),
             }));
+    }
+
+    fn load(&mut self, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
+
+        let updates: Task<Result<(), Error>> = cx.background_spawn(async move {
+            let me = signer.get_public_key_async().await?;
+            let opts = SubscribeAutoCloseOptions::default().exit_policy(ReqExitPolicy::ExitOnEOSE);
+            let filter = Filter::new().author(me).kind(Kind::SimpleGroups).limit(1);
+
+            client
+                .subscribe(ReqTarget::auto([filter]))
+                .with_id(list_subscription_id())
+                .close_on(opts)
+                .await?;
+
+            Ok(())
+        });
+
+        self.tasks.push(cx.spawn(async move |_this, _cx| {
+            if let Err(error) = updates.await {
+                log::warn!("nip29: subscribing to the group list failed: {error}");
+            }
+        }));
 
         self.watch_forks(cx);
     }

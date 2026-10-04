@@ -44,7 +44,7 @@ hkdf = "0.12"
 chacha20 = "0.9"
 hmac = "0.12"
 # Pinned to the instance `nostr-sdk` already builds, so NIP-44 nonces share it
-rand = { version = "0.10", default-features = false, features = [ "std", "sys_rng" ] }
+rand = { version = "0.10", default-features = false, features = [ "std", "sys_rng", "thread_rng" ] }
 
 # Others
 anyhow = "1.0.44"

@@ -73,7 +73,7 @@ fn main() {
             // Initialize device signer
             //
             // NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
-            device::init(cx);
+            nip4e::init(cx);
 
             // Initialize app registry
             chat::init(cx);

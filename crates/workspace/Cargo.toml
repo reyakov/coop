@@ -9,7 +9,7 @@ ui = { path = "../ui" }
 theme = { path = "../theme" }
 common = { path = "../common" }
 state = { path = "../state" }
-device = { path = "../device" }
+nip4e = { path = "../nip4e" }
 chat = { path = "../chat" }
 chat_ui = { path = "../chat_ui" }
 nip29 = { path = "../nip29" }

@@ -7,7 +7,7 @@ publish.workspace = true
 [dependencies]
 common = { path = "../common" }
 state = { path = "../state" }
-device = { path = "../device" }
+nip4e = { path = "../nip4e" }
 person = { path = "../person" }
 settings = { path = "../settings" }
 
@@ -17,6 +17,7 @@ instant.workspace = true
 
 anyhow.workspace = true
 itertools.workspace = true
+rand.workspace = true
 smallvec.workspace = true
 log.workspace = true
 flume.workspace = true

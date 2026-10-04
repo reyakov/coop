@@ -5,11 +5,11 @@ use anyhow::Error;
 use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry};
 use common::download_dir;
-use device::{DeviceEvent, DeviceRegistry};
 use gpui::{
     Action, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
     Render, SharedString, Styled, Subscription, Task, Window, div, px,
 };
+use nip4e::{DeviceEvent, DeviceRegistry};
 use nip29::{GroupId, GroupKey};
 use nostr_sdk::prelude::*;
 use serde::Deserialize;
@@ -106,22 +106,24 @@ impl Workspace {
             // Observe all events emitted by the device registry
             cx.subscribe_in(&device, window, |_this, _device, event, window, cx| {
                 match event {
-                    DeviceEvent::Requesting => {
-                        const MSG: &str =
-                            "Please open other client and approve the request for encryption key.";
+                    DeviceEvent::Requesting(code) => {
+                        const MSG: &str = "Please open another client and approve the request \
+                                           for the encryption key. Compare the code with the \
+                                           one shown there before approving.";
 
                         let note = Notification::new()
                             .id::<DeviceNotifcation>()
                             .autohide(false)
-                            .title("Wait for approval")
+                            .title(format!("Wait for approval · {code}"))
                             .message(MSG)
                             .with_kind(NotificationKind::Info);
 
                         window.push_notification(note, cx);
                     }
                     DeviceEvent::NotSet => {
-                        const MSG: &str =
-                            "User're not setup encryption key yet. Do you want to create one?";
+                        const MSG: &str = "No encryption key announcement was found. It may \
+                                           still be propagating, or you can restore one \
+                                           from the settings.";
 
                         let note = Notification::new()
                             .id::<DeviceNotifcation>()
@@ -132,7 +134,7 @@ impl Workspace {
                                     move |_this, window, cx| {
                                         let device = DeviceRegistry::global(cx);
                                         device.update(cx, |this, cx| {
-                                            this.set_announcement(Keys::generate(), cx);
+                                            this.get_announcement(cx);
                                         });
                                         window.clear_notification::<DeviceNotifcation>(cx);
                                     },
