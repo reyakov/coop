@@ -10,6 +10,7 @@ use crate::avatar::Avatar;
 use crate::button::Button;
 use crate::menu::PopupMenu;
 use crate::nav::Nav;
+use crate::nav_item::NavItem;
 use crate::popover::{Popover, PopoverState};
 
 /// Builds the items of a popup menu on each render.
@@ -43,6 +44,8 @@ impl DropdownMenu for Button {}
 impl DropdownMenu for Avatar {}
 
 impl DropdownMenu for Nav {}
+
+impl DropdownMenu for NavItem {}
 
 #[derive(IntoElement)]
 pub struct DropdownMenuPopover<T: Selectable + IntoElement + 'static> {

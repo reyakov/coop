@@ -8,10 +8,10 @@ use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
 use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, ObjectFit, ParentElement, Render, SharedString,
-    Stateful, Styled, StyledImage, Subscription, Task, UniformListScrollHandle, WeakEntity, Window,
-    div, img, px, relative, retain_all, uniform_list,
+    Anchor, AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity, EventEmitter,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, ObjectFit, ParentElement, Render,
+    SharedString, Stateful, Styled, StyledImage, Subscription, Task, UniformListScrollHandle,
+    WeakEntity, Window, div, img, px, relative, retain_all, uniform_list,
 };
 use nip29::{Group, GroupKey, GroupsEvent, GroupsRegistry, Membership};
 use nostr_sdk::prelude::*;
@@ -30,8 +30,6 @@ use ui::nav::Nav;
 use ui::nav_item::NavItem;
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
-use ui::tab::Tab;
-use ui::tab::tab_bar::TabBar;
 use ui::{
     Disableable, Icon, IconName, Selectable, Sizable, StyledExt, TRAFFIC_LIGHT_PADDING,
     WindowExtension, h_flex, title_bar_drag_handlers, v_flex,
@@ -40,19 +38,34 @@ use ui::{
 use crate::Command;
 use crate::dialogs::{import, profile, screening};
 
-mod tab;
 mod utils;
 
-use tab::SidebarTab;
 pub(crate) use utils::pick_banner;
 
+/// A collapsible section of the sidebar's main list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListSection {
+    Chats,
+    Groups,
+}
+
+impl ListSection {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Chats => "Chats",
+            Self::Groups => "Groups",
+        }
+    }
+}
+
 pub enum SidebarRow {
+    Section(ListSection),
     Room { room: Entity<Room> },
     Group { group: Entity<Group> },
     Contact { public_key: PublicKey },
 }
 
-/// A collapsible section of the group view that replaces the tab list.
+/// A collapsible section of the group view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GroupSection {
     Admins,
@@ -79,15 +92,14 @@ enum GroupRow {
 
 pub struct Sidebar {
     focus_handle: FocusHandle,
-    scroll_handles: [UniformListScrollHandle; 2],
+    list_scroll: UniformListScrollHandle,
     dock: WeakEntity<DockArea>,
     /// Random background shown behind the signed-out screen.
     banner: SharedString,
-    active_tab: SidebarTab,
 
     /// The group whose information the sidebar is browsing, if any.
     group: Option<WeakEntity<Group>>,
-    /// Whether the sidebar is showing the group's information instead of its tabs.
+    /// Whether the sidebar is showing the group's information instead of its list.
     group_open: bool,
     /// Scroll state of the group's member list.
     group_scroll: UniformListScrollHandle,
@@ -96,7 +108,12 @@ pub struct Sidebar {
     /// Whether the group view's members section is expanded.
     members_open: bool,
 
-    /// Whether the inbox list is showing contacts to start a chat with.
+    /// Whether the main list's chats section is expanded.
+    chats_open: bool,
+    /// Whether the main list's groups section is expanded.
+    groups_open: bool,
+
+    /// Whether the main list is showing contacts to start a chat with.
     contacts_open: bool,
     /// The signed-in user's contacts, loaded when the contact picker opens.
     contacts: Option<Vec<PublicKey>>,
@@ -105,11 +122,10 @@ pub struct Sidebar {
     /// Scroll state of the contact picker's list.
     contacts_scroll: UniformListScrollHandle,
 
-    /// Whether the inbox list is showing chat requests instead of rooms.
+    /// Whether the main list is showing chat requests instead of chats and groups.
     requests_open: bool,
-    /// Scroll state of the requests list.
-    requests_scroll: UniformListScrollHandle,
     new_requests: bool,
+    requests_scroll: UniformListScrollHandle,
 
     tasks: SmallVec<[Task<Result<(), Error>>; 1]>,
     _subscriptions: SmallVec<[Subscription; 4]>,
@@ -159,18 +175,16 @@ impl Sidebar {
 
         Self {
             focus_handle: cx.focus_handle(),
-            scroll_handles: [
-                UniformListScrollHandle::new(),
-                UniformListScrollHandle::new(),
-            ],
+            list_scroll: UniformListScrollHandle::new(),
             dock,
             banner: pick_banner(),
-            active_tab: SidebarTab::Inbox,
             group: None,
             group_open: false,
             group_scroll: UniformListScrollHandle::new(),
             admins_open: true,
             members_open: true,
+            chats_open: true,
+            groups_open: true,
             contacts_open: false,
             contacts: None,
             selected_contacts: HashSet::new(),
@@ -183,7 +197,7 @@ impl Sidebar {
         }
     }
 
-    /// Show the group view, replacing the tab list.
+    /// Show the group view, replacing the main list.
     fn show_group(&mut self, group: &Entity<Group>, cx: &mut Context<Self>) {
         self.group = Some(group.downgrade());
         self.group_open = true;
@@ -214,23 +228,13 @@ impl Sidebar {
         }
     }
 
-    /// Leave the group view, returning the sidebar to its tab list.
+    /// Leave the group view, returning the sidebar to its main list.
     fn hide_group(&mut self, cx: &mut Context<Self>) {
         if !self.group_open {
             return;
         }
 
         self.group_open = false;
-        cx.notify();
-    }
-
-    fn select_tab(&mut self, tab: SidebarTab, cx: &mut Context<Self>) {
-        if self.active_tab == tab {
-            return;
-        }
-        self.active_tab = tab;
-        self.close_contacts();
-        self.close_requests();
         cx.notify();
     }
 
@@ -508,26 +512,20 @@ impl Sidebar {
             .into_any_element()
     }
 
-    fn render_tabs(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let sidebar = cx.entity().downgrade();
-        let active_tab = self.active_tab;
-        let requests_open = self.requests_open && active_tab == SidebarTab::Inbox;
-        let contacts_open = self.contacts_open && active_tab == SidebarTab::Inbox && !requests_open;
-        let rows = Rc::new(self.rows_for(active_tab, cx));
+    fn render_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        let requests_open = self.requests_open;
+        let contacts_open = self.contacts_open && !requests_open;
+        let rows = Rc::new(self.rows_for(cx));
 
-        // Whether to show the create button for the active tab
+        // Whether to show the create button for the contact picker
         let create_button = contacts_open && !self.selected_contacts.is_empty();
 
         let (list_id, scroll_handle, list_title) = if contacts_open {
-            ("sidebar-contacts", &self.contacts_scroll, "Contacts")
+            ("sidebar-contacts", &self.contacts_scroll, Some("Contacts"))
         } else if requests_open {
-            ("sidebar-requests", &self.requests_scroll, "Requests")
+            ("sidebar-requests", &self.requests_scroll, Some("Requests"))
         } else {
-            (
-                active_tab.list_id(),
-                &self.scroll_handles[active_tab.index()],
-                active_tab.list_title(),
-            )
+            ("sidebar-list", &self.list_scroll, None)
         };
 
         let request_count = ChatRegistry::global(cx)
@@ -541,127 +539,93 @@ impl Sidebar {
             .relative()
             .gap_2()
             .child(
-                div().px_2().child(
-                    TabBar::new("sidebar-tabs")
-                        .segmented(true)
-                        .selected_index(active_tab.index())
-                        .child(Tab::new().label(SidebarTab::Inbox.label()))
-                        .child(Tab::new().label(SidebarTab::Groups.label()))
-                        .on_click({
-                            let sidebar = sidebar.clone();
-                            move |index, _window, cx| {
-                                let Some(tab) = SidebarTab::ALL.get(*index).copied() else {
-                                    return;
-                                };
-                                if let Err(error) =
-                                    sidebar.update(cx, |this, cx| this.select_tab(tab, cx))
-                                {
-                                    log::error!("Failed to switch sidebar tab: {error}");
-                                }
-                            }
-                        }),
-                ),
-            )
-            .map(|this| match active_tab {
-                SidebarTab::Inbox => this.child(
-                    v_flex()
-                        .px_2()
-                        .gap_1()
-                        .child(
-                            NavItem::new("chat", "New Chat", Icon::new(IconName::Message).small())
-                                .on_click(|_event, window, cx| {
-                                    window.dispatch_action(Box::new(Command::NewChat), cx)
-                                }),
-                        )
-                        .child(
-                            NavItem::new("reqs", "Requests", Icon::new(IconName::Invite).small())
-                                .when(request_count > 0, |this| {
-                                    this.suffix(
-                                        h_flex()
-                                            .gap_1()
-                                            .items_center()
-                                            .child(
-                                                h_flex()
-                                                    .py_0p5()
-                                                    .px_1()
-                                                    .min_w_6()
-                                                    .justify_center()
-                                                    .text_size(px(10.))
-                                                    .text_color(cx.theme().text_muted)
-                                                    .text_center()
-                                                    .rounded(cx.theme().radius)
-                                                    .bg(cx.theme().elevated_surface_background)
-                                                    .child(SharedString::from(
-                                                        request_count.to_string(),
-                                                    )),
+                v_flex()
+                    .px_2()
+                    .gap_1()
+                    .child(
+                        NavItem::new("new", "New", Icon::new(IconName::PlusCircle).small())
+                            .clickable(true)
+                            .dropdown_menu_with_anchor(Anchor::TopRight, |menu, _window, _cx| {
+                                menu.menu_with_icon(
+                                    "New Chat",
+                                    IconName::Message,
+                                    Box::new(Command::NewChat),
+                                )
+                                .menu_with_icon(
+                                    "New Group",
+                                    IconName::Group,
+                                    Box::new(Command::NewGroup),
+                                )
+                                .separator()
+                                .menu_with_icon(
+                                    "Join Group",
+                                    IconName::Door,
+                                    Box::new(Command::JoinGroup),
+                                )
+                            }),
+                    )
+                    .child(
+                        NavItem::new("browse", "Browse", Icon::new(IconName::Compass).small())
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(Command::ShowBrowse), cx)
+                            }),
+                    )
+                    .child(
+                        NavItem::new("reqs", "Requests", Icon::new(IconName::Invite).small())
+                            .when(request_count > 0, |this| {
+                                this.suffix(
+                                    h_flex()
+                                        .gap_1()
+                                        .items_center()
+                                        .child(
+                                            h_flex()
+                                                .py_0p5()
+                                                .px_1()
+                                                .min_w_6()
+                                                .justify_center()
+                                                .text_size(px(10.))
+                                                .text_color(cx.theme().text_muted)
+                                                .text_center()
+                                                .rounded(cx.theme().radius)
+                                                .bg(cx.theme().elevated_surface_background)
+                                                .child(SharedString::from(
+                                                    request_count.to_string(),
+                                                )),
+                                        )
+                                        .when(self.new_requests && !requests_open, |this| {
+                                            this.child(
+                                                div().size_1().rounded_full().bg(cx.theme().cursor),
                                             )
-                                            .when(self.new_requests && !requests_open, |this| {
-                                                this.child(
-                                                    div()
-                                                        .size_1()
-                                                        .rounded_full()
-                                                        .bg(cx.theme().cursor),
-                                                )
-                                            }),
-                                    )
-                                })
-                                .when(requests_open, |this| {
-                                    this.bg(cx.theme().ghost_element_active)
-                                })
-                                .on_click(cx.listener(|this, _event, _window, cx| {
-                                    this.toggle_requests(cx);
-                                })),
-                        )
-                        .child(
-                            NavItem::new("contacts", "Contacts", Icon::new(IconName::Book).small())
-                                .when(contacts_open, |this| {
-                                    this.bg(cx.theme().ghost_element_active)
-                                })
-                                .on_click(cx.listener(|this, _event, window, cx| {
-                                    this.toggle_contacts(window, cx);
-                                })),
-                        ),
-                ),
-                SidebarTab::Groups => this.child(
-                    v_flex()
-                        .px_2()
-                        .gap_1()
-                        .child(
-                            NavItem::new(
-                                "new-group",
-                                "New Group",
-                                Icon::new(IconName::Group).small(),
-                            )
-                            .on_click(|_, window, cx| {
-                                window.dispatch_action(Box::new(Command::NewGroup), cx)
-                            }),
-                        )
-                        .child(
-                            NavItem::new(
-                                "join-group",
-                                "Join Group",
-                                Icon::new(IconName::Door).small(),
-                            )
-                            .on_click(|_, window, cx| {
-                                window.dispatch_action(Box::new(Command::JoinGroup), cx)
-                            }),
-                        )
-                        .child(
-                            NavItem::new("browse", "Browse", Icon::new(IconName::Compass).small())
-                                .on_click(|_, window, cx| {
-                                    window.dispatch_action(Box::new(Command::ShowBrowse), cx)
-                                }),
-                        ),
-                ),
-            })
-            .child(
-                div()
-                    .px_4()
-                    .text_xs()
-                    .font_semibold()
-                    .text_color(cx.theme().text_placeholder)
-                    .child(list_title),
+                                        }),
+                                )
+                            })
+                            .when(requests_open, |this| {
+                                this.bg(cx.theme().ghost_element_active)
+                            })
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.toggle_requests(cx);
+                            })),
+                    )
+                    .child(
+                        NavItem::new("contacts", "Contacts", Icon::new(IconName::Book).small())
+                            .when(contacts_open, |this| {
+                                this.bg(cx.theme().ghost_element_active)
+                            })
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                this.toggle_contacts(window, cx);
+                            })),
+                    ),
             )
+            .when_some(list_title, |this, list_title| {
+                this.child(
+                    div()
+                        .px_4()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(cx.theme().text_placeholder)
+                        .child(list_title),
+                )
+            })
             .child(
                 div()
                     .min_h_0()
@@ -720,42 +684,54 @@ impl Sidebar {
             .into_any_element()
     }
 
-    fn rows_for(&self, tab: SidebarTab, cx: &App) -> Vec<SidebarRow> {
-        match tab {
-            SidebarTab::Inbox if self.contacts_open => self
+    fn rows_for(&self, cx: &App) -> Vec<SidebarRow> {
+        if self.contacts_open {
+            return self
                 .contacts
                 .clone()
                 .unwrap_or_default()
                 .into_iter()
                 .map(|public_key| SidebarRow::Contact { public_key })
-                .collect(),
-            SidebarTab::Inbox if self.requests_open => {
-                let chat = ChatRegistry::global(cx);
-                chat.read(cx)
-                    .rooms(&RoomKind::Request, cx)
-                    .into_iter()
-                    .map(|room| SidebarRow::Room { room })
-                    .collect()
-            }
-            SidebarTab::Inbox => {
-                let chat = ChatRegistry::global(cx);
+                .collect();
+        }
+
+        if self.requests_open {
+            let chat = ChatRegistry::global(cx);
+            return chat
+                .read(cx)
+                .rooms(&RoomKind::Request, cx)
+                .into_iter()
+                .map(|room| SidebarRow::Room { room })
+                .collect();
+        }
+
+        let mut rows = Vec::new();
+
+        let chat = ChatRegistry::global(cx);
+        rows.push(SidebarRow::Section(ListSection::Chats));
+        if self.chats_open {
+            rows.extend(
                 chat.read(cx)
                     .rooms(&RoomKind::Ongoing, cx)
                     .into_iter()
-                    .map(|room| SidebarRow::Room { room })
-                    .collect()
-            }
-            SidebarTab::Groups => {
-                let registry = GroupsRegistry::global(cx);
+                    .map(|room| SidebarRow::Room { room }),
+            );
+        }
+
+        let registry = GroupsRegistry::global(cx);
+        rows.push(SidebarRow::Section(ListSection::Groups));
+        if self.groups_open {
+            rows.extend(
                 registry
                     .read(cx)
                     .groups()
                     .iter()
                     .cloned()
-                    .map(|group| SidebarRow::Group { group })
-                    .collect()
-            }
+                    .map(|group| SidebarRow::Group { group }),
+            );
         }
+
+        rows
     }
 
     fn render_rows(
@@ -774,6 +750,34 @@ impl Sidebar {
                 let index = range.start + offset;
 
                 match row {
+                    SidebarRow::Section(section) => {
+                        let section = *section;
+                        let open = match section {
+                            ListSection::Chats => self.chats_open,
+                            ListSection::Groups => self.groups_open,
+                        };
+                        let icon = if open {
+                            IconName::CaretDown
+                        } else {
+                            IconName::CaretRight
+                        };
+                        let label = section.label();
+
+                        Nav::new(label)
+                            .label(label)
+                            .suffix(Icon::new(icon).small().text_color(cx.theme().icon_muted))
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(cx.theme().text_placeholder)
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                match section {
+                                    ListSection::Chats => this.chats_open = !this.chats_open,
+                                    ListSection::Groups => this.groups_open = !this.groups_open,
+                                }
+                                cx.notify();
+                            }))
+                            .into_any_element()
+                    }
                     SidebarRow::Room { room } => {
                         let name = room.read(cx).display_name(cx);
                         let picture = room.read(cx).display_image(cx);
@@ -1261,7 +1265,7 @@ impl Render for Sidebar {
             })
             .map(|this| match group {
                 Some(group) if self.group_open => this.child(self.render_group(group, cx)),
-                _ => this.child(self.render_tabs(cx)),
+                _ => this.child(self.render_list(cx)),
             })
             .when(loading && logged_in, |this| {
                 this.child(
