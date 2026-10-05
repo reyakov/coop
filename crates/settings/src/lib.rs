@@ -46,6 +46,8 @@ setting_accessors! {
     pub nip4e: bool,
     pub trusted_relays: Vec<String>,
     pub file_server: Url,
+    pub pinned_rooms: Vec<u64>,
+    pub pinned_groups: Vec<String>,
 }
 
 /// Signer kind
@@ -130,6 +132,14 @@ pub struct Settings {
 
     /// Server for blossom media attachments
     pub file_server: Url,
+
+    /// Pinned chat rooms, by conversation ID
+    #[serde(default)]
+    pub pinned_rooms: Vec<u64>,
+
+    /// Pinned groups, by cache tag
+    #[serde(default)]
+    pub pinned_groups: Vec<String>,
 }
 
 impl Default for Settings {
@@ -142,6 +152,8 @@ impl Default for Settings {
             nip4e: false,
             trusted_relays: vec![],
             file_server: Url::parse(DEFAULT_FILE_SERVER).unwrap(),
+            pinned_rooms: vec![],
+            pinned_groups: vec![],
         }
     }
 }
@@ -322,6 +334,44 @@ impl AppSettings {
                     .push(url.as_str_without_trailing_slash().to_string());
                 cx.notify();
             }
+        });
+    }
+
+    /// Check if the chat room is pinned
+    pub fn pinned_room(&self, id: u64, cx: &App) -> bool {
+        self.inner.read(cx).pinned_rooms.contains(&id)
+    }
+
+    /// Pin or unpin the chat room
+    pub fn toggle_pinned_room(&mut self, id: u64, cx: &mut Context<Self>) {
+        self.inner.update(cx, |this, cx| {
+            if let Some(index) = this.pinned_rooms.iter().position(|pinned| *pinned == id) {
+                this.pinned_rooms.remove(index);
+            } else {
+                this.pinned_rooms.push(id);
+            }
+            cx.notify();
+        });
+    }
+
+    /// Check if the group is pinned by its cache tag
+    pub fn pinned_group(&self, tag: &str, cx: &App) -> bool {
+        self.inner
+            .read(cx)
+            .pinned_groups
+            .iter()
+            .any(|pinned| pinned == tag)
+    }
+
+    /// Pin or unpin the group by its cache tag
+    pub fn toggle_pinned_group(&mut self, tag: &str, cx: &mut Context<Self>) {
+        self.inner.update(cx, |this, cx| {
+            if let Some(index) = this.pinned_groups.iter().position(|pinned| pinned == tag) {
+                this.pinned_groups.remove(index);
+            } else {
+                this.pinned_groups.push(tag.to_owned());
+            }
+            cx.notify();
         });
     }
 }

@@ -801,6 +801,15 @@ pub enum Membership {
 }
 
 impl Membership {
+    pub fn status(&self) -> Option<&'static str> {
+        match self {
+            Self::Pending { .. } => Some("Requested"),
+            Self::Refused { .. } => Some("Refused"),
+            Self::Removed => Some("Removed"),
+            Self::Member | Self::Unknown => None,
+        }
+    }
+
     pub fn from_events(events: &[Event], me: PublicKey) -> Self {
         let mut latest: Option<&Event> = None;
 

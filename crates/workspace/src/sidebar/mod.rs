@@ -13,7 +13,7 @@ use gpui::{
     SharedString, Stateful, Styled, StyledImage, Subscription, Task, UniformListScrollHandle,
     WeakEntity, Window, div, img, px, relative, retain_all, uniform_list,
 };
-use nip29::{Group, GroupKey, GroupsEvent, GroupsRegistry, Membership};
+use nip29::{Group, GroupKey, GroupsEvent, GroupsRegistry};
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use settings::AppSettings;
@@ -25,7 +25,7 @@ use ui::button::{Button, ButtonCustomVariant, ButtonVariants};
 use ui::dialog::DialogButtonProps;
 use ui::dock::{ClosePanel, DockArea, DockPlacement, Panel, PanelEvent, PanelHandle};
 use ui::indicator::Indicator;
-use ui::menu::{DropdownMenu, PopupMenuItem};
+use ui::menu::{ContextMenu, DropdownMenu, PopupMenuItem};
 use ui::nav::Nav;
 use ui::nav_item::NavItem;
 use ui::notification::Notification;
@@ -45,15 +45,17 @@ pub(crate) use utils::pick_banner;
 /// A collapsible section of the sidebar's main list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListSection {
-    Chats,
+    Pins,
     Groups,
+    Chats,
 }
 
 impl ListSection {
     fn label(self) -> &'static str {
         match self {
-            Self::Chats => "Chats",
+            Self::Pins => "Pinned",
             Self::Groups => "Groups",
+            Self::Chats => "Chats",
         }
     }
 }
@@ -63,6 +65,7 @@ pub enum SidebarRow {
     Room { room: Entity<Room> },
     Group { group: Entity<Group> },
     Contact { public_key: PublicKey },
+    Empty(&'static str),
 }
 
 /// A collapsible section of the group view.
@@ -108,10 +111,12 @@ pub struct Sidebar {
     /// Whether the group view's members section is expanded.
     members_open: bool,
 
-    /// Whether the main list's chats section is expanded.
-    chats_open: bool,
-    /// Whether the main list's groups section is expanded.
-    groups_open: bool,
+    /// Whether the main list's pinned section is expanded.
+    pins_open: bool,
+    /// Whether the user expanded or collapsed the main list's groups section.
+    groups_open: Option<bool>,
+    /// Same as `groups_open` for the chats section.
+    chats_open: Option<bool>,
 
     /// Whether the main list is showing contacts to start a chat with.
     contacts_open: bool,
@@ -183,8 +188,9 @@ impl Sidebar {
             group_scroll: UniformListScrollHandle::new(),
             admins_open: true,
             members_open: true,
-            chats_open: true,
-            groups_open: true,
+            pins_open: true,
+            groups_open: None,
+            chats_open: None,
             contacts_open: false,
             contacts: None,
             selected_contacts: HashSet::new(),
@@ -708,30 +714,78 @@ impl Sidebar {
         let mut rows = Vec::new();
 
         let chat = ChatRegistry::global(cx);
-        rows.push(SidebarRow::Section(ListSection::Chats));
-        if self.chats_open {
-            rows.extend(
-                chat.read(cx)
-                    .rooms(&RoomKind::Ongoing, cx)
-                    .into_iter()
-                    .map(|room| SidebarRow::Room { room }),
-            );
-        }
+        let pinned_rooms = AppSettings::get_pinned_rooms(cx);
+
+        let (pinned_rooms, rooms): (Vec<_>, Vec<_>) = chat
+            .read(cx)
+            .rooms(&RoomKind::Ongoing, cx)
+            .into_iter()
+            .partition(|room| pinned_rooms.contains(&room.read(cx).id));
 
         let registry = GroupsRegistry::global(cx);
+        let pinned_group_ids = AppSettings::get_pinned_groups(cx);
+
+        let (pinned_groups, groups): (Vec<_>, Vec<_>) = registry
+            .read(cx)
+            .groups()
+            .to_vec()
+            .into_iter()
+            .partition(|group| {
+                let tag = group.read(cx).key().cache_tag();
+                pinned_group_ids.iter().any(|pinned| pinned == &tag)
+            });
+
+        rows.push(SidebarRow::Section(ListSection::Pins));
+        if self.pins_open {
+            if pinned_rooms.is_empty() && pinned_groups.is_empty() {
+                rows.push(SidebarRow::Empty("Nothing pinned yet"));
+            } else {
+                rows.extend(
+                    pinned_groups
+                        .into_iter()
+                        .map(|group| SidebarRow::Group { group }),
+                );
+                rows.extend(
+                    pinned_rooms
+                        .into_iter()
+                        .map(|room| SidebarRow::Room { room }),
+                );
+            }
+        }
+
         rows.push(SidebarRow::Section(ListSection::Groups));
-        if self.groups_open {
-            rows.extend(
-                registry
-                    .read(cx)
-                    .groups()
-                    .iter()
-                    .cloned()
-                    .map(|group| SidebarRow::Group { group }),
-            );
+        if self.is_groups_open(cx) {
+            if groups.is_empty() {
+                rows.push(SidebarRow::Empty("No groups yet"));
+            } else {
+                rows.extend(groups.into_iter().map(|group| SidebarRow::Group { group }));
+            }
+        }
+
+        rows.push(SidebarRow::Section(ListSection::Chats));
+        if self.is_chats_open(cx) {
+            if rooms.is_empty() {
+                rows.push(SidebarRow::Empty("No chats yet"));
+            } else {
+                rows.extend(rooms.into_iter().map(|room| SidebarRow::Room { room }));
+            }
         }
 
         rows
+    }
+
+    /// Whether anything is pinned; drives the sections' default expansion.
+    fn pinned_any(cx: &App) -> bool {
+        !AppSettings::get_pinned_rooms(cx).is_empty()
+            || !AppSettings::get_pinned_groups(cx).is_empty()
+    }
+
+    fn is_chats_open(&self, cx: &App) -> bool {
+        self.chats_open.unwrap_or_else(|| !Self::pinned_any(cx))
+    }
+
+    fn is_groups_open(&self, cx: &App) -> bool {
+        self.groups_open.unwrap_or_else(|| !Self::pinned_any(cx))
     }
 
     fn render_rows(
@@ -753,8 +807,9 @@ impl Sidebar {
                     SidebarRow::Section(section) => {
                         let section = *section;
                         let open = match section {
-                            ListSection::Chats => self.chats_open,
-                            ListSection::Groups => self.groups_open,
+                            ListSection::Pins => self.pins_open,
+                            ListSection::Groups => self.is_groups_open(cx),
+                            ListSection::Chats => self.is_chats_open(cx),
                         };
                         let icon = if open {
                             IconName::CaretDown
@@ -771,13 +826,33 @@ impl Sidebar {
                             .text_color(cx.theme().text_placeholder)
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 match section {
-                                    ListSection::Chats => this.chats_open = !this.chats_open,
-                                    ListSection::Groups => this.groups_open = !this.groups_open,
+                                    ListSection::Pins => this.pins_open = !this.pins_open,
+                                    ListSection::Groups => {
+                                        this.groups_open = Some(!this.is_groups_open(cx))
+                                    }
+                                    ListSection::Chats => {
+                                        this.chats_open = Some(!this.is_chats_open(cx))
+                                    }
                                 }
                                 cx.notify();
                             }))
                             .into_any_element()
                     }
+                    SidebarRow::Empty(text) => h_flex()
+                        .h_10()
+                        .w_full()
+                        .px_1p5()
+                        .py_1()
+                        .justify_center()
+                        .border_1()
+                        .border_dashed()
+                        .border_color(cx.theme().border)
+                        .rounded(cx.theme().radius)
+                        .justify_center()
+                        .text_xs()
+                        .text_color(cx.theme().text_placeholder)
+                        .child(*text)
+                        .into_any_element(),
                     SidebarRow::Room { room } => {
                         let name = room.read(cx).display_name(cx);
                         let picture = room.read(cx).display_image(cx);
@@ -785,10 +860,13 @@ impl Sidebar {
                         let created_at = room.read(cx).created_at.to_ago();
                         let kind = room.read(cx).kind;
                         let peer = room.read(cx).display_member(cx).public_key();
+                        let id = room.read(cx).id;
+                        let member = room.read(cx).members().first().copied();
+                        let pinned = AppSettings::global(cx).read(cx).pinned_room(id, cx);
                         let dock = self.dock.clone();
                         let room = room.clone();
 
-                        Nav::new(index)
+                        let nav = Nav::new(index)
                             .label(name)
                             .text_sm()
                             .font_medium()
@@ -832,8 +910,33 @@ impl Sidebar {
                                             })
                                     });
                                 }
-                            })
-                            .into_any_element()
+                            });
+
+                        ContextMenu::new(
+                            format!("room-menu-{index}"),
+                            nav,
+                            move |menu, _window, _cx| {
+                                let menu = menu.item(
+                                    PopupMenuItem::new(if pinned { "Unpin" } else { "Pin" })
+                                        .on_click(move |_, _window, cx| {
+                                            AppSettings::global(cx).update(cx, |settings, cx| {
+                                                settings.toggle_pinned_room(id, cx);
+                                            });
+                                        }),
+                                );
+
+                                if let Some(member) = member {
+                                    menu.item(PopupMenuItem::new("View profile").on_click(
+                                        move |_, window, cx| {
+                                            profile::open(member, window, cx);
+                                        },
+                                    ))
+                                } else {
+                                    menu
+                                }
+                            },
+                        )
+                        .into_any_element()
                     }
                     SidebarRow::Contact { public_key } => {
                         let persons = PersonRegistry::global(cx);
@@ -872,17 +975,18 @@ impl Sidebar {
                         let name = group.read(cx).display_name();
                         let picture = group.read(cx).display_image();
                         let seed = group.read(cx).key().cache_tag();
+                        let tag = seed.clone();
+                        let pinned = AppSettings::global(cx).read(cx).pinned_group(&tag, cx);
+                        let weak_group = group.downgrade();
 
-                        let suffix = match group.read(cx).membership() {
-                            Membership::Pending { .. } => Some("Requested"),
-                            Membership::Refused { .. } => Some("Refused"),
-                            Membership::Removed => Some("Removed"),
-                            Membership::Unknown | Membership::Member => None,
-                        }
-                        .or_else(|| group.read(cx).elsewhere().map(|_| "Moved"))
-                        .map(SharedString::from);
+                        let suffix = group
+                            .read(cx)
+                            .membership()
+                            .status()
+                            .or_else(|| group.read(cx).elsewhere().map(|_| "Moved"))
+                            .map(SharedString::from);
 
-                        Nav::new(index)
+                        let nav = Nav::new(index)
                             .label(name)
                             .text_sm()
                             .font_medium()
@@ -917,8 +1021,37 @@ impl Sidebar {
                                 }) {
                                     log::error!("Failed to show the group in the sidebar: {error}");
                                 }
-                            })
-                            .into_any_element()
+                            });
+
+                        ContextMenu::new(
+                            format!("group-menu-{index}"),
+                            nav,
+                            move |menu, _window, _cx| {
+                                menu.item(
+                                    PopupMenuItem::new(if pinned { "Unpin" } else { "Pin" })
+                                        .on_click({
+                                            let tag = tag.clone();
+                                            move |_, _window, cx| {
+                                                AppSettings::global(cx).update(
+                                                    cx,
+                                                    |settings, cx| {
+                                                        settings.toggle_pinned_group(&tag, cx);
+                                                    },
+                                                );
+                                            }
+                                        }),
+                                )
+                                .item(
+                                    PopupMenuItem::new("Leave").on_click({
+                                        let group = weak_group.clone();
+                                        move |_, window, cx| {
+                                            nip29_ui::confirm_leave(group.clone(), window, cx);
+                                        }
+                                    }),
+                                )
+                            },
+                        )
+                        .into_any_element()
                     }
                 }
             })
