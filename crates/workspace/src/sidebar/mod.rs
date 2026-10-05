@@ -8,10 +8,10 @@ use chat::{ChatEvent, ChatRegistry, Room, RoomKind};
 use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity, EventEmitter,
-    FocusHandle, Focusable, InteractiveElement, IntoElement, ObjectFit, ParentElement, Render,
-    SharedString, Stateful, Styled, StyledImage, Subscription, Task, UniformListScrollHandle,
-    WeakEntity, Window, div, img, px, relative, retain_all, uniform_list,
+    AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity, EventEmitter, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, ObjectFit, ParentElement, Render, SharedString,
+    Stateful, Styled, StyledImage, Subscription, Task, UniformListScrollHandle, WeakEntity, Window,
+    div, img, px, relative, retain_all, uniform_list,
 };
 use nip29::{Group, GroupKey, GroupsEvent, GroupsRegistry};
 use nostr_sdk::prelude::*;
@@ -389,6 +389,7 @@ impl Sidebar {
     }
 
     fn render_user(&self, current_user: &PublicKey, cx: &mut Context<Self>) -> Stateful<Div> {
+        let updater = AutoUpdater::try_global(cx);
         let persons = PersonRegistry::global(cx);
         let profile = persons.read(cx).get(current_user, cx);
         let avatar = profile.avatar();
@@ -466,10 +467,30 @@ impl Sidebar {
                             )
                     }),
             )
-            .child(div().flex_1())
-            .when_some(AutoUpdater::try_global(cx), |this, updater| {
+            .when_some(updater, |this, updater| {
                 this.child(self.render_updater(updater, cx))
             })
+            .child(
+                Button::new("sidebar-new")
+                    .icon(IconName::PlusCircle)
+                    .tooltip("New")
+                    .ghost()
+                    .small()
+                    .dropdown_menu(|menu, _window, _cx| {
+                        menu.menu_with_icon(
+                            "New Chat",
+                            IconName::Message,
+                            Box::new(Command::NewChat),
+                        )
+                        .menu_with_icon("New Group", IconName::Group, Box::new(Command::NewGroup))
+                        .separator()
+                        .menu_with_icon(
+                            "Join Group",
+                            IconName::Door,
+                            Box::new(Command::JoinGroup),
+                        )
+                    }),
+            )
             .when(self.group_open, |this| {
                 this.child(
                     Button::new("sidebar-back")
@@ -548,28 +569,6 @@ impl Sidebar {
                 v_flex()
                     .px_2()
                     .gap_1()
-                    .child(
-                        NavItem::new("new", "New", Icon::new(IconName::PlusCircle).small())
-                            .clickable(true)
-                            .dropdown_menu_with_anchor(Anchor::TopRight, |menu, _window, _cx| {
-                                menu.menu_with_icon(
-                                    "New Chat",
-                                    IconName::Message,
-                                    Box::new(Command::NewChat),
-                                )
-                                .menu_with_icon(
-                                    "New Group",
-                                    IconName::Group,
-                                    Box::new(Command::NewGroup),
-                                )
-                                .separator()
-                                .menu_with_icon(
-                                    "Join Group",
-                                    IconName::Door,
-                                    Box::new(Command::JoinGroup),
-                                )
-                            }),
-                    )
                     .child(
                         NavItem::new("browse", "Browse", Icon::new(IconName::Compass).small())
                             .on_click(|_, window, cx| {

@@ -18,12 +18,12 @@ type MenuBuilder = dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> Po
 
 /// A dropdown menu trait for buttons and other interactive elements
 pub trait DropdownMenu: Styled + Selectable + InteractiveElement + IntoElement + 'static {
-    /// Create a dropdown menu with the given items, anchored to the TopLeft corner
+    /// Create a dropdown menu with the given items, anchored to the TopRight corner
     fn dropdown_menu(
         self,
         f: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
     ) -> DropdownMenuPopover<Self> {
-        self.dropdown_menu_with_anchor(Anchor::TopLeft, f)
+        self.dropdown_menu_with_anchor(Anchor::TopRight, f)
     }
 
     /// Create a dropdown menu with the given items, anchored to the given corner
