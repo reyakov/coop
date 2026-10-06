@@ -278,8 +278,6 @@ impl Render for Sidebar {
             .relative()
             .gap_2()
             .bg(cx.theme().surface_background)
-            .border_r_1()
-            .border_color(cx.theme().border_variant)
             .when_some(current_user.as_ref(), |this, current_user| {
                 this.child(title_bar_drag_handlers(
                     self.render_user(current_user, cx),

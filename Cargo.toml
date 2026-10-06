@@ -9,8 +9,6 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
-# GPUI. The `gpui-pre` family is upstream zed's gpui republished unchanged, so these
-# aliases keep every `use gpui::..` site as it is while moving off the zed git pin.
 gpui = { package = "gpui-pre", version = "0.3.5" }
 gpui_platform = { package = "gpui-pre-platform", version = "0.3.5", features = ["font-kit", "x11", "wayland"] }
 gpui_linux = { package = "gpui-pre-linux", version = "0.3.5" }
@@ -21,8 +19,6 @@ gpui_util = { package = "gpui-pre-util", version = "0.3.5" }
 sum_tree = { package = "gpui-pre-sum-tree", version = "0.3.5" }
 reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.5" }
 gpui_tokio = { path = "crates/gpui_tokio" }
-
-# Unstyled behavior, state, and infrastructure from GPUI Kit
 gpui-base = "0.7.0"
 
 # Nostr

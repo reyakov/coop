@@ -934,7 +934,7 @@ impl PopupMenu {
             Icon::empty()
         };
 
-        Some(icon.small())
+        Some(icon)
     }
 
     #[inline]
@@ -990,7 +990,7 @@ impl PopupMenu {
 
         let this = MenuItemElement::new(ix, &group_name)
             .relative()
-            .text_xs()
+            .text_sm()
             .py_0()
             .px(INNER_PADDING)
             .rounded(radius)
@@ -1020,7 +1020,7 @@ impl PopupMenu {
                 h_flex().cursor_default().items_center().gap_x_1().child(
                     div()
                         .flex_1()
-                        .text_xs()
+                        .text_sm()
                         .font_semibold()
                         .text_color(cx.theme().text_muted)
                         .child(label.clone()),
@@ -1063,7 +1063,7 @@ impl PopupMenu {
                 })
                 .disabled(*disabled)
                 .h(item_height)
-                .gap_x_1p5()
+                .gap_x_2()
                 .children(Self::render_icon(
                     has_left_icon,
                     is_left_check,
@@ -1084,7 +1084,7 @@ impl PopupMenu {
                                 h_flex()
                                     .w_full()
                                     .justify_between()
-                                    .gap_1p5()
+                                    .gap_2()
                                     .child(label.clone())
                                     .child(
                                         Icon::new(IconName::Link)
@@ -1110,7 +1110,7 @@ impl PopupMenu {
                         .min_h(item_height)
                         .size_full()
                         .items_center()
-                        .gap_x_1p5()
+                        .gap_x_2()
                         .children(Self::render_icon(
                             has_left_icon,
                             false,

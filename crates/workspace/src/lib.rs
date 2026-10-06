@@ -22,10 +22,9 @@ use ui::notification::{Notification, NotificationKind};
 use ui::{IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
 
 use crate::dialogs::restore::RestoreEncryption;
-use crate::dialogs::{join_group, new_chat, new_group, settings};
+use crate::dialogs::{join_group, new_chat, new_group, profile, settings};
 use crate::panels::{
-    backup, browse, contact_list, greeter, inbox, messaging_relays, profile, relay_list, requests,
-    search,
+    backup, browse, contact_list, greeter, inbox, messaging_relays, relay_list, requests, search,
 };
 use crate::sidebar::Sidebar;
 
@@ -284,12 +283,7 @@ impl Workspace {
                 let nostr = NostrRegistry::global(cx);
 
                 if let Some(public_key) = nostr.read(cx).current_user() {
-                    self.add_panel_to_dock(
-                        profile::init(public_key, window, cx),
-                        DockPlacement::Left,
-                        window,
-                        cx,
-                    );
+                    profile::open(public_key, window, cx);
                 }
             }
             Command::ShowContactList => {

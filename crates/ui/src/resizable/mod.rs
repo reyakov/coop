@@ -20,6 +20,7 @@ pub(crate) fn resize_handle_appearance() -> ResizeHandleRenderer {
 
             Some(
                 div()
+                    .bg(cx.theme().border_variant)
                     .group_hover("handle", move |this| this.bg(color))
                     .when(axis.is_horizontal(), |this| this.h_full().w(HANDLE_SIZE))
                     .when(axis.is_vertical(), |this| this.w_full().h(HANDLE_SIZE))

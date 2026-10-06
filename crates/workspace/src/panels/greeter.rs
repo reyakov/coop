@@ -1,16 +1,15 @@
-use anyhow::Error;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, SharedString, Styled, Task, Window, div, svg,
+    IntoElement, ParentElement, Render, SharedString, Styled, Window, div, svg,
 };
 use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
-use ui::dock::{DockPlacement, Panel, PanelEvent};
+use ui::dock::{Panel, PanelEvent};
 use ui::{Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
 
-use crate::panels::profile;
-use crate::{Command, Workspace};
+use crate::Command;
+use crate::dialogs::profile;
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<GreeterPanel> {
     cx.new(|cx| GreeterPanel::new(window, cx))
@@ -19,7 +18,6 @@ pub fn init(window: &mut Window, cx: &mut App) -> Entity<GreeterPanel> {
 pub struct GreeterPanel {
     name: SharedString,
     focus_handle: FocusHandle,
-    tasks: Vec<Task<Result<(), Error>>>,
 }
 
 impl GreeterPanel {
@@ -27,27 +25,14 @@ impl GreeterPanel {
         Self {
             name: "Onboarding".into(),
             focus_handle: cx.focus_handle(),
-            tasks: vec![],
         }
     }
 
-    fn add_profile_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    fn open_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
 
         if let Some(public_key) = nostr.read(cx).current_user() {
-            self.tasks.push(cx.spawn_in(window, async move |_this, cx| {
-                cx.update(|window, cx| {
-                    Workspace::add_panel(
-                        profile::init(public_key, window, cx),
-                        DockPlacement::Right,
-                        window,
-                        cx,
-                    );
-                })
-                .ok();
-
-                Ok(())
-            }));
+            profile::open(public_key, window, cx);
         }
     }
 }
@@ -151,7 +136,7 @@ impl Render for GreeterPanel {
                                             .ghost()
                                             .small()
                                             .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.add_profile_panel(window, cx)
+                                                this.open_profile(window, cx)
                                             })),
                                     )
                                     .child(
