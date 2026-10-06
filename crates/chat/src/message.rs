@@ -6,7 +6,7 @@ use gpui::{SharedString, SharedUri};
 use nostr_sdk::prelude::*;
 use state::FileAttachment;
 
-pub const KIND_FILE_MESSAGE: Kind = Kind::Custom(15);
+pub(crate) const KIND_FILE_MESSAGE: Kind = Kind::Custom(15);
 
 /// Rendered message.
 #[derive(Debug, Clone)]
@@ -152,31 +152,26 @@ impl Message {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct NewMessage {
     pub room: u64,
-    pub gift_wrap: EventId,
     pub rumor: UnsignedEvent,
 }
 
 impl NewMessage {
-    pub fn new(gift_wrap: EventId, rumor: UnsignedEvent) -> Self {
+    pub fn new(_gift_wrap: EventId, rumor: UnsignedEvent) -> Self {
         let room = rumor.uniq_id();
 
-        Self {
-            room,
-            gift_wrap,
-            rumor,
-        }
+        Self { room, rumor }
     }
 }
 
 /// Trash message.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct FailedMessage {
+pub(crate) struct FailedMessage {
     pub raw_event: SharedString,
     pub reason: SharedString,
 }
 
 impl FailedMessage {
-    pub fn new<T>(event: &Event, reason: T) -> Self
+    pub(crate) fn new<T>(event: &Event, reason: T) -> Self
     where
         T: Into<SharedString>,
     {
@@ -194,7 +189,7 @@ pub struct Mention {
 }
 
 impl Mention {
-    pub fn new(public_key: PublicKey, range: Range<usize>) -> Self {
+    pub(crate) fn new(public_key: PublicKey, range: Range<usize>) -> Self {
         Self { public_key, range }
     }
 }

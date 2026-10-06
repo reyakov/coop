@@ -317,7 +317,7 @@ impl GroupsRegistry {
         }));
     }
 
-    pub fn reset(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn reset(&mut self, cx: &mut Context<Self>) {
         self.notification_listener = None;
         self.signal_consumer = None;
         self.tasks.clear();

@@ -50,24 +50,19 @@ impl Sidebar {
                     .compact()
                     .transparent()
                     .dropdown_menu(move |this, _window, _cx| {
-                        this.min_w(px(256.))
-                            .menu_with_icon(
-                                "Profile",
-                                IconName::Profile,
-                                Box::new(Command::ShowProfile),
-                            )
-                            .menu_with_icon(
-                                "Relays",
-                                IconName::Relay,
-                                Box::new(Command::ShowRelayList),
-                            )
-                            .separator()
-                            .menu_with_icon("Themes", IconName::Sun, Box::new(Command::ToggleTheme))
-                            .menu_with_icon(
-                                "Settings",
-                                IconName::Settings,
-                                Box::new(Command::ShowSettings),
-                            )
+                        this.menu_with_icon(
+                            "Profile",
+                            IconName::Profile,
+                            Box::new(Command::ShowProfile),
+                        )
+                        .menu_with_icon("Relays", IconName::Relay, Box::new(Command::ShowRelayList))
+                        .separator()
+                        .menu_with_icon("Themes", IconName::Sun, Box::new(Command::ToggleTheme))
+                        .menu_with_icon(
+                            "Settings",
+                            IconName::Settings,
+                            Box::new(Command::ShowSettings),
+                        )
                     }),
             )
             .child(div().flex_1())

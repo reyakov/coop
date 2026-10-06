@@ -58,12 +58,6 @@ impl DialogButtonProps {
         self.cancel_text = Some(cancel_text.into());
         self
     }
-
-    /// Sets the variant of the Cancel button. Default is `ButtonVariant::default()`.
-    pub fn cancel_variant(mut self, cancel_variant: ButtonVariant) -> Self {
-        self.cancel_variant = cancel_variant;
-        self
-    }
 }
 
 #[derive(IntoElement)]
@@ -145,19 +139,8 @@ impl Dialog {
     }
 
     /// Set to use confirm dialog, with OK and Cancel buttons.
-    ///
-    /// See also [`Self::alert`]
     pub fn confirm(self) -> Self {
         self.footer(|ok, cancel, window, cx| vec![cancel(window, cx), ok(window, cx)])
-            .overlay_closable(false)
-            .show_close(false)
-    }
-
-    /// Set to as a alter dialog, with OK button.
-    ///
-    /// See also [`Self::confirm`]
-    pub fn alert(self) -> Self {
-        self.footer(|ok, _, window, cx| vec![ok(window, cx)])
             .overlay_closable(false)
             .show_close(false)
     }
@@ -207,27 +190,9 @@ impl Dialog {
         self
     }
 
-    /// Shift the dialog down from the window centre, defaults to `None`.
-    pub fn margin_top(mut self, margin_top: Pixels) -> Self {
-        self.margin_top = Some(margin_top);
-        self
-    }
-
     /// Sets the width of the dialog, defaults to 480px.
     pub fn width(mut self, width: Pixels) -> Self {
         self.width = width;
-        self
-    }
-
-    /// Set the maximum width of the dialog, defaults to `None`.
-    pub fn max_w(mut self, max_width: Pixels) -> Self {
-        self.max_width = Some(max_width);
-        self
-    }
-
-    /// Set the overlay of the dialog, defaults to `true`.
-    pub fn overlay(mut self, overlay: bool) -> Self {
-        self.overlay = overlay;
         self
     }
 

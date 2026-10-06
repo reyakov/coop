@@ -1,10 +1,9 @@
-use instant::Duration;
-
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    div, ease_in_out, percentage, Animation, AnimationExt as _, App, Hsla, IntoElement,
-    ParentElement, RenderOnce, Styled as _, Transformation, Window,
+    Animation, AnimationExt as _, App, Hsla, IntoElement, ParentElement, RenderOnce, Styled as _,
+    Transformation, Window, div, ease_in_out, percentage,
 };
+use instant::Duration;
 
 use crate::{Icon, IconName, Sizable, Size};
 
@@ -24,11 +23,6 @@ impl Indicator {
             icon: Icon::new(IconName::Loader),
             color: None,
         }
-    }
-
-    pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
-        self.icon = icon.into();
-        self
     }
 
     pub fn color(mut self, color: Hsla) -> Self {

@@ -1,6 +1,4 @@
-#![allow(dead_code)]
-
-use gpui::{Hsla, SharedString};
+use gpui::Hsla;
 
 /// A collection of colors that are used to style the UI.
 ///
@@ -9,21 +7,6 @@ use gpui::{Hsla, SharedString};
 pub struct ColorScaleStep(usize);
 
 impl ColorScaleStep {
-    /// All of the steps in a [`ColorScale`].
-    pub const ALL: [ColorScaleStep; 12] = [
-        Self::ONE,
-        Self::TWO,
-        Self::THREE,
-        Self::FOUR,
-        Self::FIVE,
-        Self::SIX,
-        Self::SEVEN,
-        Self::EIGHT,
-        Self::NINE,
-        Self::TEN,
-        Self::ELEVEN,
-        Self::TWELVE,
-    ];
     pub const EIGHT: Self = Self(8);
     pub const ELEVEN: Self = Self(11);
     pub const FIVE: Self = Self(5);
@@ -153,89 +136,8 @@ impl ColorScale {
     }
 }
 
-pub struct ColorScales {
-    pub gray: ColorScaleSet,
-    pub mauve: ColorScaleSet,
-    pub slate: ColorScaleSet,
-    pub sage: ColorScaleSet,
-    pub olive: ColorScaleSet,
-    pub sand: ColorScaleSet,
-    pub gold: ColorScaleSet,
-    pub bronze: ColorScaleSet,
-    pub brown: ColorScaleSet,
-    pub yellow: ColorScaleSet,
-    pub amber: ColorScaleSet,
-    pub orange: ColorScaleSet,
-    pub tomato: ColorScaleSet,
-    pub red: ColorScaleSet,
-    pub ruby: ColorScaleSet,
-    pub crimson: ColorScaleSet,
-    pub pink: ColorScaleSet,
-    pub plum: ColorScaleSet,
-    pub purple: ColorScaleSet,
-    pub violet: ColorScaleSet,
-    pub iris: ColorScaleSet,
-    pub indigo: ColorScaleSet,
-    pub blue: ColorScaleSet,
-    pub cyan: ColorScaleSet,
-    pub teal: ColorScaleSet,
-    pub jade: ColorScaleSet,
-    pub green: ColorScaleSet,
-    pub grass: ColorScaleSet,
-    pub lime: ColorScaleSet,
-    pub mint: ColorScaleSet,
-    pub sky: ColorScaleSet,
-    pub black: ColorScaleSet,
-    pub white: ColorScaleSet,
-}
-
-impl IntoIterator for ColorScales {
-    type IntoIter = std::vec::IntoIter<Self::Item>;
-    type Item = ColorScaleSet;
-
-    fn into_iter(self) -> Self::IntoIter {
-        vec![
-            self.gray,
-            self.mauve,
-            self.slate,
-            self.sage,
-            self.olive,
-            self.sand,
-            self.gold,
-            self.bronze,
-            self.brown,
-            self.yellow,
-            self.amber,
-            self.orange,
-            self.tomato,
-            self.red,
-            self.ruby,
-            self.crimson,
-            self.pink,
-            self.plum,
-            self.purple,
-            self.violet,
-            self.iris,
-            self.indigo,
-            self.blue,
-            self.cyan,
-            self.teal,
-            self.jade,
-            self.green,
-            self.grass,
-            self.lime,
-            self.mint,
-            self.sky,
-            self.black,
-            self.white,
-        ]
-        .into_iter()
-    }
-}
-
 /// Provides groups of [`ColorScale`]s for light and dark themes, as well as transparent versions of each scale.
 pub struct ColorScaleSet {
-    name: SharedString,
     light: ColorScale,
     dark: ColorScale,
     light_alpha: ColorScale,
@@ -243,15 +145,13 @@ pub struct ColorScaleSet {
 }
 
 impl ColorScaleSet {
-    pub fn new(
-        name: impl Into<SharedString>,
+    pub(crate) fn new(
         light: ColorScale,
         light_alpha: ColorScale,
         dark: ColorScale,
         dark_alpha: ColorScale,
     ) -> Self {
         Self {
-            name: name.into(),
             light,
             light_alpha,
             dark,
@@ -259,23 +159,19 @@ impl ColorScaleSet {
         }
     }
 
-    pub fn name(&self) -> &SharedString {
-        &self.name
-    }
-
-    pub fn light(&self) -> &ColorScale {
+    pub(crate) fn light(&self) -> &ColorScale {
         &self.light
     }
 
-    pub fn light_alpha(&self) -> &ColorScale {
+    pub(crate) fn light_alpha(&self) -> &ColorScale {
         &self.light_alpha
     }
 
-    pub fn dark(&self) -> &ColorScale {
+    pub(crate) fn dark(&self) -> &ColorScale {
         &self.dark
     }
 
-    pub fn dark_alpha(&self) -> &ColorScale {
+    pub(crate) fn dark_alpha(&self) -> &ColorScale {
         &self.dark_alpha
     }
 }

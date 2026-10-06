@@ -1,14 +1,11 @@
 /// Client name (Application name)
 pub const CLIENT_NAME: &str = "Coop";
 
-/// COOP's public key
-pub const COOP_PUBKEY: &str = "npub1j3rz3ndl902lya6ywxvy5c983lxs8mpukqnx4pa4lt5wrykwl5ys7wpw3x";
-
 /// App ID
 pub const APP_ID: &str = "su.reya.coop";
 
 /// Keyring name
-pub const MASTER_KEYRING: &str = "Coop Master Key";
+pub(crate) const MASTER_KEYRING: &str = "Coop Master Key";
 pub const USER_KEYRING: &str = "Coop User Credential";
 
 /// Default timeout for subscription
@@ -26,20 +23,12 @@ pub const DEVICE_GIFTWRAP: &str = "device-gift-wraps";
 /// Default subscription id for user gift wrap events
 pub const USER_GIFTWRAP: &str = "user-gift-wraps";
 
-/// Default timeout for Nostr Connect
-pub const NOSTR_CONNECT_TIMEOUT: u64 = 60;
-
-/// Default Nostr Connect relay
-pub const NOSTR_CONNECT_RELAY: &str = "wss://relay.nip46.com";
-
-/// Default vertex relays
-pub const WOT_RELAYS: [&str; 1] = ["wss://relay.vertexlab.io"];
+/// Default search relays
+pub(crate) const INDEXER_RELAYS: [&str; 2] =
+    ["wss://indexer.coracle.social", "wss://user.kindpag.es"];
 
 /// Default search relays
-pub const INDEXER_RELAYS: [&str; 2] = ["wss://indexer.coracle.social", "wss://user.kindpag.es"];
-
-/// Default search relays
-pub const SEARCH_RELAYS: [&str; 2] = ["wss://antiprimal.net", "wss://search.nos.today"];
+pub(crate) const SEARCH_RELAYS: [&str; 2] = ["wss://antiprimal.net", "wss://search.nos.today"];
 
 /// Default bootstrap relays
 pub const BOOTSTRAP_RELAYS: [&str; 4] = [

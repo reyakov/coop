@@ -15,9 +15,9 @@ use nostr::nips::nip94::Sha256Hash;
 use nostr_sdk::prelude::*;
 use sha2::{Digest, Sha256};
 
-pub const ALGORITHM: &str = "aes-gcm";
+pub(crate) const ALGORITHM: &str = "aes-gcm";
 
-pub const MAX_FILE_SIZE: usize = 25 * 1024 * 1024;
+pub(crate) const MAX_FILE_SIZE: usize = 25 * 1024 * 1024;
 
 const TAG_SHA256: &str = "x";
 const TAG_ORIGINAL_SHA256: &str = "ox";
@@ -30,7 +30,7 @@ const TAG_DIM: &str = "dim";
 const TAG_ALT: &str = "alt";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EncryptedFile {
+pub(crate) struct EncryptedFile {
     pub data: Vec<u8>,
     pub key: String,
     pub nonce: String,
@@ -115,7 +115,7 @@ impl FileAttachment {
     }
 }
 
-pub fn encrypt(data: &[u8]) -> Result<EncryptedFile, Error> {
+pub(crate) fn encrypt(data: &[u8]) -> Result<EncryptedFile, Error> {
     let key = Aes256Gcm::generate_key(OsRng);
     let nonce = AesGcm::<Aes256, U16>::generate_nonce(OsRng);
     let cipher = AesGcm::<Aes256, U16>::new(&key);
@@ -131,7 +131,7 @@ pub fn encrypt(data: &[u8]) -> Result<EncryptedFile, Error> {
     })
 }
 
-pub fn decrypt(data: &[u8], key: &str, nonce: &str) -> Result<Vec<u8>, Error> {
+pub(crate) fn decrypt(data: &[u8], key: &str, nonce: &str) -> Result<Vec<u8>, Error> {
     let key = decode(key, "decryption key")?;
     let nonce = decode(nonce, "decryption nonce")?;
 
@@ -159,7 +159,7 @@ pub fn decrypt(data: &[u8], key: &str, nonce: &str) -> Result<Vec<u8>, Error> {
     }
 }
 
-pub fn sha256_hex(data: &[u8]) -> String {
+pub(crate) fn sha256_hex(data: &[u8]) -> String {
     let hash: [u8; 32] = Sha256::digest(data).into();
 
     Sha256Hash::from_byte_array(hash).to_hex()
@@ -227,7 +227,7 @@ pub async fn upload_encrypted(
     Err(anyhow!("File upload not supported on web"))
 }
 
-pub async fn download_and_decrypt(
+pub(crate) async fn download_and_decrypt(
     url: &Url,
     key: &str,
     nonce: &str,
@@ -316,63 +316,6 @@ pub async fn download_and_decrypt_to_file(
     _cx: &AsyncApp,
 ) -> Result<PathBuf, Error> {
     Err(anyhow!("File download not supported on web"))
-}
-
-/// The cache file a decrypted blob for `plaintext_sha256` is written to.
-#[cfg(not(target_arch = "wasm32"))]
-fn blob_cache_path(plaintext_sha256: &str) -> PathBuf {
-    std::env::temp_dir()
-        .join("coop-blobs")
-        .join(plaintext_sha256)
-}
-
-/// Download an encrypted blob whose pointer carries the *plaintext* hash
-/// and write the decrypted bytes to a content-addressed cache file,
-/// so later renders skip the network.
-///
-/// The cache file carries no extension: `img` sniffs the format from the bytes.
-#[cfg(not(target_arch = "wasm32"))]
-pub async fn download_and_decrypt_to_cache(
-    url: &Url,
-    key: &str,
-    nonce: &str,
-    plaintext_sha256: &str,
-    cx: &AsyncApp,
-) -> Result<PathBuf, Error> {
-    let path = blob_cache_path(plaintext_sha256);
-
-    if smol::fs::metadata(&path).await.is_ok() {
-        return Ok(path);
-    }
-
-    let data = download_and_decrypt(url, key, nonce, None, cx).await?;
-
-    if !sha256_hex(&data).eq_ignore_ascii_case(plaintext_sha256) {
-        bail!("Blob hash mismatch");
-    }
-
-    let Some(parent) = path.parent() else {
-        bail!("Invalid blob cache path");
-    };
-    smol::fs::create_dir_all(parent).await?;
-
-    // Write under a temporary name first, so an interrupted download is never reused
-    let partial = path.with_extension("download");
-    smol::fs::write(&partial, data).await?;
-    smol::fs::rename(&partial, &path).await?;
-
-    Ok(path)
-}
-
-#[cfg(target_arch = "wasm32")]
-pub async fn download_and_decrypt_to_cache(
-    _url: &Url,
-    _key: &str,
-    _nonce: &str,
-    _plaintext_sha256: &str,
-    _cx: &AsyncApp,
-) -> Result<PathBuf, Error> {
-    Err(anyhow!("Blob download not supported on web"))
 }
 
 fn tag_value<'a>(tags: &'a Tags, name: &str) -> Option<&'a str> {

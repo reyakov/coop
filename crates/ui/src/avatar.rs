@@ -391,18 +391,6 @@ impl Avatar {
         self.seed = Some(seed.into());
         self
     }
-
-    /// Applies a grayscale filter to the avatar image.
-    pub fn grayscale(mut self, grayscale: bool) -> Self {
-        self.grayscale = grayscale;
-        self
-    }
-
-    /// Sets the border color of the avatar.
-    pub fn border_color(mut self, color: impl Into<Hsla>) -> Self {
-        self.border_color = Some(color.into());
-        self
-    }
 }
 
 impl Sizable for Avatar {

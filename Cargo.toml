@@ -9,17 +9,16 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
-gpui = { package = "gpui-pre", version = "0.3.5" }
-gpui_platform = { package = "gpui-pre-platform", version = "0.3.5", features = ["font-kit", "x11", "wayland"] }
-gpui_linux = { package = "gpui-pre-linux", version = "0.3.5" }
-gpui_windows = { package = "gpui-pre-windows", version = "0.3.5" }
-gpui_macos = { package = "gpui-pre-macos", version = "0.3.5" }
-gpui_web = { package = "gpui-pre-web", version = "0.3.5" }
-gpui_util = { package = "gpui-pre-util", version = "0.3.5" }
-sum_tree = { package = "gpui-pre-sum-tree", version = "0.3.5" }
-reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.5" }
+gpui = { package = "gpui-pre", version = "0.3.8" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.8", features = ["font-kit", "x11", "wayland"] }
+gpui_linux = { package = "gpui-pre-linux", version = "0.3.8" }
+gpui_windows = { package = "gpui-pre-windows", version = "0.3.8" }
+gpui_macos = { package = "gpui-pre-macos", version = "0.3.8" }
+gpui_web = { package = "gpui-pre-web", version = "0.3.8" }
+gpui_util = { package = "gpui-pre-util", version = "0.3.8" }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.8" }
 gpui_tokio = { path = "crates/gpui_tokio" }
-gpui-base = "0.7.0"
+gpui-base = "0.7.1"
 
 # Nostr
 nostr-lmdb = { git = "https://github.com/rust-nostr/nostr" }
@@ -48,7 +47,6 @@ chrono = { version = "0.4.38", features = ["wasmbind"] }
 futures = "0.3"
 itertools = "0.13.0"
 log = "0.4"
-oneshot = "0.1.10"
 flume = { version = "0.11.1", default-features = false, features = ["async", "select"] }
 rust-embed = { version = "8.5", features = ["include-exclude"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -58,13 +56,8 @@ smallvec = "1.14.0"
 smol = "2"
 webbrowser = "1.0.4"
 tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
-errno = { version = "0.3.14", default-features = false }
 instant = "0.1"
 ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier", "json"] }
-
-[patch.crates-io]
-# Use stacker's psm version which may have better WASM support
-psm = { git = "https://github.com/rust-lang/stacker", branch = "master" }
 
 [profile.release]
 strip = true

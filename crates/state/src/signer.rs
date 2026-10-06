@@ -50,7 +50,7 @@ impl UniversalSigner {
     }
 
     /// Swap the inner signer in-place. All clones see the new signer.
-    pub fn swap_inner<T>(&self, new_signer: T)
+    pub(crate) fn swap_inner<T>(&self, new_signer: T)
     where
         T: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + 'static,
         <T as AsyncGetPublicKey>::Error: Error + Send + Sync + 'static,
@@ -134,14 +134,6 @@ where
                 .await
                 .map_err(UniversalSignerError::new)
         })
-    }
-}
-
-impl UniversalSigner {
-    #[allow(dead_code)]
-    fn with_inner<R>(&self, f: impl FnOnce(&dyn InnerSigner) -> R) -> R {
-        let guard = self.inner.read().expect("RwLock poisoned");
-        f(&**guard)
     }
 }
 

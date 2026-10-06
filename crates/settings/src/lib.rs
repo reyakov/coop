@@ -38,14 +38,29 @@ macro_rules! setting_accessors {
     };
 }
 
+macro_rules! setting_getters {
+    ($(pub $field:ident: $type:ty),* $(,)?) => {
+        impl AppSettings {
+            $(
+                paste::paste! {
+                    pub fn [<get_ $field>](cx: &App) -> $type {
+                        Self::global(cx).read(cx).inner.read(cx).$field.clone()
+                    }
+                }
+            )*
+        }
+    };
+}
+
 setting_accessors! {
-    pub theme: Option<String>,
     pub theme_mode: ThemeMode,
     pub hide_avatar: bool,
     pub screening: bool,
     pub nip4e: bool,
-    pub trusted_relays: Vec<String>,
     pub file_server: Url,
+}
+
+setting_getters! {
     pub pinned_rooms: Vec<u64>,
     pub pinned_groups: Vec<String>,
 }
@@ -60,14 +75,6 @@ pub enum SignerKind {
 }
 
 impl SignerKind {
-    pub fn auto(&self) -> bool {
-        matches!(self, SignerKind::Auto)
-    }
-
-    pub fn user(&self) -> bool {
-        matches!(self, SignerKind::User)
-    }
-
     pub fn encryption(&self) -> bool {
         matches!(self, SignerKind::Encryption)
     }
@@ -158,12 +165,6 @@ impl Default for Settings {
     }
 }
 
-impl AsRef<Settings> for Settings {
-    fn as_ref(&self) -> &Settings {
-        self
-    }
-}
-
 struct GlobalAppSettings(Entity<AppSettings>);
 
 impl Global for GlobalAppSettings {}
@@ -180,11 +181,6 @@ impl AppSettings {
     /// Retrieve the global settings instance
     pub fn global(cx: &App) -> Entity<Self> {
         cx.global::<GlobalAppSettings>().0.clone()
-    }
-
-    /// The underlying settings entity, which notifies whenever any field changes.
-    pub fn entity(&self) -> &Entity<Settings> {
-        &self.inner
     }
 
     /// Set the global settings instance
@@ -311,30 +307,6 @@ impl AppSettings {
     /// Check if decoupling encryption key is enabled
     pub fn is_nip4e_enabled(&self, cx: &App) -> bool {
         self.inner.read(cx).nip4e
-    }
-
-    /// Check if the given relay is already authenticated
-    pub fn trusted_relay(&self, url: &RelayUrl, cx: &App) -> bool {
-        self.inner
-            .read(cx)
-            .trusted_relays
-            .iter()
-            .any(|relay| relay == url.as_str_without_trailing_slash())
-    }
-
-    /// Add a relay to the trusted list
-    pub fn add_trusted_relay(&mut self, url: &RelayUrl, cx: &mut Context<Self>) {
-        self.inner.update(cx, |this, cx| {
-            if !this
-                .trusted_relays
-                .iter()
-                .any(|relay| relay == url.as_str_without_trailing_slash())
-            {
-                this.trusted_relays
-                    .push(url.as_str_without_trailing_slash().to_string());
-                cx.notify();
-            }
-        });
     }
 
     /// Check if the chat room is pinned

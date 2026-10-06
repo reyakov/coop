@@ -78,7 +78,7 @@ pub struct Room {
     pub created_at: Timestamp,
 
     /// Subject of the room
-    pub subject: Option<SharedString>,
+    pub(crate) subject: Option<SharedString>,
 
     /// All members of the room
     pub(super) members: Vec<PublicKey>,
@@ -186,13 +186,16 @@ impl Room {
     }
 
     /// Sets this room is ongoing conversation
-    pub fn set_ongoing(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn set_ongoing(&mut self, cx: &mut Context<Self>) {
         self.kind = RoomKind::Ongoing;
         cx.notify();
     }
 
     /// Updates the creation timestamp of the room
-    pub fn set_created_at(&mut self, created_at: impl Into<Timestamp>, cx: &mut Context<Self>) {
+    pub(crate) fn set_created_at<T>(&mut self, created_at: T, cx: &mut Context<Self>)
+    where
+        T: Into<Timestamp>,
+    {
         self.created_at = created_at.into();
         cx.notify();
     }
@@ -297,7 +300,7 @@ impl Room {
     }
 
     /// Push a new message to the current room
-    pub fn push_message(&mut self, message: NewMessage, cx: &mut Context<Self>) {
+    pub(crate) fn push_message(&mut self, message: NewMessage, cx: &mut Context<Self>) {
         let created_at = message.rumor.created_at;
         let new_message = created_at > self.created_at;
 
@@ -307,11 +310,6 @@ impl Room {
         if new_message {
             self.set_created_at(created_at, cx);
         }
-    }
-
-    /// Emits a signal to reload the current room's messages.
-    pub fn emit_refresh(&mut self, cx: &mut Context<Self>) {
-        cx.emit(RoomEvent::Reload);
     }
 
     /// Get gossip relays for each member

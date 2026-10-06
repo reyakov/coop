@@ -101,7 +101,6 @@ pub struct ChatRegistry {
     /// Signal consumer task (cancelled on signer change)
     signal_consumer: Option<Task<Result<(), Error>>>,
     /// Fuzzy matcher for room search (cached; intentionally excluded from Debug)
-    #[allow(dead_code)]
     matcher: CachedMatcher,
     /// Subscriptions
     _subscriptions: SmallVec<[Subscription; 2]>,
@@ -549,26 +548,6 @@ impl ChatRegistry {
             .count()
     }
 
-    /// Count the number of messages seen by a given relay.
-    pub fn count_messages(&self, relay_url: &RelayUrl) -> usize {
-        self.seen
-            .read()
-            .unwrap()
-            .values()
-            .filter(|s| s.contains(relay_url))
-            .count()
-    }
-
-    /// Count the number of trash messages.
-    pub fn count_trash_messages(&self, cx: &App) -> usize {
-        self.trash.read(cx).len()
-    }
-
-    /// Get the trash messages entity.
-    pub fn trash(&self) -> Entity<BTreeSet<FailedMessage>> {
-        self.trash.clone()
-    }
-
     /// Get the relays that have seen a given rumor id.
     pub fn rumor_seen_on(&self, id: &EventId) -> Option<HashSet<RelayUrl>> {
         self.event_map
@@ -579,7 +558,7 @@ impl ChatRegistry {
     }
 
     /// Get the relays that have seen a given gift wrap id.
-    pub fn seen_on(&self, id: &EventId) -> HashSet<RelayUrl> {
+    pub(crate) fn seen_on(&self, id: &EventId) -> HashSet<RelayUrl> {
         self.seen
             .read()
             .unwrap()
@@ -589,7 +568,7 @@ impl ChatRegistry {
     }
 
     /// Add a new room to the start of list.
-    pub fn add_room<I>(&mut self, room: I, cx: &mut Context<Self>)
+    pub(crate) fn add_room<I>(&mut self, room: I, cx: &mut Context<Self>)
     where
         I: Into<Room>,
     {
@@ -623,7 +602,7 @@ impl ChatRegistry {
     }
 
     /// Sort rooms by their created at. Only notifies if order changed.
-    pub fn sort(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn sort(&mut self, cx: &mut Context<Self>) {
         let before: Vec<_> = self.rooms.iter().map(|ev| ev.read(cx).id).collect();
         self.rooms.sort_by_key(|ev| Reverse(ev.read(cx).created_at));
         let after: Vec<_> = self.rooms.iter().map(|ev| ev.read(cx).id).collect();
@@ -659,7 +638,7 @@ impl ChatRegistry {
     }
 
     /// Reset the registry.
-    pub fn reset(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn reset(&mut self, cx: &mut Context<Self>) {
         self.rooms.clear();
         self.room_index.clear();
         self.search.write().unwrap().clear();
@@ -701,7 +680,7 @@ impl ChatRegistry {
     }
 
     /// Load all rooms from the database.
-    pub fn get_rooms(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn get_rooms(&mut self, cx: &mut Context<Self>) {
         let task = self.query_chat_rooms(cx);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
@@ -796,7 +775,7 @@ impl ChatRegistry {
     ///
     /// - If the room doesn't exist, it will be created.
     /// - Updates room ordering based on the most recent messages.
-    pub fn new_message(&mut self, message: NewMessage, cx: &mut Context<Self>) {
+    pub(crate) fn new_message(&mut self, message: NewMessage, cx: &mut Context<Self>) {
         self.search.write().unwrap().insert(&message.rumor);
 
         let nostr = NostrRegistry::global(cx);
@@ -818,17 +797,6 @@ impl ChatRegistry {
             None => {
                 // Push the new room to the front of the list
                 self.add_room(message.rumor, cx);
-            }
-        }
-    }
-
-    /// Trigger a refresh of the opened chat rooms by their IDs
-    pub fn refresh_rooms(&mut self, ids: &[u64], cx: &mut Context<Self>) {
-        for room in self.rooms.iter() {
-            if ids.contains(&room.read(cx).id) {
-                room.update(cx, |this, cx| {
-                    this.emit_refresh(cx);
-                });
             }
         }
     }

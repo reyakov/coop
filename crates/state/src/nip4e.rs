@@ -8,9 +8,6 @@ pub struct Announcement {
 }
 
 impl Announcement {
-    /// Parse an announcement from an event, returning `None` when the `n`
-    /// tag is missing or malformed so callers never mistake the author's
-    /// identity key for an encryption key.
     pub fn from_event(event: &Event) -> Option<Self> {
         let public_key = event
             .tags
@@ -20,10 +17,6 @@ impl Announcement {
             .and_then(|c| PublicKey::parse(c).ok())?;
 
         Some(Self { public_key })
-    }
-
-    pub fn new(public_key: PublicKey) -> Self {
-        Self { public_key }
     }
 
     /// Returns the public key of the device that created this announcement.

@@ -1,20 +1,14 @@
 use std::marker::PhantomData;
-use instant::Duration;
 
-use futures::channel::oneshot;
 use futures::FutureExt;
+use futures::channel::oneshot;
 use gpui::{Context, Task, Window};
+use instant::Duration;
 
 pub struct DebouncedDelay<E: 'static> {
     task: Option<Task<()>>,
     cancel_channel: Option<oneshot::Sender<()>>,
     _phantom_data: PhantomData<E>,
-}
-
-impl<E: 'static> Default for DebouncedDelay<E> {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl<E: 'static> DebouncedDelay<E> {
@@ -62,5 +56,11 @@ impl<E: 'static> DebouncedDelay<E> {
                 task.await;
             }
         }));
+    }
+}
+
+impl<E: 'static> Default for DebouncedDelay<E> {
+    fn default() -> Self {
+        Self::new()
     }
 }

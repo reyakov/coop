@@ -45,7 +45,7 @@ pub enum DeviceEvent {
 }
 
 impl DeviceEvent {
-    pub fn error<T>(error: T) -> Self
+    pub(crate) fn error<T>(error: T) -> Self
     where
         T: Into<SharedString>,
     {
@@ -60,9 +60,9 @@ impl DeviceEvent {
 pub struct DeviceRegistry {
     signer: Entity<Option<UniversalSigner>>,
     /// Whether there is a pending request for encryption key approval
-    pub pending_request: bool,
+    pub(crate) pending_request: bool,
     /// Whether an announcement has been made for this device
-    pub announcement_existed: Arc<AtomicBool>,
+    pub(crate) announcement_existed: Arc<AtomicBool>,
     /// Relay notification listener
     notification_listener: Option<Task<Result<(), Error>>>,
     tasks: Vec<Task<Result<(), Error>>>,
@@ -398,7 +398,7 @@ impl DeviceRegistry {
     }
 
     /// Request encryption keys from other device
-    pub fn request(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn request(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();

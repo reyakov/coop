@@ -6,12 +6,12 @@ use std::str::FromStr;
 use anyhow::{Result, anyhow, bail};
 use nostr_sdk::prelude::*;
 
-pub const TIMELINE_WINDOW: usize = 50;
+pub(crate) const TIMELINE_WINDOW: usize = 50;
 
 const PREVIOUS_REFS: usize = 3;
 const PREVIOUS_REF_LEN: usize = 8;
 
-pub const RENDER_KINDS: [Kind; 5] = [
+pub(crate) const RENDER_KINDS: [Kind; 5] = [
     Kind::TextNote,
     Kind::ChatMessage,
     Kind::Thread,
@@ -19,21 +19,20 @@ pub const RENDER_KINDS: [Kind; 5] = [
     Kind::Reaction,
 ];
 
-pub const PIN_LIST: u16 = 39_005;
-pub const UPDATE_PIN_LIST: u16 = 9_010;
+pub(crate) const PIN_LIST: u16 = 39_005;
+pub(crate) const UPDATE_PIN_LIST: u16 = 9_010;
 
-pub const STATE_KINDS: [Kind; 6] = [
+pub(crate) const STATE_KINDS: [Kind; 5] = [
     Kind::GroupMetadata,
     Kind::GroupAdmins,
     Kind::GroupMembers,
     Kind::GroupRoles,
-    Kind::GroupLivekitParticipants,
     Kind::Custom(PIN_LIST),
 ];
 
-pub const MEMBERSHIP_KINDS: [Kind; 2] = [Kind::GroupPutUser, Kind::GroupRemoveUser];
+pub(crate) const MEMBERSHIP_KINDS: [Kind; 2] = [Kind::GroupPutUser, Kind::GroupRemoveUser];
 
-pub const ACTIVITY_KINDS: [Kind; 4] = [
+pub(crate) const ACTIVITY_KINDS: [Kind; 4] = [
     Kind::GroupPutUser,
     Kind::GroupRemoveUser,
     Kind::GroupJoinRequest,
@@ -126,22 +125,6 @@ impl GroupId {
 
     pub fn leave_request(&self, reason: &str) -> EventBuilder {
         EventBuilder::new(Kind::GroupLeaveRequest, reason).tag(self.h_tag())
-    }
-
-    pub fn put_user(
-        &self,
-        public_key: PublicKey,
-        roles: &[String],
-        previous: Option<Tag>,
-    ) -> EventBuilder {
-        let mut values = Vec::with_capacity(1 + roles.len());
-        values.push(public_key.to_hex());
-        values.extend(roles.iter().cloned());
-
-        EventBuilder::new(Kind::GroupPutUser, "")
-            .tag(self.h_tag())
-            .tag(Tag::custom("p", values))
-            .tag_maybe(previous)
     }
 
     pub fn remove_user(&self, public_key: PublicKey, previous: Option<Tag>) -> EventBuilder {
@@ -263,47 +246,6 @@ impl GroupKey {
         self.hash(&mut hasher);
         hasher.finish()
     }
-
-    pub fn livekit_token_url(&self) -> Result<Url> {
-        self.livekit_url(Some(self.id.as_str()))
-    }
-
-    pub fn livekit_probe_url(&self) -> Result<Url> {
-        self.livekit_url(None)
-    }
-
-    fn livekit_url(&self, group: Option<&str>) -> Result<Url> {
-        let mut url: Url = self.relay.clone().into();
-        let scheme = if self.relay.scheme().is_secure() {
-            "https"
-        } else {
-            "http"
-        };
-
-        url.set_path("/");
-        url.set_query(None);
-        url.set_fragment(None);
-        url.set_scheme(scheme)
-            .map_err(|_| anyhow!("{scheme} is not available for {}", self.relay))?;
-
-        {
-            let mut segments = url
-                .path_segments_mut()
-                .map_err(|_| anyhow!("{} cannot carry a path", self.relay))?;
-
-            segments
-                .pop_if_empty()
-                .push(".well-known")
-                .push("nip29")
-                .push("livekit");
-
-            if let Some(group) = group {
-                segments.push(group);
-            }
-        }
-
-        Ok(url)
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -347,14 +289,6 @@ impl GroupReference {
         Ok(Self { id, relay, invite })
     }
 
-    pub fn id(&self) -> &GroupId {
-        &self.id
-    }
-
-    pub fn relay(&self) -> &RelayUrl {
-        &self.relay
-    }
-
     pub fn invite(&self) -> Option<&str> {
         self.invite.as_deref()
     }
@@ -376,7 +310,7 @@ impl FromStr for GroupReference {
 pub struct GroupMetadata {
     pub name: Option<String>,
     pub picture: Option<String>,
-    pub banner: Option<String>,
+    pub(crate) banner: Option<String>,
     pub about: Option<String>,
     pub private: bool,
     pub restricted: bool,
@@ -478,7 +412,7 @@ impl GroupMetadata {
 #[derive(Debug, Clone)]
 pub struct GroupCandidate {
     pub key: GroupKey,
-    pub metadata: GroupMetadata,
+    pub(crate) metadata: GroupMetadata,
 }
 
 impl GroupCandidate {
@@ -539,10 +473,6 @@ impl GroupMembers {
         Ok(Self(event.tags.public_keys().collect()))
     }
 
-    pub fn contains(&self, public_key: &PublicKey) -> bool {
-        self.0.contains(public_key)
-    }
-
     pub fn iter(&self) -> impl Iterator<Item = &PublicKey> {
         self.0.iter()
     }
@@ -560,7 +490,6 @@ impl GroupMembers {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Role {
     pub name: String,
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -580,10 +509,7 @@ impl GroupRoles {
                 .next()
                 .ok_or_else(|| anyhow!("role tag has no name"))?;
 
-            roles.push(Role {
-                name: name.clone(),
-                description: fields.next().cloned(),
-            });
+            roles.push(Role { name: name.clone() });
         }
 
         Ok(Self(roles))
@@ -591,37 +517,6 @@ impl GroupRoles {
 
     pub fn roles(&self) -> &[Role] {
         &self.0
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct GroupParticipants(Vec<PublicKey>);
-
-impl GroupParticipants {
-    pub fn parse(event: &Event) -> Result<Self> {
-        if event.kind != Kind::GroupLivekitParticipants {
-            bail!("not a group participants event: kind {}", event.kind);
-        }
-
-        let mut participants = Vec::new();
-
-        for tag in event.tags.iter().filter(|tag| tag.kind() == "participant") {
-            let Some(public_key) = tag.content() else {
-                continue;
-            };
-
-            participants.push(PublicKey::parse(public_key)?);
-        }
-
-        Ok(Self(participants))
-    }
-
-    pub fn contains(&self, public_key: &PublicKey) -> bool {
-        self.0.contains(public_key)
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = &PublicKey> {
-        self.0.iter()
     }
 }
 
@@ -680,43 +575,14 @@ impl GroupPins {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LivekitSession {
-    pub token: String,
-    pub server_url: String,
-}
-
-impl LivekitSession {
-    pub fn parse(body: &[u8]) -> Result<Self> {
-        let value: serde_json::Value = serde_json::from_slice(body)?;
-
-        let token = value
-            .get("token")
-            .or_else(|| value.get("jwt"))
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| anyhow!("the AV response carries no token"))?;
-
-        let server_url = value
-            .get("url")
-            .or_else(|| value.get("server_url"))
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| anyhow!("the AV response carries no server url"))?;
-
-        Ok(Self {
-            token: token.to_owned(),
-            server_url: server_url.to_owned(),
-        })
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GroupListEntry {
+pub(crate) struct GroupListEntry {
     pub id: GroupId,
     pub relay: RelayUrl,
     pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct GroupList(Vec<GroupListEntry>);
+pub(crate) struct GroupList(Vec<GroupListEntry>);
 
 impl GroupList {
     pub fn parse(event: &Event) -> Result<Self> {
@@ -897,7 +763,7 @@ impl Activity {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct TimelineWindow(Vec<Event>);
+pub(crate) struct TimelineWindow(Vec<Event>);
 
 impl TimelineWindow {
     pub fn new() -> Self {

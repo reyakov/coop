@@ -1,10 +1,6 @@
-use std::sync::Arc;
-
 use chrono::{Local, TimeZone};
-use gpui::{Image, ImageFormat, SharedString};
+use gpui::SharedString;
 use nostr_sdk::prelude::*;
-use qrcode::QrCode;
-use qrcode::render::svg;
 
 const NOW: &str = "now";
 const SECONDS_IN_MINUTE: i64 = 60;
@@ -57,27 +53,5 @@ impl TimestampExt for Timestamp {
             d if d.num_days() < DAYS_IN_MONTH => SharedString::from(format!("{}d", d.num_days())),
             _ => SharedString::from(input_time.format("%b %d").to_string()),
         }
-    }
-}
-
-pub trait StringExt {
-    fn to_qr(&self) -> Option<Arc<Image>>;
-}
-
-impl<T: AsRef<str>> StringExt for T {
-    fn to_qr(&self) -> Option<Arc<Image>> {
-        let s = self.as_ref();
-        let code = QrCode::new(s).unwrap();
-        let svg = code
-            .render()
-            .min_dimensions(256, 256)
-            .dark_color(svg::Color("#000000"))
-            .light_color(svg::Color("#FFFFFF"))
-            .build();
-
-        Some(Arc::new(Image::from_bytes(
-            ImageFormat::Svg,
-            svg.into_bytes(),
-        )))
     }
 }

@@ -7,7 +7,7 @@ use gpui::{
 use smallvec::SmallVec;
 use theme::ActiveTheme;
 
-use crate::{h_flex, Disableable, StyledExt};
+use crate::{Disableable, StyledExt, h_flex};
 
 #[derive(IntoElement)]
 pub(crate) struct MenuItemElement {
@@ -61,7 +61,6 @@ impl MenuItemElement {
     }
 
     /// Set a handler for when the mouse enters the MenuItem.
-    #[allow(unused)]
     pub fn on_hover(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
         self.on_hover = Some(Box::new(handler));
         self

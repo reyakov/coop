@@ -2,7 +2,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, DefiniteLength, Edges, Entity, Hsla, InteractiveElement as _, IntoElement,
     MouseButton, ParentElement as _, Pixels, Rems, RenderOnce, StyleRefinement, Styled, TextAlign,
-    Window, div, px, relative,
+    Window, div, px,
 };
 use gpui_base::InputBase;
 use gpui_base::input::{InputBaseState, InputEditorStyle, InputMode, InputModeKind, TextareaMode};
@@ -134,18 +134,6 @@ impl<M: InputModeKind> Input<M> {
         self
     }
 
-    /// Set full height of the input (Multi-line only).
-    pub fn h_full(mut self) -> Self {
-        self.height = Some(relative(1.));
-        self
-    }
-
-    /// Set height of the input (Multi-line only).
-    pub fn h(mut self, height: impl Into<DefiniteLength>) -> Self {
-        self.height = Some(height.into());
-        self
-    }
-
     /// Set the appearance of the input field, if false the input field will no border, background.
     pub fn appearance(mut self, appearance: bool) -> Self {
         self.appearance = appearance;
@@ -158,21 +146,9 @@ impl<M: InputModeKind> Input<M> {
         self
     }
 
-    /// Set to enable toggle button for password mask state.
-    pub fn mask_toggle(mut self) -> Self {
-        self.mask_toggle = true;
-        self
-    }
-
     /// Set to disable the input field.
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
-        self
-    }
-
-    /// Set the tab index for the input, default is 0.
-    pub fn tab_index(mut self, index: isize) -> Self {
-        self.tab_index = index;
         self
     }
 

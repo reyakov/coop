@@ -271,7 +271,6 @@ version = "1.0.2"
 dependencies = [
  "anyhow",
  "gpui-pre",
- "log",
  "rust-embed",
 ]
 
@@ -1089,7 +1088,6 @@ dependencies = [
  "common",
  "gpui-pre",
  "itertools 0.13.0",
- "log",
  "nostr-sdk",
  "person",
  "regex",
@@ -1259,10 +1257,8 @@ dependencies = [
  "gpui-pre",
  "instant",
  "itertools 0.13.0",
- "log",
  "nostr",
  "nostr-sdk",
- "qrcode",
  "regex",
 ]
 
@@ -1403,7 +1399,6 @@ dependencies = [
  "assets",
  "auto_update",
  "chat",
- "common",
  "gpui-pre",
  "gpui-pre-linux",
  "gpui-pre-macos",
@@ -1427,9 +1422,7 @@ dependencies = [
 name = "coop_web"
 version = "1.0.2"
 dependencies = [
- "assets",
  "chat",
- "common",
  "console_error_panic_hook",
  "console_log",
  "getrandom 0.2.17",
@@ -4524,12 +4517,9 @@ dependencies = [
  "anyhow",
  "chat",
  "flume 0.11.1",
- "futures",
  "gpui-pre",
  "log",
- "nostr",
  "nostr-sdk",
- "serde_json",
  "smallvec",
  "state",
 ]
@@ -4560,10 +4550,8 @@ name = "nip4e"
 version = "1.0.2"
 dependencies = [
  "anyhow",
- "common",
  "flume 0.11.1",
  "gpui-pre",
- "instant",
  "log",
  "nostr-sdk",
  "person",
@@ -5864,15 +5852,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "qrcode"
-version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
-dependencies = [
- "image",
-]
-
-[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7094,7 +7073,6 @@ dependencies = [
  "gpui-pre",
  "gpui_tokio",
  "instant",
- "log",
  "mime_guess",
  "nostr",
  "nostr-blossom",
@@ -7463,7 +7441,6 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "smallvec",
  "tempfile",
 ]
 
@@ -7977,11 +7954,9 @@ dependencies = [
 name = "ui"
 version = "1.0.2"
 dependencies = [
- "common",
  "gpui-base",
  "gpui-pre",
  "instant",
- "log",
  "serde",
  "smallvec",
  "theme",
@@ -9431,7 +9406,6 @@ version = "1.0.2"
 dependencies = [
  "anyhow",
  "auto_update",
- "browser-signer-proxy",
  "chat",
  "chat_ui",
  "common",
@@ -9955,8 +9929,3 @@ dependencies = [
  "syn 3.0.6",
  "winnow 1.0.4",
 ]
-
-[[patch.unused]]
-name = "psm"
-version = "0.1.32"
-source = "git+https://github.com/rust-lang/stacker?branch=master#d3ac2df79a409c681329006e9b31c96ab9c5fcae"

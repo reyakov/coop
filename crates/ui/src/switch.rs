@@ -63,11 +63,6 @@ impl Switch {
         self.on_click = Some(Rc::new(handler));
         self
     }
-
-    pub fn label_side(mut self, label_side: Side) -> Self {
-        self.label_side = label_side;
-        self
-    }
 }
 
 impl Sizable for Switch {

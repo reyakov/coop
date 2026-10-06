@@ -2,17 +2,15 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    Anchor, AnyElement, App, Div, ElementId, InteractiveElement, IntoElement, ParentElement,
-    RenderOnce, ScrollHandle, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled,
-    Window, div, px,
+    AnyElement, App, Div, ElementId, InteractiveElement, IntoElement, ParentElement, RenderOnce,
+    ScrollHandle, Stateful, StatefulInteractiveElement as _, StyleRefinement, Styled, Window, div,
+    px,
 };
 use smallvec::SmallVec;
 use theme::ActiveTheme;
 
 use super::Tab;
-use crate::button::{Button, ButtonVariants as _};
-use crate::menu::{DropdownMenu as _, PopupMenuItem};
-use crate::{IconName, Selectable, Sizable, StyledExt, h_flex};
+use crate::{Selectable, StyledExt, h_flex};
 
 /// A TabBar element that contains multiple [`Tab`] items.
 #[derive(IntoElement)]
@@ -25,7 +23,6 @@ pub struct TabBar {
     children: SmallVec<[Tab; 2]>,
     last_empty_space: AnyElement,
     selected_index: Option<usize>,
-    menu: bool,
     segmented: bool,
     #[allow(clippy::type_complexity)]
     on_click: Option<Rc<dyn Fn(&usize, &mut Window, &mut App) + 'static>>,
@@ -44,7 +41,6 @@ impl TabBar {
             last_empty_space: div().w_3().into_any_element(),
             selected_index: None,
             on_click: None,
-            menu: false,
             segmented: false,
         }
     }
@@ -52,12 +48,6 @@ impl TabBar {
     /// Render the tabs as a segmented control inside a pill-shaped track.
     pub fn segmented(mut self, segmented: bool) -> Self {
         self.segmented = segmented;
-        self
-    }
-
-    /// Set whether to show the menu button when tabs overflow, default is false.
-    pub fn menu(mut self, menu: bool) -> Self {
-        self.menu = menu;
         self
     }
 
@@ -123,9 +113,6 @@ impl Styled for TabBar {
 
 impl RenderOnce for TabBar {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
-        let mut item_labels = Vec::new();
-        let selected_index = self.selected_index;
-        let on_click = self.on_click.clone();
         let segmented = self.segmented;
         let has_prefix = self.prefix.is_some();
 
@@ -155,7 +142,6 @@ impl RenderOnce for TabBar {
                     })
                     .gap_1()
                     .children(self.children.into_iter().enumerate().map(|(ix, child)| {
-                        item_labels.push((child.label.clone(), child.disabled));
                         let tab_bar_prefix = child.tab_bar_prefix.unwrap_or(true);
                         child
                             .ix(ix)
@@ -168,36 +154,10 @@ impl RenderOnce for TabBar {
                                 this.on_click(move |_, window, cx| on_click(&ix, window, cx))
                             })
                     }))
-                    .when(self.suffix.is_some() || self.menu, |this| {
+                    .when(self.suffix.is_some(), |this| {
                         this.child(self.last_empty_space)
                     }),
             )
-            .when(self.menu, |this| {
-                this.child(
-                    Button::new("more")
-                        .xsmall()
-                        .ghost()
-                        .icon(IconName::ChevronDown)
-                        .dropdown_menu(move |mut this, _, _| {
-                            this = this.scrollable(true);
-                            for (ix, (label, disabled)) in item_labels.iter().enumerate() {
-                                this = this.item(
-                                    PopupMenuItem::new(label.clone().unwrap_or_default())
-                                        .checked(selected_index == Some(ix))
-                                        .disabled(*disabled)
-                                        .when_some(on_click.clone(), |this, on_click| {
-                                            this.on_click(move |_, window, cx| {
-                                                on_click(&ix, window, cx)
-                                            })
-                                        }),
-                                )
-                            }
-
-                            this
-                        })
-                        .anchor(Anchor::TopRight),
-                )
-            })
             .when_some(self.suffix, |this, suffix| this.child(suffix))
     }
 }

@@ -52,8 +52,6 @@ impl Global for GlobalNostrRegistry {}
 /// Signer event.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum StateEvent {
-    /// The state is busy
-    Busy,
     /// User has no signer
     NoSigner,
     /// The signer has changed
@@ -67,7 +65,7 @@ impl StateEvent {
         matches!(self, StateEvent::SignerChanged)
     }
 
-    pub fn error<T>(error: T) -> Self
+    pub(crate) fn error<T>(error: T) -> Self
     where
         T: Into<String>,
     {
@@ -178,11 +176,6 @@ impl NostrRegistry {
     /// Get the current user's public key
     pub fn current_user(&self) -> Option<PublicKey> {
         self.current_user
-    }
-
-    /// Whether the initial credential check has concluded
-    pub fn ready(&self) -> bool {
-        self.ready
     }
 
     fn mark_ready(&mut self, cx: &mut Context<Self>) {
@@ -523,70 +516,6 @@ impl NostrRegistry {
             }
 
             Ok(results)
-        })
-    }
-
-    /// Perform a WoT (via Vertex) search for a given query.
-    pub fn wot_search(&self, query: &str, cx: &App) -> Task<Result<Vec<PublicKey>, Error>> {
-        let client = self.client();
-        let query = query.to_string();
-        let signer = self.signer.clone();
-
-        cx.background_spawn(async move {
-            // Construct a vertex request event
-            let event = EventBuilder::new(Kind::Custom(5315), "")
-                .tags(vec![
-                    Tag::custom("param", vec!["search", &query]),
-                    Tag::custom("param", vec!["limit", "10"]),
-                ])
-                .finalize_async(&signer)
-                .await?;
-
-            // Send the event to vertex relays
-            let output = client.send_event(&event).to(WOT_RELAYS).await?;
-
-            // Construct a filter to get the response or error from vertex
-            let filter = Filter::new()
-                .kinds(vec![Kind::Custom(6315), Kind::Custom(7000)])
-                .event(output.id().to_owned());
-
-            // Construct target for subscription
-            let target: HashMap<&str, Vec<Filter>> = WOT_RELAYS
-                .into_iter()
-                .map(|relay| (relay, vec![filter.clone()]))
-                .collect();
-
-            // Stream events from the wot relays
-            let mut stream = client
-                .stream_events(target)
-                .timeout(Duration::from_secs(TIMEOUT))
-                .await?;
-
-            while let Some((_url, res)) = stream.next().await {
-                if let Ok(event) = res {
-                    match event.kind {
-                        Kind::Custom(6315) => {
-                            let content: serde_json::Value = serde_json::from_str(&event.content)?;
-                            let pubkeys: Vec<PublicKey> = content
-                                .as_array()
-                                .into_iter()
-                                .flatten()
-                                .filter_map(|item| item.as_object())
-                                .filter_map(|obj| obj.get("pubkey").and_then(|v| v.as_str()))
-                                .filter_map(|pubkey_str| PublicKey::parse(pubkey_str).ok())
-                                .collect();
-
-                            return Ok(pubkeys);
-                        }
-                        Kind::Custom(7000) => {
-                            return Err(anyhow!("Search error"));
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
-            Err(anyhow!("No results for query: {query}"))
         })
     }
 }

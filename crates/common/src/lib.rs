@@ -4,7 +4,6 @@ pub use event::*;
 pub use media_extractor::*;
 pub use parser::*;
 pub use paths::*;
-pub use range::*;
 
 mod debounced_delay;
 mod display;
@@ -12,4 +11,3 @@ mod event;
 mod media_extractor;
 mod parser;
 mod paths;
-mod range;

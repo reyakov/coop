@@ -22,7 +22,6 @@ gpui.workspace = true
 nostr-sdk.workspace = true
 instant.workspace = true
 nostr-connect.workspace = true
-browser-signer-proxy = { path = "../browser-signer-proxy" }
 
 anyhow.workspace = true
 serde.workspace = true

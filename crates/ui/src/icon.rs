@@ -1,19 +1,14 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, Hsla, IntoElement, Radians, Render, RenderOnce,
-    SharedString, StyleRefinement, Styled, Svg, Transformation, Window, svg,
+    AnyElement, App, Context, Hsla, IntoElement, Radians, Render, RenderOnce, SharedString,
+    StyleRefinement, Styled, Svg, Transformation, Window, svg,
 };
 use theme::ActiveTheme;
 
 use crate::{Sizable, Size};
 
-pub trait IconNamed {
-    /// Returns the embedded path of the icon.
-    fn path(self) -> SharedString;
-}
-
-impl<T: IconNamed> From<T> for Icon {
-    fn from(value: T) -> Self {
+impl From<IconName> for Icon {
+    fn from(value: IconName) -> Self {
         Icon::build(value)
     }
 }
@@ -95,13 +90,6 @@ pub enum IconName {
 }
 
 impl IconName {
-    /// Return the icon as a Entity<Icon>
-    pub fn view(self, cx: &mut App) -> Entity<Icon> {
-        Icon::build(self).view(cx)
-    }
-}
-
-impl IconNamed for IconName {
     fn path(self) -> SharedString {
         match self {
             Self::ArrowLeft => "icons/arrow-left.svg",
@@ -232,7 +220,7 @@ impl Icon {
         icon.into()
     }
 
-    fn build(name: impl IconNamed) -> Self {
+    fn build(name: IconName) -> Self {
         Self::default().path(name.path())
     }
 
@@ -244,11 +232,6 @@ impl Icon {
         self
     }
 
-    /// Create a new view for the icon
-    pub fn view(self, cx: &mut App) -> Entity<Icon> {
-        cx.new(|_| self)
-    }
-
     pub fn transform(mut self, transformation: gpui::Transformation) -> Self {
         self.base = self.base.with_transformation(transformation);
         self
@@ -256,14 +239,6 @@ impl Icon {
 
     pub fn empty() -> Self {
         Self::default()
-    }
-
-    /// Rotate the icon by the given angle
-    pub fn rotate(mut self, radians: impl Into<Radians>) -> Self {
-        self.base = self
-            .base
-            .with_transformation(Transformation::rotate(radians));
-        self
     }
 }
 

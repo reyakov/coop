@@ -11,8 +11,6 @@ use crate::source::{AssetFilter, GiteaSource, asset_filter_for};
 
 mod source;
 
-pub use gpui_updater_core::UpdateStatus as AutoUpdateStatus;
-
 const GITEA_API_BASE: &str = "https://git.reya.info/api/v1";
 const GITEA_REPO_OWNER: &str = "reya";
 const GITEA_REPO_NAME: &str = "coop";
@@ -73,27 +71,15 @@ pub struct AutoUpdater {
     status: UpdateStatus,
     /// The newer release found by the last successful check, if any.
     available: Option<Release>,
-    /// Currently running app version.
-    pub version: Version,
     /// The in-flight check or download, if any.
     task: Option<Task<()>>,
 }
 
 impl AutoUpdater {
-    /// Whether auto-update is available for this installation.
-    pub fn is_available(cx: &App) -> bool {
-        cx.try_global::<GlobalAutoUpdater>().is_some()
-    }
-
     /// Retrieve the global auto updater instance, if one was initialized.
     pub fn try_global(cx: &App) -> Option<Entity<Self>> {
         cx.try_global::<GlobalAutoUpdater>()
             .map(|global| global.0.clone())
-    }
-
-    /// Retrieve the global auto updater instance.
-    pub fn global(cx: &App) -> Entity<Self> {
-        cx.global::<GlobalAutoUpdater>().0.clone()
     }
 
     fn set_global(state: Entity<Self>, cx: &mut App) {
@@ -119,14 +105,8 @@ impl AutoUpdater {
             engine,
             status: UpdateStatus::Idle,
             available: None,
-            version,
             task: None,
         }
-    }
-
-    /// Whether nothing is happening, so the UI can hide the status line.
-    pub fn idle(&self) -> bool {
-        matches!(self.status, UpdateStatus::Idle)
     }
 
     /// Whether the running version is the newest release, so the status line can be hidden.

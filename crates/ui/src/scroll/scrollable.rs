@@ -31,23 +31,6 @@ pub trait ScrollableElement: InteractiveElement + Styled + ParentElement + Eleme
     fn vertical_scrollbar<H: ScrollbarHandle + Clone>(self, scroll_handle: &H) -> Self {
         self.scrollbar(scroll_handle, ScrollbarAxis::Vertical)
     }
-    /// Adds a horizontal scrollbar to the element.
-    #[track_caller]
-    fn horizontal_scrollbar<H: ScrollbarHandle + Clone>(self, scroll_handle: &H) -> Self {
-        self.scrollbar(scroll_handle, ScrollbarAxis::Horizontal)
-    }
-
-    /// Almost equivalent to [`StatefulInteractiveElement::overflow_scroll`], but adds scrollbars.
-    #[track_caller]
-    fn overflow_scrollbar(self) -> Scrollable<Self> {
-        Scrollable::new(self, ScrollbarAxis::Both)
-    }
-
-    /// Almost equivalent to [`StatefulInteractiveElement::overflow_x_scroll`], but adds Horizontal scrollbar.
-    #[track_caller]
-    fn overflow_x_scrollbar(self) -> Scrollable<Self> {
-        Scrollable::new(self, ScrollbarAxis::Horizontal)
-    }
 
     /// Almost equivalent to [`StatefulInteractiveElement::overflow_y_scroll`], but adds Vertical scrollbar.
     #[track_caller]

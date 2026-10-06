@@ -315,7 +315,7 @@ pub struct GroupPanel {
 }
 
 impl GroupPanel {
-    pub fn new(group: Entity<Group>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(group: Entity<Group>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let (id, name, count, head) = {
             let group = group.read(cx);
             let rows = group.rows();

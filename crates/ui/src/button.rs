@@ -208,32 +208,12 @@ impl Button {
         self
     }
 
-    /// Set true to show the indicator.
-    pub fn indicator(mut self) -> Self {
-        self.indicator = true;
-        self
-    }
-
     /// Add click handler.
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_click = Some(Rc::new(handler));
-        self
-    }
-
-    /// Add hover handler, the bool parameter indicates whether the mouse is hovering.
-    pub fn on_hover(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
-        self.on_hover = Some(Rc::new(handler));
-        self
-    }
-
-    /// Set the tab index of the button, it will be used to focus the button by tab key.
-    ///
-    /// Default is 0.
-    pub fn tab_index(mut self, tab_index: isize) -> Self {
-        self.tab_index = tab_index;
         self
     }
 

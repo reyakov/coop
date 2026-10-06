@@ -1,6 +1,4 @@
-use std::rc::Rc;
-
-use gpui::{App, ElementId, Entity, Window};
+use gpui::{App, ElementId, Window};
 
 use crate::Root;
 use crate::dialog::Dialog;
@@ -18,9 +16,6 @@ pub trait WindowExtension: Sized {
 
     /// Closes all active Dialogs.
     fn close_all_dialogs(&mut self, cx: &mut App);
-
-    /// Returns number of notifications.
-    fn notifications(&mut self, cx: &mut App) -> Rc<Vec<Entity<Notification>>>;
 
     /// Pushes a notification to the notification list.
     fn push_notification<T>(&mut self, note: T, cx: &mut App)
@@ -101,10 +96,5 @@ impl WindowExtension for Window {
         Root::update(self, cx, move |root, window, cx| {
             root.clear_notifications(window, cx);
         })
-    }
-
-    fn notifications(&mut self, cx: &mut App) -> Rc<Vec<Entity<Notification>>> {
-        let entity = Root::read(self, cx).notification.clone();
-        Rc::new(entity.read(cx).notifications())
     }
 }

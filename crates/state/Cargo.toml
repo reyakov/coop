@@ -17,7 +17,6 @@ gpui.workspace = true
 instant.workspace = true
 flume.workspace = true
 futures.workspace = true
-log.workspace = true
 anyhow.workspace = true
 webbrowser.workspace = true
 serde_json.workspace = true

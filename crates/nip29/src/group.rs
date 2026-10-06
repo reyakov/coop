@@ -3,10 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use chat::Message;
-use futures::io::AsyncReadExt;
-use gpui::http_client::{AsyncBody, Builder, HttpRequestExt, Method, RedirectPolicy, StatusCode};
 use gpui::{App, AppContext, Context, EventEmitter, SharedString, Task};
-use nostr::nips::nip98::{HttpData, HttpMethod};
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
@@ -14,14 +11,13 @@ use state::NostrRegistry;
 use crate::LOCAL_KEYS;
 use crate::protocol::{
     ACTIVITY_KINDS, Activity, GroupAdmins, GroupId, GroupKey, GroupMembers, GroupMetadata,
-    GroupParticipants, GroupPins, GroupRoles, LivekitSession, MEMBERSHIP_KINDS, Membership,
-    PIN_LIST, Pin, RENDER_KINDS, STATE_KINDS, TimelineWindow,
+    GroupPins, GroupRoles, MEMBERSHIP_KINDS, Membership, PIN_LIST, Pin, RENDER_KINDS, STATE_KINDS,
+    TimelineWindow,
 };
 
 const REPLAY_LIMIT: usize = 100;
 const PAGE_LIMIT: usize = 50;
 const PAGE_TIMEOUT: Duration = Duration::from_secs(10);
-const LIVEKIT_TIMEOUT: Duration = Duration::from_secs(10);
 const LEAVE_WINDOW_SECS: u64 = 5 * 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -75,7 +71,6 @@ pub struct Group {
     members: GroupMembers,
     admins: GroupAdmins,
     roles: GroupRoles,
-    participants: GroupParticipants,
     pins: GroupPins,
     membership: Membership,
     membership_events: Vec<Event>,
@@ -103,7 +98,6 @@ impl Group {
             members: GroupMembers::default(),
             admins: GroupAdmins::default(),
             roles: GroupRoles::default(),
-            participants: GroupParticipants::default(),
             pins: GroupPins::default(),
             membership: Membership::Unknown,
             membership_events: Vec::new(),
@@ -163,10 +157,6 @@ impl Group {
         &self.roles
     }
 
-    pub fn participants(&self) -> &GroupParticipants {
-        &self.participants
-    }
-
     pub fn pins(&self) -> &GroupPins {
         &self.pins
     }
@@ -190,10 +180,6 @@ impl Group {
         })
     }
 
-    pub fn loading(&self) -> bool {
-        self.loading
-    }
-
     pub fn loading_more(&self) -> bool {
         self.loading_more
     }
@@ -214,10 +200,6 @@ impl Group {
         self.refused.as_deref()
     }
 
-    pub fn previous_tag(&self, me: PublicKey) -> Option<Tag> {
-        self.window.previous_tag(me)
-    }
-
     pub fn send_message(
         &mut self,
         content: &str,
@@ -234,15 +216,6 @@ impl Group {
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
         self.dispatch(move |id, prev| id.reaction(target, &emoji, prev), cx)
-    }
-
-    pub fn put_user(
-        &mut self,
-        public_key: PublicKey,
-        roles: Vec<String>,
-        cx: &mut Context<Self>,
-    ) -> Task<Result<()>> {
-        self.dispatch(move |id, prev| id.put_user(public_key, &roles, prev), cx)
     }
 
     pub fn remove_user(
@@ -419,68 +392,6 @@ impl Group {
         self.loading_more = false;
         cx.emit(GroupEvent::Updated);
         cx.notify();
-    }
-
-    pub fn livekit_session(&self, cx: &App) -> Task<Result<LivekitSession>> {
-        let url = match self.key.livekit_token_url() {
-            Ok(url) => url,
-            Err(error) => return Task::ready(Err(error)),
-        };
-
-        let nostr = NostrRegistry::global(cx);
-        let signer = nostr.read(cx).signer();
-
-        let client = cx.http_client();
-
-        cx.background_spawn(async move {
-            let authorization = HttpData::new(url.clone(), HttpMethod::GET)
-                .to_authorization(&signer)
-                .await?;
-
-            let request = Builder::new()
-                .uri(url.as_str())
-                .method(Method::GET)
-                .header("Authorization", authorization)
-                .follow_redirects(RedirectPolicy::NoFollow)
-                .timeout(LIVEKIT_TIMEOUT)
-                .body(AsyncBody::default())?;
-
-            let response = client.send(request).await?;
-
-            if !response.status().is_success() {
-                bail!(
-                    "nip29: the AV token endpoint answered {}",
-                    response.status()
-                );
-            }
-
-            let mut body = Vec::new();
-            response.into_body().read_to_end(&mut body).await?;
-
-            LivekitSession::parse(&body)
-        })
-    }
-
-    pub fn livekit_supported(&self, cx: &App) -> Task<Result<bool>> {
-        let url = match self.key.livekit_probe_url() {
-            Ok(url) => url,
-            Err(error) => return Task::ready(Err(error)),
-        };
-
-        let client = cx.http_client();
-
-        cx.background_spawn(async move {
-            let request = Builder::new()
-                .uri(url.as_str())
-                .method(Method::GET)
-                .follow_redirects(RedirectPolicy::NoFollow)
-                .timeout(LIVEKIT_TIMEOUT)
-                .body(AsyncBody::default())?;
-
-            let response = client.send(request).await?;
-
-            Ok(response.status() == StatusCode::NO_CONTENT)
-        })
     }
 
     pub(crate) fn save_envelope(&self, event: Event, cx: &App) -> Task<Result<()>> {
@@ -679,10 +590,6 @@ impl Group {
             },
             Kind::GroupRoles => match GroupRoles::parse(event) {
                 Ok(roles) => self.roles = roles,
-                Err(_) => return false,
-            },
-            Kind::GroupLivekitParticipants => match GroupParticipants::parse(event) {
-                Ok(participants) => self.participants = participants,
                 Err(_) => return false,
             },
             Kind::Custom(PIN_LIST) => match GroupPins::parse(event) {

@@ -156,13 +156,6 @@ impl Notification {
         self
     }
 
-    /// Create an info notification with the given message.
-    pub fn info(message: impl Into<SharedString>) -> Self {
-        Self::new()
-            .message(message)
-            .with_kind(NotificationKind::Info)
-    }
-
     /// Create a success notification with the given message.
     pub fn success(message: impl Into<SharedString>) -> Self {
         Self::new()
@@ -209,14 +202,6 @@ impl Notification {
         self
     }
 
-    /// Set the icon of the notification.
-    ///
-    /// If icon is None, the notification will use the default icon of the type.
-    pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
-        self.icon = Some(icon.into());
-        self
-    }
-
     /// Set the type of the notification, default is NotificationType::Info.
     pub fn with_kind(mut self, kind: NotificationKind) -> Self {
         self.kind = Some(kind);
@@ -226,15 +211,6 @@ impl Notification {
     /// Set the auto hide of the notification, default is true.
     pub fn autohide(mut self, autohide: bool) -> Self {
         self.autohide = autohide;
-        self
-    }
-
-    /// Set the click callback of the notification.
-    pub fn on_click(
-        mut self,
-        on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.on_click = Some(Rc::new(on_click));
         self
     }
 
@@ -610,13 +586,6 @@ impl NotificationList {
             }
         }
         cx.notify();
-    }
-
-    pub fn notifications(&self) -> Vec<Entity<Notification>> {
-        self.notifications
-            .iter()
-            .map(|(_, note, _)| note.clone())
-            .collect()
     }
 }
 

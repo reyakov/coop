@@ -85,23 +85,6 @@ impl PopupMenuItem {
         }
     }
 
-    /// Create a new menu item with custom element render.
-    #[inline]
-    pub fn element<F, E>(builder: F) -> Self
-    where
-        F: Fn(&mut Window, &mut App) -> E + 'static,
-        E: IntoElement,
-    {
-        PopupMenuItem::ElementItem {
-            icon: None,
-            disabled: false,
-            checked: false,
-            action: None,
-            render: Box::new(move |window, cx| builder(window, cx).into_any_element()),
-            handler: None,
-        }
-    }
-
     /// Create a new submenu item that opens another popup menu.
     #[inline]
     pub fn submenu(label: impl Into<SharedString>, menu: Entity<PopupMenu>) -> Self {
@@ -214,21 +197,6 @@ impl PopupMenuItem {
         self
     }
 
-    /// Create a link menu item.
-    #[inline]
-    pub fn link(label: impl Into<SharedString>, href: impl Into<String>) -> Self {
-        let href = href.into();
-        PopupMenuItem::Item {
-            icon: None,
-            label: label.into(),
-            disabled: false,
-            checked: false,
-            action: None,
-            is_link: true,
-            handler: Some(Rc::new(move |_, _, cx| cx.open_url(&href))),
-        }
-    }
-
     #[inline]
     fn is_clickable(&self) -> bool {
         !matches!(self, PopupMenuItem::Separator)
@@ -334,25 +302,9 @@ impl PopupMenu {
         cx.new(|cx| f(Self::new(cx), window, cx))
     }
 
-    /// Set the focus handle of Entity to handle actions.
-    ///
-    /// When the menu is dismissed or before an action is triggered, the focus will be returned to this handle.
-    ///
-    /// Then the action will be dispatched to this handle.
-    pub fn action_context(mut self, handle: FocusHandle) -> Self {
-        self.action_context = Some(handle);
-        self
-    }
-
     /// Set min width of the popup menu, default is 120px
     pub fn min_w(mut self, width: impl Into<Pixels>) -> Self {
         self.min_width = Some(width.into());
-        self
-    }
-
-    /// Set max width of the popup menu, default is 500px
-    pub fn max_w(mut self, width: impl Into<Pixels>) -> Self {
-        self.max_width = Some(width.into());
         self
     }
 
@@ -376,32 +328,9 @@ impl PopupMenu {
         self
     }
 
-    /// Set the side to show check icon, default is `Side::Left`.
-    pub fn check_side(mut self, side: Side) -> Self {
-        self.check_side = side;
-        self
-    }
-
-    /// Set the menu to show external link icon, default is true.
-    pub fn external_link_icon(mut self, visible: bool) -> Self {
-        self.external_link_icon = visible;
-        self
-    }
-
     /// Add Menu Item
     pub fn menu(self, label: impl Into<SharedString>, action: Box<dyn Action>) -> Self {
         self.menu_with_disabled(label, action, false)
-    }
-
-    /// Add Menu Item with enable state
-    pub fn menu_with_enable(
-        mut self,
-        label: impl Into<SharedString>,
-        action: Box<dyn Action>,
-        enable: bool,
-    ) -> Self {
-        self.add_menu_item(label, None, action, !enable, false);
-        self
     }
 
     /// Add Menu Item with disabled state
@@ -421,70 +350,14 @@ impl PopupMenu {
         self
     }
 
-    /// Add Menu to open link
-    pub fn link(self, label: impl Into<SharedString>, href: impl Into<String>) -> Self {
-        self.link_with_disabled(label, href, false)
-    }
-
-    /// Add Menu to open link with disabled state
-    pub fn link_with_disabled(
-        mut self,
-        label: impl Into<SharedString>,
-        href: impl Into<String>,
-        disabled: bool,
-    ) -> Self {
-        let href = href.into();
-        self.menu_items
-            .push(PopupMenuItem::link(label, href).disabled(disabled));
-        self
-    }
-
-    /// Add Menu to open link
-    pub fn link_with_icon(
-        self,
-        label: impl Into<SharedString>,
-        icon: impl Into<Icon>,
-        href: impl Into<String>,
-    ) -> Self {
-        self.link_with_icon_and_disabled(label, icon, href, false)
-    }
-
-    /// Add Menu to open link with icon and disabled state
-    fn link_with_icon_and_disabled(
-        mut self,
-        label: impl Into<SharedString>,
-        icon: impl Into<Icon>,
-        href: impl Into<String>,
-        disabled: bool,
-    ) -> Self {
-        let href = href.into();
-        self.menu_items.push(
-            PopupMenuItem::link(label, href)
-                .icon(icon)
-                .disabled(disabled),
-        );
-        self
-    }
-
     /// Add Menu Item with Icon.
     pub fn menu_with_icon(
-        self,
-        label: impl Into<SharedString>,
-        icon: impl Into<Icon>,
-        action: Box<dyn Action>,
-    ) -> Self {
-        self.menu_with_icon_and_disabled(label, icon, action, false)
-    }
-
-    /// Add Menu Item with Icon and disabled state
-    pub fn menu_with_icon_and_disabled(
         mut self,
         label: impl Into<SharedString>,
         icon: impl Into<Icon>,
         action: Box<dyn Action>,
-        disabled: bool,
     ) -> Self {
-        self.add_menu_item(label, Some(icon.into()), action, disabled, false);
+        self.add_menu_item(label, Some(icon.into()), action, false, false);
         self
     }
 
@@ -507,41 +380,6 @@ impl PopupMenu {
         disabled: bool,
     ) -> Self {
         self.add_menu_item(label, None, action, disabled, checked);
-        self
-    }
-
-    /// Add Menu Item with custom element render with check state
-    pub fn menu_element_with_check<F, E>(
-        self,
-        checked: bool,
-        action: Box<dyn Action>,
-        builder: F,
-    ) -> Self
-    where
-        F: Fn(&mut Window, &mut App) -> E + 'static,
-        E: IntoElement,
-    {
-        self.menu_element_with_check_and_disabled(checked, action, false, builder)
-    }
-
-    /// Add Menu Item with custom element render with check state and disabled state
-    fn menu_element_with_check_and_disabled<F, E>(
-        mut self,
-        checked: bool,
-        action: Box<dyn Action>,
-        disabled: bool,
-        builder: F,
-    ) -> Self
-    where
-        F: Fn(&mut Window, &mut App) -> E + 'static,
-        E: IntoElement,
-    {
-        self.menu_items.push(
-            PopupMenuItem::element(builder)
-                .action(action)
-                .checked(checked)
-                .disabled(disabled),
-        );
         self
     }
 
@@ -634,10 +472,6 @@ impl PopupMenu {
         }
 
         None
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.menu_items.is_empty()
     }
 
     fn clickable_menu_items(&self) -> impl Iterator<Item = (usize, &PopupMenuItem)> {

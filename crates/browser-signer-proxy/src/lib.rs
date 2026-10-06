@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -49,8 +49,6 @@ impl Message {
 enum RequestMethod {
     GetPublicKey,
     SignEvent,
-    Nip04Encrypt,
-    Nip04Decrypt,
     Nip44Encrypt,
     Nip44Decrypt,
 }
@@ -60,8 +58,6 @@ impl RequestMethod {
         match self {
             Self::GetPublicKey => "get_public_key",
             Self::SignEvent => "sign_event",
-            Self::Nip04Encrypt => "nip04_encrypt",
-            Self::Nip04Decrypt => "nip04_decrypt",
             Self::Nip44Encrypt => "nip44_encrypt",
             Self::Nip44Decrypt => "nip44_decrypt",
         }
@@ -205,36 +201,6 @@ impl Default for BrowserSignerProxyOptions {
     }
 }
 
-impl BrowserSignerProxyOptions {
-    /// Sets the timeout duration.
-    pub const fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
-        self
-    }
-
-    /// Sets the IP address.
-    pub const fn ip_addr(mut self, new_ip: IpAddr) -> Self {
-        self.addr = SocketAddr::new(new_ip, self.addr.port());
-        self
-    }
-
-    /// Sets the port number.
-    pub const fn port(mut self, new_port: u16) -> Self {
-        self.addr = SocketAddr::new(self.addr.ip(), new_port);
-        self
-    }
-
-    /// Sets a custom html page.
-    ///
-    /// The page must include `/proxy.js` script (`<script src="/proxy.js"></script>`)
-    /// which will handle communication with the server and update the element
-    /// with id `nip07-proxy-status` with the status.
-    pub const fn custom_html_page(mut self, custom_html: &'static str) -> Self {
-        self.custom_html = custom_html;
-        self
-    }
-}
-
 impl BrowserSignerProxy {
     /// Construct a new browser signer proxy
     pub fn new(options: BrowserSignerProxyOptions) -> Self {
@@ -255,14 +221,8 @@ impl BrowserSignerProxy {
         }
     }
 
-    /// Indicates whether the server is currently running.
-    #[inline]
-    pub fn is_started(&self) -> bool {
-        self.inner.is_started.load(Ordering::SeqCst)
-    }
-
-    /// Checks if there is an open browser tab ready to respond to requests by
-    /// verifying the time since the last pending request.
+    /// Checks if there is an open browser tab ready to respond
+    /// to requests by verifying the time since the last pending request.
     #[inline]
     pub fn is_session_active(&self) -> bool {
         current_time() - self.inner.state.last_pending_request.load(Ordering::SeqCst) < 2
@@ -420,20 +380,6 @@ impl BrowserSignerProxy {
     }
 
     #[inline]
-    async fn _nip04_encrypt(&self, public_key: &PublicKey, content: &str) -> Result<String, Error> {
-        let params = CryptoParams::new(public_key, content);
-        self.request(RequestMethod::Nip04Encrypt, serde_json::to_value(params)?)
-            .await
-    }
-
-    #[inline]
-    async fn _nip04_decrypt(&self, public_key: &PublicKey, content: &str) -> Result<String, Error> {
-        let params = CryptoParams::new(public_key, content);
-        self.request(RequestMethod::Nip04Decrypt, serde_json::to_value(params)?)
-            .await
-    }
-
-    #[inline]
     async fn _nip44_encrypt(&self, public_key: &PublicKey, content: &str) -> Result<String, Error> {
         let params = CryptoParams::new(public_key, content);
         self.request(RequestMethod::Nip44Encrypt, serde_json::to_value(params)?)
@@ -468,26 +414,6 @@ impl AsyncSignEvent for BrowserSignerProxy {
         unsigned: UnsignedEvent,
     ) -> Pin<Box<dyn Future<Output = Result<Event, Self::Error>> + Send + '_>> {
         Box::pin(async move { self._sign_event(unsigned).await })
-    }
-}
-
-impl AsyncNip04 for BrowserSignerProxy {
-    type Error = Error;
-
-    fn nip04_encrypt_async<'a>(
-        &'a self,
-        public_key: &'a PublicKey,
-        content: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<String, Self::Error>> + Send + 'a>> {
-        Box::pin(async move { self._nip04_encrypt(public_key, content).await })
-    }
-
-    fn nip04_decrypt_async<'a>(
-        &'a self,
-        public_key: &'a PublicKey,
-        encrypted_content: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<String, Self::Error>> + Send + 'a>> {
-        Box::pin(async move { self._nip04_decrypt(public_key, encrypted_content).await })
     }
 }
 

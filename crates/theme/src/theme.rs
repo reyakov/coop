@@ -117,7 +117,7 @@ impl ThemeFamily {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+    pub(crate) fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let json_data = std::fs::read(path)?;
         let theme_family = serde_json::from_slice(&json_data)?;
 

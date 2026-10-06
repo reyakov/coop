@@ -31,7 +31,6 @@ assets = { path = "../crates/assets" }
 workspace = { path = "../crates/workspace" }
 ui = { path = "../crates/ui" }
 theme = { path = "../crates/theme" }
-common = { path = "../crates/common" }
 state = { path = "../crates/state" }
 nip4e = { path = "../crates/nip4e" }
 chat = { path = "../crates/chat" }

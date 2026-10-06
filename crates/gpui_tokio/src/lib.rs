@@ -1,16 +1,10 @@
-//! Vendored from zed's `crates/gpui_tokio` (Apache-2.0) because the `gpui-pre` family
-//! does not republish it, and `nostr-sdk`'s reqwest client needs a Tokio runtime.
-
 use std::future::Future;
 
-use gpui::{App, AppContext, Global, ReadGlobal, Task};
+use gpui::{App, AppContext, Global, Task};
 use gpui_util::defer;
-pub use tokio::task::JoinError;
+use tokio::task::JoinError;
 
 /// Initializes the Tokio wrapper using a new Tokio runtime with 2 worker threads.
-///
-/// If you need more threads (or access to the runtime outside of GPUI), you can create the runtime
-/// yourself and pass a Handle to `init_from_handle`.
 pub fn init(cx: &mut App) {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         // Since we now have two executors, let's try to keep our footprint small
@@ -22,14 +16,6 @@ pub fn init(cx: &mut App) {
     let handle = runtime.handle().clone();
     cx.set_global(GlobalTokio {
         owned_runtime: Some(runtime),
-        handle,
-    });
-}
-
-/// Initializes the Tokio wrapper using a Tokio runtime handle.
-pub fn init_from_handle(cx: &mut App, handle: tokio::runtime::Handle) {
-    cx.set_global(GlobalTokio {
-        owned_runtime: None,
         handle,
     });
 }
@@ -94,9 +80,5 @@ impl Tokio {
                 result
             })
         })
-    }
-
-    pub fn handle(cx: &App) -> tokio::runtime::Handle {
-        GlobalTokio::global(cx).handle.clone()
     }
 }

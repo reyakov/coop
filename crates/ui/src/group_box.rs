@@ -1,14 +1,12 @@
-use std::str::FromStr;
-
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    div, relative, AnyElement, App, ElementId, InteractiveElement as _, IntoElement, ParentElement,
-    RenderOnce, StyleRefinement, Styled, Window,
+    AnyElement, App, ElementId, InteractiveElement as _, IntoElement, ParentElement, RenderOnce,
+    StyleRefinement, Styled, Window, div, relative,
 };
 use smallvec::SmallVec;
 use theme::ActiveTheme;
 
-use crate::{v_flex, StyledExt as _};
+use crate::{StyledExt as _, v_flex};
 
 /// The variant of the GroupBox.
 #[derive(Debug, Clone, Default, Copy, PartialEq, Eq, Hash)]
@@ -34,27 +32,6 @@ pub trait GroupBoxVariants: Sized {
     #[must_use]
     fn fill(self) -> Self {
         self.with_variant(GroupBoxVariant::Fill)
-    }
-}
-
-impl GroupBoxVariant {
-    /// Convert the GroupBoxVariant to a string.
-    pub const fn as_str(&self) -> &str {
-        match self {
-            GroupBoxVariant::Normal => "normal",
-            GroupBoxVariant::Fill => "fill",
-        }
-    }
-}
-
-impl FromStr for GroupBoxVariant {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "fill" => Ok(GroupBoxVariant::Fill),
-            _ => Ok(GroupBoxVariant::Normal),
-        }
     }
 }
 
@@ -96,20 +73,6 @@ impl GroupBox {
     #[must_use]
     pub fn title(mut self, title: impl IntoElement) -> Self {
         self.title = Some(title.into_any_element());
-        self
-    }
-
-    /// Set the style of the title of the group box to override the default style, default is None.
-    #[must_use]
-    pub fn title_style(mut self, style: StyleRefinement) -> Self {
-        self.title_style = style;
-        self
-    }
-
-    /// Set the style of the content of the group box to override the default style, default is None.
-    #[must_use]
-    pub fn content_style(mut self, style: StyleRefinement) -> Self {
-        self.content_style = style;
         self
     }
 }

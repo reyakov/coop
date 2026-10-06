@@ -1,5 +1,5 @@
 use anyhow::Context;
-use gpui::{App, AssetSource, Result, SharedString};
+use gpui::{AssetSource, Result, SharedString};
 use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
@@ -28,24 +28,5 @@ impl AssetSource for Assets {
                 }
             })
             .collect())
-    }
-}
-
-impl Assets {
-    /// Populate the [`TextSystem`] of the given [`AppContext`] with all `.ttf` fonts in the `fonts` directory.
-    pub fn load_fonts(&self, cx: &App) -> anyhow::Result<()> {
-        let font_paths = self.list("fonts")?;
-        let mut embedded_fonts = Vec::new();
-        for font_path in font_paths {
-            if font_path.ends_with(".ttf") {
-                let font_bytes = cx
-                    .asset_source()
-                    .load(&font_path)?
-                    .expect("Assets should never return None");
-                embedded_fonts.push(font_bytes);
-            }
-        }
-
-        cx.text_system().add_fonts(embedded_fonts)
     }
 }

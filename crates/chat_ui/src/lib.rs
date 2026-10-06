@@ -243,8 +243,6 @@ impl ChatPanel {
                         }
                     }
                     RoomEvent::Reload => {
-                        // Defer to avoid re-entrant read on Room while
-                        // emit_refresh holds a write lock (via refresh_rooms).
                         cx.defer_in(window, |this, window, cx| {
                             this.get_messages(window, cx);
                         });

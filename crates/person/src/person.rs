@@ -47,12 +47,6 @@ impl Hash for Person {
     }
 }
 
-impl From<PublicKey> for Person {
-    fn from(public_key: PublicKey) -> Self {
-        Self::new(public_key, Metadata::default())
-    }
-}
-
 impl Person {
     pub fn new(public_key: PublicKey, metadata: Metadata) -> Self {
         Self {
@@ -64,13 +58,13 @@ impl Person {
     }
 
     /// Build profile encryption keys announcement
-    pub fn with_announcement(mut self, announcement: Announcement) -> Self {
+    pub(crate) fn with_announcement(mut self, announcement: Announcement) -> Self {
         self.announcement = Some(announcement);
         self
     }
 
     /// Build profile messaging relays
-    pub fn with_messaging_relays<I>(mut self, relays: I) -> Self
+    pub(crate) fn with_messaging_relays<I>(mut self, relays: I) -> Self
     where
         I: IntoIterator<Item = RelayUrl>,
     {
@@ -135,17 +129,17 @@ impl Person {
     }
 
     /// Set profile metadata
-    pub fn set_metadata(&mut self, metadata: Metadata) {
+    pub(crate) fn set_metadata(&mut self, metadata: Metadata) {
         self.metadata = metadata;
     }
 
     /// Set profile encryption keys announcement
-    pub fn set_announcement(&mut self, announcement: Announcement) {
+    pub(crate) fn set_announcement(&mut self, announcement: Announcement) {
         self.announcement = Some(announcement);
     }
 
     /// Set profile messaging relays
-    pub fn set_messaging_relays<I>(&mut self, relays: I)
+    pub(crate) fn set_messaging_relays<I>(&mut self, relays: I)
     where
         I: IntoIterator<Item = RelayUrl>,
     {

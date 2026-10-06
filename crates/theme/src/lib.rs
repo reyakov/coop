@@ -31,7 +31,7 @@ pub const CLIENT_SIDE_DECORATION_SHADOW: Pixels = px(10.0);
 pub const CLIENT_SIDE_DECORATION_BORDER: Pixels = px(1.0);
 
 /// Defines window titlebar height
-pub const TITLEBAR_HEIGHT: Pixels = px(36.0);
+pub(crate) const TITLEBAR_HEIGHT: Pixels = px(36.0);
 
 /// Defines workspace tabbar height
 pub const TABBAR_HEIGHT: Pixels = px(36.0);
@@ -145,9 +145,6 @@ pub struct Theme {
 
     /// Notification settings
     pub notification: NotificationSettings,
-
-    /// Platform kind
-    pub platform: PlatformKind,
 }
 
 impl Deref for Theme {
@@ -173,7 +170,7 @@ impl Theme {
     }
 
     /// Returns the global theme mutable reference
-    pub fn global_mut(cx: &mut App) -> &mut Theme {
+    pub(crate) fn global_mut(cx: &mut App) -> &mut Theme {
         cx.global_mut::<Theme>()
     }
 
@@ -274,7 +271,6 @@ impl From<ThemeFamily> for Theme {
             mode,
             colors: *colors,
             theme: Rc::new(family),
-            platform,
         }
     }
 }

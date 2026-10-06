@@ -26,12 +26,6 @@ struct Match {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NostrParser;
 
-impl Default for NostrParser {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl NostrParser {
     /// Create new parser
     pub const fn new() -> Self {
@@ -41,6 +35,12 @@ impl NostrParser {
     /// Parse text
     pub fn parse<'a>(&self, text: &'a str) -> NostrParserIter<'a> {
         NostrParserIter::new(text)
+    }
+}
+
+impl Default for NostrParser {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

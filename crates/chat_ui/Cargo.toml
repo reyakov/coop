@@ -18,7 +18,6 @@ nostr-sdk.workspace = true
 anyhow.workspace = true
 itertools.workspace = true
 smallvec.workspace = true
-log.workspace = true
 serde.workspace = true
 
 regex = "1"
