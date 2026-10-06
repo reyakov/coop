@@ -22,10 +22,8 @@ use ui::notification::{Notification, NotificationKind};
 use ui::{IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
 
 use crate::dialogs::restore::RestoreEncryption;
-use crate::dialogs::{join_group, new_chat, new_group, profile, settings};
-use crate::panels::{
-    backup, browse, contact_list, greeter, inbox, messaging_relays, relay_list, requests, search,
-};
+use crate::dialogs::{join_group, new_chat, new_group, profile, relays, settings};
+use crate::panels::{backup, browse, contact_list, greeter, inbox, requests, search};
 use crate::sidebar::Sidebar;
 
 mod dialogs;
@@ -50,7 +48,6 @@ enum Command {
     RefreshEncryption,
     ResetEncryption,
     ShowRelayList,
-    ShowMessaging,
     ShowProfile,
     ShowSettings,
     ShowBackup,
@@ -325,14 +322,6 @@ impl Workspace {
             Command::ShowBackup => {
                 self.add_panel_to_dock(backup::init(window, cx), DockPlacement::Left, window, cx);
             }
-            Command::ShowMessaging => {
-                self.add_panel_to_dock(
-                    messaging_relays::init(window, cx),
-                    DockPlacement::Left,
-                    window,
-                    cx,
-                );
-            }
             Command::RefreshMessagingRelays => {
                 let chat = ChatRegistry::global(cx);
                 // Trigger a refresh of the chat registry
@@ -341,12 +330,7 @@ impl Workspace {
                 });
             }
             Command::ShowRelayList => {
-                self.add_panel_to_dock(
-                    relay_list::init(window, cx),
-                    DockPlacement::Right,
-                    window,
-                    cx,
-                );
+                relays::open(window, cx);
             }
             Command::RefreshEncryption => {
                 let device = DeviceRegistry::global(cx);
