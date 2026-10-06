@@ -105,7 +105,7 @@ impl RenderOnce for Nav {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let clickable = self.on_click.is_some() || self.clickable;
 
-        v_flex().w_full().h_10().child(
+        v_flex().h_10().w_full().items_center().child(
             h_flex()
                 .id(self.id)
                 .h_9()

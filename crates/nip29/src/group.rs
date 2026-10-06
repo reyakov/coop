@@ -88,6 +88,7 @@ pub struct Group {
     oldest: Option<Timestamp>,
     loading: bool,
     loading_more: bool,
+    active: bool,
     refused: Option<String>,
     tasks: SmallVec<[Task<()>; 2]>,
 }
@@ -115,6 +116,7 @@ impl Group {
             oldest: None,
             loading: true,
             loading_more: false,
+            active: false,
             refused: None,
             tasks: smallvec![],
         }
@@ -194,6 +196,14 @@ impl Group {
 
     pub fn loading_more(&self) -> bool {
         self.loading_more
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.active
+    }
+
+    pub(crate) fn activate(&mut self) {
+        self.active = true;
     }
 
     pub fn oldest(&self) -> Option<Timestamp> {
@@ -496,15 +506,24 @@ impl Group {
         })
     }
 
-    pub(crate) fn load_envelopes(&self, cx: &App) -> Task<Result<Vec<Event>>> {
+    pub(crate) fn load_envelopes(&self, cx: &App, state_only: bool) -> Task<Result<Vec<Event>>> {
         let cache_tag = self.key.cache_tag();
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
         cx.background_spawn(async move {
-            let filter = Filter::new()
+            let mut filter = Filter::new()
                 .kind(Kind::ApplicationSpecificData)
                 .custom_tag(SingleLetterTag::LOWERCASE_R, cache_tag);
+
+            if state_only {
+                let kinds = STATE_KINDS
+                    .iter()
+                    .chain(MEMBERSHIP_KINDS.iter())
+                    .map(|kind| kind.to_string());
+
+                filter = filter.custom_tags(SingleLetterTag::LOWERCASE_K, kinds);
+            }
 
             let mut events: Vec<Event> = client
                 .database()

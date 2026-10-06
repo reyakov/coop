@@ -135,6 +135,13 @@ fn opens_run(rows: &[Row], index: usize) -> bool {
 }
 
 pub fn init(group: Entity<Group>, window: &mut Window, cx: &mut App) -> Entity<GroupPanel> {
+    let key = group.read(cx).key().clone();
+    let groups = GroupsRegistry::global(cx);
+
+    groups.update(cx, |registry, cx| {
+        registry.activate(&key, cx);
+    });
+
     cx.new(|cx| GroupPanel::new(group, window, cx))
 }
 

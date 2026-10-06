@@ -19,10 +19,14 @@ use state::{DEVICE_GIFTWRAP, NostrRegistry, USER_GIFTWRAP};
 
 mod message;
 mod room;
+mod search;
 
 pub use message::*;
 pub use room::*;
+pub use search::SearchMessage;
 pub use state::FileAttachment;
+
+use crate::search::MessageSearchIndex;
 
 /// A static keypair used only for signing locally-cached rumor events.
 static LOCAL_KEYS: LazyLock<Keys> = LazyLock::new(Keys::generate);
@@ -82,6 +86,8 @@ pub struct ChatRegistry {
     seen: Arc<RwLock<HashMap<EventId, HashSet<RelayUrl>>>>,
     /// Mapping of unwrapped event ids to their gift wrap event ids
     event_map: Arc<RwLock<HashMap<EventId, EventId>>>,
+    /// In-memory message content index for search
+    search: Arc<RwLock<MessageSearchIndex>>,
     /// True while the initial event backlog is still loading
     tracking: Arc<AtomicBool>,
     /// Channel for sending signals to the UI.
@@ -170,6 +176,7 @@ impl ChatRegistry {
             trash: cx.new(|_| BTreeSet::default()),
             seen: Arc::new(RwLock::new(HashMap::default())),
             event_map: Arc::new(RwLock::new(HashMap::default())),
+            search: Arc::default(),
             tracking: Arc::new(AtomicBool::new(true)),
             matcher: CachedMatcher(SkimMatcherV2::default()),
             signal_rx: rx,
@@ -646,10 +653,16 @@ impl ChatRegistry {
         }
     }
 
+    /// Search the content of all indexed messages, newest first.
+    pub fn search_messages(&self, terms: &[String], limit: usize) -> Vec<SearchMessage> {
+        self.search.read().unwrap().search(terms, limit)
+    }
+
     /// Reset the registry.
     pub fn reset(&mut self, cx: &mut Context<Self>) {
         self.rooms.clear();
         self.room_index.clear();
+        self.search.write().unwrap().clear();
         self.trash.update(cx, |this, cx| {
             this.clear();
             cx.notify();
@@ -715,6 +728,7 @@ impl ChatRegistry {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
+        let search = self.search.clone();
 
         cx.background_spawn(async move {
             let public_key = signer.get_public_key_async().await?;
@@ -746,6 +760,7 @@ impl ChatRegistry {
                 if let Ok(rumor) = UnsignedEvent::from_json(&raw.content)
                     && rumor.tags.public_keys().next().is_some()
                 {
+                    search.write().unwrap().insert(&rumor);
                     if rumor.pubkey != public_key
                         && !rumor.tags.public_keys().any(|k| k == public_key)
                     {
@@ -782,6 +797,8 @@ impl ChatRegistry {
     /// - If the room doesn't exist, it will be created.
     /// - Updates room ordering based on the most recent messages.
     pub fn new_message(&mut self, message: NewMessage, cx: &mut Context<Self>) {
+        self.search.write().unwrap().insert(&message.rumor);
+
         let nostr = NostrRegistry::global(cx);
 
         let Some(public_key) = nostr.read(cx).current_user() else {

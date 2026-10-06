@@ -549,7 +549,7 @@ impl GroupsRegistry {
         );
 
         self.subscribe(key.clone(), cx);
-        self.reload(key, None, cx);
+        self.load_state(key, cx);
     }
 
     fn subscribe(&mut self, key: GroupKey, cx: &mut Context<Self>) {
@@ -679,7 +679,7 @@ impl GroupsRegistry {
         };
 
         let logged = key.clone();
-        let load = group.read(cx).load_envelopes(cx);
+        let load = group.read(cx).load_envelopes(cx, false);
 
         self.tasks.push(cx.spawn(async move |_this, cx| {
             if let Some(event) = event
@@ -702,6 +702,71 @@ impl GroupsRegistry {
                 }
             }
         }));
+    }
+
+    /// Load only the group state (metadata, members, membership) from the cache.
+    fn load_state(&mut self, key: GroupKey, cx: &mut Context<Self>) {
+        let Some(group) = self.group(&key, cx) else {
+            return;
+        };
+
+        let Some(me) = NostrRegistry::global(cx).read(cx).current_user() else {
+            return;
+        };
+
+        let logged = key.clone();
+        let load = group.read(cx).load_envelopes(cx, true);
+
+        self.tasks
+            .push(cx.spawn(async move |_this, cx| match load.await {
+                Ok(events) => {
+                    group.update(cx, |group, cx| {
+                        group.hydrate(events, me, cx);
+                    });
+                }
+                Err(error) => {
+                    log::warn!("nip29: loading {} state failed: {error}", logged.id());
+                }
+            }));
+    }
+
+    /// Cache and absorb a single event without rebuilding the group.
+    fn absorb(&mut self, key: GroupKey, event: Event, cx: &mut Context<Self>) {
+        let Some(group) = self.group(&key, cx) else {
+            return;
+        };
+
+        let Some(me) = NostrRegistry::global(cx).read(cx).current_user() else {
+            return;
+        };
+
+        self.tasks.push(cx.spawn(async move |_this, cx| {
+            if let Err(error) = group
+                .read_with(cx, |group, cx| group.save_envelope(event.clone(), cx))
+                .await
+            {
+                log::warn!("nip29: caching failed: {error}");
+                return;
+            }
+
+            group.update(cx, |group, cx| {
+                group.hydrate(vec![event], me, cx);
+            });
+        }));
+    }
+
+    /// Load the full group content on first open.
+    pub fn activate(&mut self, key: &GroupKey, cx: &mut Context<Self>) {
+        let Some(group) = self.group(key, cx) else {
+            return;
+        };
+
+        if group.read(cx).is_active() {
+            return;
+        }
+
+        group.update(cx, |group, _cx| group.activate());
+        self.reload(key.clone(), None, cx);
     }
 
     fn forget_event(&mut self, group: Entity<Group>, event: Event, cx: &mut Context<Self>) {
@@ -761,7 +826,15 @@ impl GroupsRegistry {
             return;
         };
 
-        self.reload(key, Some(event), cx);
+        let active = self
+            .group(&key, cx)
+            .is_some_and(|group| group.read(cx).is_active());
+
+        if active {
+            self.reload(key, Some(event), cx);
+        } else {
+            self.absorb(key, event, cx);
+        }
     }
 
     fn absorb_candidate(&mut self, id: &SubscriptionId, event: &Event, cx: &mut Context<Self>) {
@@ -819,7 +892,7 @@ impl GroupsRegistry {
         }
 
         if id == fork_subscription_id() {
-            log::warn!("nip29: the admins' group lists were refused: {reason}");
+            log::debug!("nip29: the admins' group lists were refused: {reason}");
             return;
         }
 

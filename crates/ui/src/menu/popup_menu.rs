@@ -990,7 +990,7 @@ impl PopupMenu {
 
         let this = MenuItemElement::new(ix, &group_name)
             .relative()
-            .text_sm()
+            .text_xs()
             .py_0()
             .px(INNER_PADDING)
             .rounded(radius)
@@ -1063,7 +1063,7 @@ impl PopupMenu {
                 })
                 .disabled(*disabled)
                 .h(item_height)
-                .gap_x_1()
+                .gap_x_1p5()
                 .children(Self::render_icon(
                     has_left_icon,
                     is_left_check,
@@ -1110,7 +1110,7 @@ impl PopupMenu {
                         .min_h(item_height)
                         .size_full()
                         .items_center()
-                        .gap_x_1()
+                        .gap_x_1p5()
                         .children(Self::render_icon(
                             has_left_icon,
                             false,
