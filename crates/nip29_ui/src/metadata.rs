@@ -1,11 +1,11 @@
-use gpui::{App, AppContext, Entity, ParentElement, Styled, WeakEntity, Window, px};
+use gpui::{App, AppContext, Entity, ParentElement, Styled, WeakEntity, Window};
 use nip29::{Group, GroupMetadata};
 use ui::dialog::DialogButtonProps;
 use ui::input::InputState;
 use ui::switch::Switch;
 use ui::{WindowExtension, v_flex};
 
-use crate::field;
+use crate::util::field;
 
 #[derive(Clone, Copy, Default)]
 struct Flags {
@@ -58,9 +58,8 @@ pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) 
     window.open_dialog(cx, move |this, _window, cx| {
         let current = *flags.read(cx);
 
-        this.width(px(420.))
-            .confirm()
-            .title("Edit group")
+        this.confirm()
+            .title("Edit Group")
             .button_props(
                 DialogButtonProps::default()
                     .cancel_text("Cancel")
@@ -138,7 +137,7 @@ pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) 
                     next.livekit = current.livekit;
 
                     match group.update(cx, |group, cx| group.edit_metadata(&next, cx)) {
-                        Ok(task) => crate::report(window, cx, task),
+                        Ok(task) => crate::util::report(window, cx, task),
                         Err(error) => log::warn!("nip29: editing the group failed: {error}"),
                     }
 

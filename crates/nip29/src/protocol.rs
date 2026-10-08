@@ -134,6 +134,21 @@ impl GroupId {
             .tag_maybe(previous)
     }
 
+    pub fn put_user(
+        &self,
+        public_key: PublicKey,
+        roles: &[String],
+        previous: Option<Tag>,
+    ) -> EventBuilder {
+        EventBuilder::new(Kind::GroupPutUser, "")
+            .tag(self.h_tag())
+            .tag(Tag::custom(
+                "p",
+                std::iter::once(public_key.to_hex()).chain(roles.iter().cloned()),
+            ))
+            .tag_maybe(previous)
+    }
+
     pub fn edit_metadata(&self, metadata: &GroupMetadata, previous: Option<Tag>) -> EventBuilder {
         EventBuilder::new(Kind::GroupEditMetadata, "")
             .tags(self.metadata_tags(metadata))

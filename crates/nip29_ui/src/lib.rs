@@ -4,8 +4,8 @@ use anyhow::Result;
 use chat_ui::text::rendered_text;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, AnyElement, App, AppContext, Context, Div, Entity, EventEmitter, FocusHandle,
-    Focusable, FollowMode, IntoElement, ListAlignment, ListScrollEvent, ListState, ParentElement,
+    Action, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    FollowMode, IntoElement, ListAlignment, ListScrollEvent, ListState, ParentElement,
     PathPromptOptions, Render, SharedString, Styled, Subscription, Task, WeakEntity, Window, div,
     list, px,
 };
@@ -21,17 +21,19 @@ use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariant, ButtonVariants};
 use ui::dialog::DialogButtonProps;
 use ui::dock::{Panel, PanelEvent};
-use ui::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use ui::input::{InputEvent, Textarea, TextareaState};
 use ui::markdown::RenderedText;
 use ui::message::WelcomeMessage;
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
 use ui::{Disableable, Icon, IconName, Sizable, WindowExtension, h_flex, v_flex};
+use util::{attachment_name, display_name, opens_run, pin_label, report};
 
 mod details;
 mod invite;
 mod message;
 mod metadata;
+mod util;
 
 /// Ask the shell to show the sidebar's information for a group.
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
@@ -49,8 +51,8 @@ pub struct HideGroupMeta {
     pub group: String,
 }
 
+const ADMIN_ROLE: &str = "admin";
 const LOAD_OLDER_THRESHOLD: usize = 20;
-const RUN_WINDOW_SECS: u64 = 300;
 
 enum Notice {
     Relay(String),
@@ -69,46 +71,6 @@ impl Notice {
     }
 }
 
-fn display_name(group: &Group) -> SharedString {
-    group
-        .metadata()
-        .and_then(|metadata| metadata.name())
-        .map_or_else(
-            || SharedString::from(group.key().id().as_str()),
-            SharedString::from,
-        )
-}
-
-fn attachment_name(url: &Url) -> SharedString {
-    url.path_segments()
-        .and_then(|mut segments| segments.next_back())
-        .filter(|name| !name.is_empty())
-        .map_or_else(
-            || SharedString::from(url.as_str()),
-            |name| SharedString::from(name.to_owned()),
-        )
-}
-
-fn opens_run(rows: &[Row], index: usize) -> bool {
-    let (Some(current), Some(previous)) = (
-        rows.get(index),
-        index.checked_sub(1).and_then(|index| rows.get(index)),
-    ) else {
-        return true;
-    };
-
-    if !matches!((current, previous), (Row::Message(_), Row::Message(_))) {
-        return true;
-    }
-
-    current.author() != previous.author()
-        || current
-            .created_at()
-            .as_secs()
-            .saturating_sub(previous.created_at().as_secs())
-            > RUN_WINDOW_SECS
-}
-
 pub fn init(group: Entity<Group>, window: &mut Window, cx: &mut App) -> Entity<GroupPanel> {
     let key = group.read(cx).key().clone();
     let groups = GroupsRegistry::global(cx);
@@ -118,33 +80,6 @@ pub fn init(group: Entity<Group>, window: &mut Window, cx: &mut App) -> Entity<G
     });
 
     cx.new(|cx| GroupPanel::new(group, window, cx))
-}
-
-pub(crate) fn field(label: &'static str, input: &Entity<InputState>, cx: &App) -> Div {
-    v_flex()
-        .gap_1()
-        .text_sm()
-        .text_color(cx.theme().text_muted)
-        .child(label)
-        .child(Input::new(input))
-}
-
-pub(crate) fn pin_label(group: &Group, pin: &Pin) -> SharedString {
-    match pin {
-        Pin::Address(coordinate) => SharedString::from(format!("{coordinate}")),
-        Pin::Event(id) => {
-            let snippet = group
-                .message(*id)
-                .and_then(|message| message.content.lines().next())
-                .map(str::trim)
-                .filter(|line| !line.is_empty());
-
-            match snippet {
-                Some(snippet) => SharedString::from(snippet.chars().take(48).collect::<String>()),
-                None => SharedString::from(id.to_hex().chars().take(8).collect::<String>()),
-            }
-        }
-    }
 }
 
 /// Build the group's action buttons for the sidebar: info, admin actions and leave.
@@ -259,18 +194,37 @@ pub fn remove_member(
     }
 }
 
-/// Await a group write and surface any relay error as a notification.
-pub(crate) fn report(window: &mut Window, cx: &mut App, task: Task<Result<()>>) {
-    window
-        .spawn(cx, async move |cx| -> Result<()> {
-            if let Err(error) = task.await {
-                cx.update(|window, cx| {
-                    window.push_notification(Notification::error(error.to_string()), cx);
-                })?;
-            }
-            Ok(())
-        })
-        .detach();
+/// Grant a member the admin role and surface any relay error as a notification.
+pub fn make_admin(
+    group: WeakEntity<Group>,
+    public_key: PublicKey,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    put_user(group, public_key, vec![ADMIN_ROLE.to_owned()], window, cx);
+}
+
+/// Revoke a member's roles, returning them to a regular member.
+pub fn remove_admin(
+    group: WeakEntity<Group>,
+    public_key: PublicKey,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    put_user(group, public_key, Vec::new(), window, cx);
+}
+
+fn put_user(
+    group: WeakEntity<Group>,
+    public_key: PublicKey,
+    roles: Vec<String>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    match group.update(cx, |group, cx| group.put_user(public_key, roles, cx)) {
+        Ok(task) => report(window, cx, task),
+        Err(error) => log::warn!("nip29: updating a member's roles failed: {error}"),
+    }
 }
 
 pub struct GroupPanel {

@@ -256,6 +256,7 @@ impl Sidebar {
         let persons = PersonRegistry::global(cx);
         let person = persons.read(cx).get(public_key, cx);
         let public_key = *public_key;
+        let member_is_admin = !roles.is_empty();
 
         let group = group.clone();
 
@@ -296,6 +297,22 @@ impl Sidebar {
                 if !admin {
                     return menu;
                 }
+
+                let menu = menu.separator().item(if member_is_admin {
+                    PopupMenuItem::new("Remove admin").on_click({
+                        let group = group.clone();
+                        move |_event, window, cx| {
+                            nip29_ui::remove_admin(group.clone(), public_key, window, cx);
+                        }
+                    })
+                } else {
+                    PopupMenuItem::new("Make admin").on_click({
+                        let group = group.clone();
+                        move |_event, window, cx| {
+                            nip29_ui::make_admin(group.clone(), public_key, window, cx);
+                        }
+                    })
+                });
 
                 menu.separator()
                     .item(PopupMenuItem::new("Remove").on_click({

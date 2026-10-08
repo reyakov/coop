@@ -11,7 +11,7 @@ use ui::input::InputState;
 use ui::notification::Notification;
 use ui::{WindowExtension, v_flex};
 
-use crate::field;
+use crate::util::field;
 
 const CODE_LEN: usize = 12;
 

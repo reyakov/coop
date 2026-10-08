@@ -1,19 +1,17 @@
 use gpui::{
     AnyElement, App, IntoElement, ParentElement, SharedString, Styled, WeakEntity, Window, div, px,
+    relative,
 };
 use nip29::{Group, GroupMetadata};
-use nostr_sdk::prelude::PublicKey;
-use person::PersonRegistry;
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::{Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, move |this, _window, cx| {
-        this.width(px(460.))
-            .max_h(px(600.))
+        this.max_h(px(600.))
             .show_close(true)
-            .title("Group details")
+            .title("About Group")
             .child(body(&group, cx))
     });
 }
@@ -89,21 +87,7 @@ fn body(group: &WeakEntity<Group>, cx: &App) -> AnyElement {
         }
     }
 
-    let admins = group.admins().entries();
-
-    if !admins.is_empty() {
-        body = body.child(section(
-            "Admins",
-            v_flex()
-                .gap_1()
-                .children(admins.iter().map(|(key, roles)| admin(key, roles, cx)))
-                .into_any_element(),
-            cx,
-        ));
-    }
-
     let roles = group.roles().roles();
-
     if !roles.is_empty() {
         body = body.child(section(
             "Roles",
@@ -112,21 +96,7 @@ fn body(group: &WeakEntity<Group>, cx: &App) -> AnyElement {
         ));
     }
 
-    let members: Vec<&PublicKey> = group.members().iter().collect();
-
-    if !members.is_empty() {
-        body = body.child(section(
-            "Members",
-            v_flex()
-                .gap_1()
-                .children(members.into_iter().map(|key| person(key, cx)))
-                .into_any_element(),
-            cx,
-        ));
-    }
-
     let pins = group.pins().pins();
-
     if !pins.is_empty() {
         body = body.child(section(
             "Pinned",
@@ -138,7 +108,7 @@ fn body(group: &WeakEntity<Group>, cx: &App) -> AnyElement {
                             div()
                                 .truncate()
                                 .text_color(cx.theme().text_muted)
-                                .child(crate::pin_label(group, pin))
+                                .child(crate::util::pin_label(group, pin))
                                 .into_any_element()
                         })
                         .collect::<Vec<_>>(),
@@ -209,38 +179,15 @@ fn wrap(items: impl IntoIterator<Item = AnyElement>) -> AnyElement {
         .into_any_element()
 }
 
-fn admin(public_key: &PublicKey, roles: &[String], cx: &App) -> AnyElement {
-    h_flex()
-        .justify_between()
-        .gap_2()
-        .child(person(public_key, cx))
-        .children(roles.iter().map(|role| chip(role.clone(), cx)))
-        .into_any_element()
-}
-
-fn person(public_key: &PublicKey, cx: &App) -> AnyElement {
-    let persons = PersonRegistry::global(cx);
-    let person = persons.read(cx).get(public_key, cx);
-
-    h_flex()
-        .gap_2()
-        .min_w_0()
-        .child(
-            Avatar::new(person.avatar())
-                .seed(person.avatar_seed())
-                .xsmall(),
-        )
-        .child(div().truncate().child(person.name()))
-        .into_any_element()
-}
-
 fn chip(label: impl Into<SharedString>, cx: &App) -> AnyElement {
     div()
-        .px_1p5()
-        .py_0p5()
+        .px_2()
+        .py_1()
         .rounded(cx.theme().radius)
-        .bg(cx.theme().element_background)
+        .bg(cx.theme().secondary_background)
+        .text_color(cx.theme().secondary_foreground)
         .text_xs()
+        .line_height(relative(1.))
         .child(label.into())
         .into_any_element()
 }

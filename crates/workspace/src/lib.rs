@@ -23,7 +23,7 @@ use ui::{IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
 
 use crate::dialogs::restore::RestoreEncryption;
 use crate::dialogs::{join_group, new_chat, new_group, profile, relays, settings};
-use crate::panels::{backup, browse, contact_list, greeter, inbox, requests, search};
+use crate::panels::{backup, browse, contact_list, greeter, inbox};
 use crate::sidebar::Sidebar;
 
 mod dialogs;
@@ -53,9 +53,7 @@ enum Command {
     ShowBackup,
     ShowContactList,
     ShowInbox,
-    ShowRequests,
     ShowBrowse,
-    ShowSearch,
     NewChat,
     NewGroup,
     JoinGroup,
@@ -294,20 +292,8 @@ impl Workspace {
             Command::ShowInbox => {
                 self.add_panel_to_dock(inbox::init(window, cx), DockPlacement::Center, window, cx);
             }
-            Command::ShowRequests => {
-                self.add_panel_to_dock(
-                    requests::init(window, cx),
-                    DockPlacement::Center,
-                    window,
-                    cx,
-                );
-            }
             Command::ShowBrowse => {
                 let panel = browse::init(self.dock.downgrade(), window, cx);
-                self.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
-            }
-            Command::ShowSearch => {
-                let panel = search::init(self.dock.downgrade(), window, cx);
                 self.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
             }
             Command::NewChat => {

@@ -226,6 +226,15 @@ impl Group {
         self.dispatch(move |id, prev| id.remove_user(public_key, prev), cx)
     }
 
+    pub fn put_user(
+        &mut self,
+        public_key: PublicKey,
+        roles: Vec<String>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<()>> {
+        self.dispatch(move |id, prev| id.put_user(public_key, &roles, prev), cx)
+    }
+
     pub fn edit_metadata(
         &mut self,
         metadata: &GroupMetadata,

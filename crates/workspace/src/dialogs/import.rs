@@ -2,7 +2,7 @@ use anyhow::{Error, anyhow};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
-    Subscription, Task, Window, div, px,
+    Subscription, Task, Window, div, px, relative,
 };
 use instant::Duration;
 use nostr_connect::prelude::*;
@@ -227,12 +227,12 @@ impl Render for ImportIdentity {
             .text_sm()
             .child(
                 v_flex()
-                    .gap_2()
+                    .gap_1()
                     .child(
                         v_flex()
                             .gap_1()
                             .text_color(cx.theme().text_muted)
-                            .child("Continue with existing key or bunker connection")
+                            .child("Use secret key or bunker connection")
                             .child(Input::new(&self.key_input)),
                     )
                     .when(require_password, |this| {
@@ -247,16 +247,24 @@ impl Render for ImportIdentity {
                     .when(bunker_warning, |this| {
                         this.child(
                             div()
+                                .p_2()
+                                .rounded(cx.theme().radius)
+                                .bg(cx.theme().warning_background)
                                 .text_xs()
-                                .text_color(cx.theme().text_warning)
+                                .text_color(cx.theme().warning_foreground)
+                                .line_height(relative(1.2))
                                 .child(div().child(BUNKER_WARN)),
                         )
                     })
                     .when(key_warning, |this| {
                         this.child(
                             div()
+                                .p_2()
+                                .rounded(cx.theme().radius)
+                                .bg(cx.theme().warning_background)
                                 .text_xs()
-                                .text_color(cx.theme().text_warning)
+                                .text_color(cx.theme().warning_foreground)
+                                .line_height(relative(1.2))
                                 .child(div().child(KEY_WARN)),
                         )
                     }),
