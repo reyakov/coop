@@ -16,11 +16,10 @@ use state::NostrRegistry;
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
-use ui::dialog::DialogButtonProps;
 use ui::dock::{DockArea, DockPlacement, PanelHandle};
 use ui::input::{Input, InputEvent, InputState};
 use ui::nav::Nav;
-use ui::{Disableable, IconName, Sizable, WindowExtension, h_flex, v_flex};
+use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 /// Maximum number of members a chat can have.
 const MAX_MEMBERS: usize = 3;
@@ -30,21 +29,7 @@ pub fn open(dock: WeakEntity<DockArea>, window: &mut Window, cx: &mut App) {
 
     window.open_dialog(cx, {
         let view = view.clone();
-        move |this, _window, _cx| {
-            this.width(px(420.))
-                .title("New chat")
-                .confirm()
-                .button_props(
-                    DialogButtonProps::default()
-                        .cancel_text("Cancel")
-                        .ok_text("Start"),
-                )
-                .on_ok({
-                    let view = view.clone();
-                    move |_, window, cx| view.update(cx, |this, cx| this.start_chat(window, cx))
-                })
-                .child(view.clone())
-        }
+        move |this, _window, _cx| this.width(px(420.)).title("New chat").child(view.clone())
     });
 }
 
@@ -451,6 +436,29 @@ impl Render for NewChat {
                     }),
                 )
                 .h_80(),
+            )
+            .child(
+                h_flex()
+                    .gap_1()
+                    .justify_end()
+                    .child(
+                        Button::new("cancel")
+                            .label("Cancel")
+                            .ghost()
+                            .on_click(|_, window, cx| window.close_dialog(cx)),
+                    )
+                    .child(
+                        Button::new("start")
+                            .icon(IconName::CheckCircle)
+                            .label("Start")
+                            .primary()
+                            .font_semibold()
+                            .on_click(cx.listener(move |this, _event, window, cx| {
+                                if this.start_chat(window, cx) {
+                                    window.close_dialog(cx);
+                                }
+                            })),
+                    ),
             )
     }
 }

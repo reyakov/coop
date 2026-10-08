@@ -127,7 +127,7 @@ impl ThemeColors {
             text: neutral().light().step_12(),
             text_muted: neutral().light().step_11(),
             text_placeholder: neutral().light().step_10(),
-            text_accent: brand().light().step_9(),
+            text_accent: brand().light().step_11(),
             text_danger: danger().light().step_9(),
             text_warning: warning().light().step_9(),
 
@@ -213,7 +213,7 @@ impl ThemeColors {
             text: neutral().dark().step_12(),
             text_muted: neutral().dark().step_11(),
             text_placeholder: neutral().dark().step_10(),
-            text_accent: brand().dark().step_9(),
+            text_accent: brand().dark().step_11(),
             text_danger: danger().dark().step_9(),
             text_warning: warning().dark().step_9(),
 

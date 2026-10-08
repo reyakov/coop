@@ -10,7 +10,7 @@ use nostr_sdk::prelude::*;
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::input::{Input, InputEvent, InputState};
-use ui::{WindowExtension, v_flex};
+use ui::{IconName, StyledExt, WindowExtension, h_flex, v_flex};
 
 #[derive(Debug)]
 pub struct RestoreEncryption {
@@ -99,7 +99,7 @@ impl Render for RestoreEncryption {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
             .size_full()
-            .gap_2()
+            .gap_3()
             .text_sm()
             .child(
                 v_flex()
@@ -110,12 +110,16 @@ impl Render for RestoreEncryption {
                     .child(Input::new(&self.key_input)),
             )
             .child(
-                Button::new("restore")
-                    .label("Restore")
-                    .primary()
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.restore(window, cx);
-                    })),
+                h_flex().gap_1().justify_end().child(
+                    Button::new("restore")
+                        .icon(IconName::CheckCircle)
+                        .label("Restore")
+                        .primary()
+                        .font_semibold()
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.restore(window, cx);
+                        })),
+                ),
             )
             .when_some(self.error.read(cx).as_ref(), |this, error| {
                 this.child(

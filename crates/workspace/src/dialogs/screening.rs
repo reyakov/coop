@@ -22,27 +22,18 @@ pub fn init(public_key: PublicKey, window: &mut Window, cx: &mut App) -> Entity<
     cx.new(|cx| Screening::new(public_key, window, cx))
 }
 
-/// Screening
 pub struct Screening {
     /// Public Key of the person being screened.
     public_key: PublicKey,
-
     /// Whether the person's address is verified.
     verified: bool,
-
     /// Whether the person is followed by current user.
     followed: bool,
-
     /// Last time the person was active.
     last_active: Option<Timestamp>,
-
     /// All mutual contacts of the person being screened.
     mutual_contacts: Vec<PublicKey>,
-
-    /// Async tasks
     tasks: SmallVec<[Task<()>; 3]>,
-
-    /// Subscriptions
     _subscriptions: SmallVec<[Subscription; 1]>,
 }
 

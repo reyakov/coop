@@ -10,7 +10,7 @@ use state::{CoopAuthUrlHandler, NostrRegistry, USER_KEYRING};
 use theme::ActiveTheme;
 use ui::button::{Button, ButtonVariants};
 use ui::input::{Input, InputEvent, InputState};
-use ui::{Disableable, StyledExt, WindowExtension, divider, v_flex};
+use ui::{Disableable, StyledExt, WindowExtension, v_flex};
 
 pub fn open(window: &mut Window, cx: &mut App) {
     let import = cx.new(|cx| ImportIdentity::new(window, cx));
@@ -20,7 +20,7 @@ pub fn open(window: &mut Window, cx: &mut App) {
             .show_close(false)
             .overlay_closable(false)
             .keyboard(false)
-            .title("Get Started")
+            .title("Continue with your Nostr Identity")
             .child(import.clone())
     });
 }
@@ -29,20 +29,13 @@ pub fn open(window: &mut Window, cx: &mut App) {
 pub struct ImportIdentity {
     /// Secret key input
     key_input: Entity<InputState>,
-
     /// Password input (if required)
     pass_input: Entity<InputState>,
-
     /// Error message
     error: Entity<Option<SharedString>>,
-
     /// Whether the user is currently loading
     loading: bool,
-
-    /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
-
-    /// Input subscription
     _subscription: Option<Subscription>,
 }
 
@@ -230,7 +223,7 @@ impl Render for ImportIdentity {
 
         v_flex()
             .size_full()
-            .gap_4()
+            .gap_2()
             .text_sm()
             .child(
                 v_flex()
@@ -279,12 +272,11 @@ impl Render for ImportIdentity {
                         this.login(window, cx);
                     })),
             )
-            .child(divider(cx))
             .when(!is_wasm, |this| {
                 this.child(
                     Button::new("proxy")
                         .label("Connect via Web Extension (Experimental)")
-                        .ghost_alt()
+                        .ghost()
                         .loading(self.loading)
                         .disabled(self.loading)
                         .on_click(cx.listener(move |this, _ev, _window, cx| {

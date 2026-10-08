@@ -3,7 +3,7 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyView, App, AppContext, Bounds, Context, CursorStyle, Decorations, Edges, ElementId, Entity,
+    AnyView, App, AppContext, Bounds, Context, CursorStyle, Decorations, ElementId, Entity,
     FocusHandle, HitboxBehavior, Hsla, InteractiveElement, IntoElement, MouseButton,
     ParentElement as _, Pixels, Point, Render, ResizeEdge, Size, Styled, Tiling, WeakFocusHandle,
     Window, canvas, div, point, px, size,
@@ -386,29 +386,6 @@ impl Render for Root {
                     .child(TextSelectionLayer)
                     .child(self.view.clone()),
             )
-    }
-}
-
-/// Get the window paddings.
-pub(crate) fn window_paddings(window: &Window, _cx: &App) -> Edges<Pixels> {
-    match window.window_decorations() {
-        Decorations::Server => Edges::all(px(0.0)),
-        Decorations::Client { tiling } => {
-            let mut paddings = Edges::all(CLIENT_SIDE_DECORATION_SHADOW);
-            if tiling.top {
-                paddings.top = px(0.0);
-            }
-            if tiling.bottom {
-                paddings.bottom = px(0.0);
-            }
-            if tiling.left {
-                paddings.left = px(0.0);
-            }
-            if tiling.right {
-                paddings.right = px(0.0);
-            }
-            paddings
-        }
     }
 }
 

@@ -3,16 +3,17 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Animation, AnimationExt as _, AnyElement, App, BoxShadow, ClickEvent, Div, FocusHandle,
-    InteractiveElement as _, IntoElement, ParentElement, Pixels, RenderOnce, SharedString,
-    StyleRefinement, Styled, Window, div, hsla, point, px, size,
+    IntoElement, ParentElement, Pixels, RenderOnce, SharedString, StyleRefinement, Styled, Window,
+    div, hsla, point, px,
 };
+use gpui_base::{DialogBackdrop, DialogPopup, DialogTitle};
 use instant::Duration;
 use theme::ActiveTheme;
 
 use crate::animation::cubic_bezier;
 use crate::button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _};
 use crate::scroll::ScrollableElement;
-use crate::{IconName, Root, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use crate::{IconName, Root, StyledExt, WindowExtension, h_flex, v_flex};
 
 type OnClose = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type OnOk = Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static>>;
@@ -68,7 +69,6 @@ pub struct Dialog {
     content: Div,
     width: Pixels,
     max_width: Option<Pixels>,
-    margin_top: Option<Pixels>,
 
     on_close: OnClose,
     on_ok: OnOk,
@@ -94,7 +94,6 @@ impl Dialog {
             title: None,
             footer: None,
             content: v_flex(),
-            margin_top: None,
             width: px(380.),
             max_width: None,
             overlay: true,
@@ -232,6 +231,7 @@ impl RenderOnce for Dialog {
         let layer_ix = self.layer_ix;
         let is_topmost = layer_ix + 1 == Root::read(window, cx).active_dialogs.len();
         let has_footer = self.footer.is_some();
+
         let on_close = self.on_close.clone();
         let on_ok = self.on_ok.clone();
         let on_cancel = self.on_cancel.clone();
@@ -246,8 +246,7 @@ impl RenderOnce for Dialog {
                 Button::new("ok")
                     .label(ok_text)
                     .with_variant(ok_variant)
-                    .small()
-                    .flex_1()
+                    .font_semibold()
                     .on_click({
                         let on_ok = on_ok.clone();
                         let on_close = on_close.clone();
@@ -280,8 +279,6 @@ impl RenderOnce for Dialog {
                 Button::new("cancel")
                     .label(cancel_text)
                     .with_variant(cancel_variant)
-                    .small()
-                    .flex_1()
                     .on_click({
                         let on_cancel = on_cancel.clone();
                         let on_close = on_close.clone();
@@ -298,18 +295,6 @@ impl RenderOnce for Dialog {
             }
         });
 
-        let window_paddings = crate::root::window_paddings(window, cx);
-        let radius = cx.theme().radius_lg;
-
-        let view_size = window.viewport_size()
-            - size(
-                window_paddings.left + window_paddings.right,
-                window_paddings.top + window_paddings.bottom,
-            );
-
-        let offset_top = px(layer_ix as f32 * 16.);
-        let top_offset = self.margin_top.unwrap_or(px(0.)) + offset_top;
-
         let mut padding_right = px(16.);
         let mut padding_left = px(16.);
 
@@ -324,32 +309,25 @@ impl RenderOnce for Dialog {
         let animation = Animation::new(Duration::from_secs_f64(0.25))
             .with_easing(cubic_bezier(0.32, 0.72, 0., 1.));
 
-        let backdrop = div()
+        let backdrop = DialogBackdrop::new()
             .absolute()
-            .top(window_paddings.top)
-            .left(window_paddings.left)
-            .w(view_size.width)
-            .h(view_size.height)
-            .when(self.overlay_visible, |this| {
-                this.occlude().bg(cx.theme().overlay)
-            })
+            .inset_0()
+            .when(self.overlay_visible, |this| this.bg(cx.theme().overlay))
             .with_animation("fade-in", animation.clone(), move |this, delta| {
                 this.opacity(delta)
             });
 
-        let card = v_flex()
-            .id(layer_ix)
+        let card = DialogPopup::new()
+            .flex()
+            .flex_col()
             .bg(cx.theme().background)
             .border_1()
             .border_color(cx.theme().border.alpha(0.4))
-            .rounded(radius)
+            .rounded(cx.theme().radius_lg)
             .when(cx.theme().shadow, |this| this.shadow_xl())
             .min_h_24()
             .refine_style(&self.style)
-            // There style is high priority, can't be overridden.
-            .occlude()
             .relative()
-            .top(top_offset)
             .w(self.width)
             .when_some(self.max_width, |this, w| this.max_w(w))
             .child(
@@ -362,7 +340,12 @@ impl RenderOnce for Dialog {
                     .justify_center()
                     .relative()
                     .when_some(self.title, |this, title| {
-                        this.h_10().font_semibold().text_center().child(title)
+                        this.h_10().child(
+                            DialogTitle::new()
+                                .font_semibold()
+                                .text_center()
+                                .child(title),
+                        )
                     })
                     .when(self.show_close, |this| {
                         let on_cancel = on_cancel.clone();
@@ -415,7 +398,7 @@ impl RenderOnce for Dialog {
             .when_some(self.footer, |this, footer| {
                 this.child(
                     h_flex()
-                        .gap_2()
+                        .gap_1()
                         .pt(padding_left)
                         .pr(padding_right)
                         .pb(padding_left)
@@ -444,11 +427,13 @@ impl RenderOnce for Dialog {
                         inset: false,
                     },
                 ];
-                this.top(top_offset + y_offset).shadow(shadow)
+                this.top(y_offset).shadow(shadow)
             });
 
         gpui_base::Dialog::new(cx)
             .layer(layer_ix, is_topmost)
+            .backdrop(backdrop)
+            .popup(card)
             .focus_handle(self.focus_handle.clone())
             .close_on_escape(self.keyboard)
             .close_on_backdrop_press(self.overlay_closable)
@@ -461,7 +446,5 @@ impl RenderOnce for Dialog {
                 on_close(event, window, cx);
                 window.close_dialog(cx);
             })
-            .backdrop(backdrop)
-            .popup(card)
     }
 }
