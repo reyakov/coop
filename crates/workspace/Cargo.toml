@@ -19,6 +19,7 @@ person = { path = "../person" }
 auto_update = { path = "../auto_update" }
 
 gpui.workspace = true
+gpui-base.workspace = true
 nostr-sdk.workspace = true
 instant.workspace = true
 nostr-connect.workspace = true

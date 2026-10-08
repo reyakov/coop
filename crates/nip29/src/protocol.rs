@@ -335,6 +335,17 @@ impl GroupMetadata {
             .identifier()
             .ok_or_else(|| anyhow!("group metadata has no d tag"))?;
 
+        let content: serde_json::Value =
+            serde_json::from_str(event.content.as_str()).unwrap_or(serde_json::Value::Null);
+
+        let field = |key: &str| -> Option<String> {
+            content
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .or_else(|| tag_value(&event.tags, key).map(str::to_owned))
+        };
+
         let mut supported_kinds: Option<Vec<Kind>> = None;
 
         for tag in event
@@ -363,10 +374,10 @@ impl GroupMetadata {
         }
 
         Ok(Self {
-            name: tag_value(&event.tags, "name").map(str::to_owned),
-            picture: tag_value(&event.tags, "picture").map(str::to_owned),
-            banner: tag_value(&event.tags, "banner").map(str::to_owned),
-            about: tag_value(&event.tags, "about").map(str::to_owned),
+            name: field("name"),
+            picture: field("picture"),
+            banner: field("banner"),
+            about: field("about"),
             private: has_tag(&event.tags, "private"),
             restricted: has_tag(&event.tags, "restricted"),
             hidden: has_tag(&event.tags, "hidden"),
@@ -412,6 +423,8 @@ impl GroupMetadata {
 #[derive(Debug, Clone)]
 pub struct GroupCandidate {
     pub key: GroupKey,
+    /// The timestamp of the metadata event the candidate was built from.
+    pub(crate) created_at: Timestamp,
     pub(crate) metadata: GroupMetadata,
 }
 
@@ -424,6 +437,10 @@ impl GroupCandidate {
 
     pub fn display_image(&self) -> Option<&str> {
         self.metadata.picture.as_deref()
+    }
+
+    pub fn display_about(&self) -> Option<&str> {
+        self.metadata.about.as_deref()
     }
 }
 

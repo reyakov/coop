@@ -9,7 +9,7 @@ use gpui::{
     PathPromptOptions, Render, SharedString, Styled, Subscription, Task, WeakEntity, Window, div,
     list, px,
 };
-use nip29::{Group, GroupEvent, GroupsRegistry, Membership, Pin, Row};
+use nip29::{Group, GroupEvent, GroupKey, GroupsRegistry, Membership, Pin, Row};
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use serde::Deserialize;
@@ -64,33 +64,8 @@ enum Notice {
 
 impl Notice {
     fn of(group: &Group) -> Option<Self> {
-        if let Some(reason) = group.refused() {
-            return Some(Self::Relay(reason.to_owned()));
-        }
-
-        let closed = group.metadata().is_some_and(|metadata| metadata.closed);
-
-        match group.membership() {
-            Membership::Member => {}
-            Membership::Pending { .. } => return Some(Self::Pending),
-            Membership::Refused { reason } => {
-                return Some(Self::Join {
-                    refused: reason.clone(),
-                    closed,
-                });
-            }
-            Membership::Unknown | Membership::Removed => {
-                return Some(Self::Join {
-                    refused: None,
-                    closed,
-                });
-            }
-        }
-
-        group
-            .metadata()
-            .is_some_and(|metadata| !metadata.supports(Kind::ChatMessage))
-            .then_some(Self::Unsupported)
+        let reason = group.refused()?;
+        Some(Self::Relay(reason.to_owned()))
     }
 }
 
@@ -654,12 +629,8 @@ impl GroupPanel {
                 Button::new("group-moved")
                     .label("Join")
                     .small()
-                    .on_click(cx.listener(move |_this, _event, _window, cx| {
-                        let registry = GroupsRegistry::global(cx);
-
-                        registry.update(cx, |registry, cx| {
-                            registry.join_key(moved.clone(), None, cx);
-                        });
+                    .on_click(cx.listener(move |this, _event, _window, cx| {
+                        this.request_join(moved.clone(), cx);
                     })),
             )
             .into_any_element()
@@ -758,6 +729,13 @@ impl GroupPanel {
             .into_any_element()
     }
 
+    /// Ask the relay to admit the user into the group.
+    fn request_join(&self, key: GroupKey, cx: &mut App) {
+        GroupsRegistry::global(cx).update(cx, |registry, cx| {
+            registry.join_key(key, None, cx);
+        });
+    }
+
     fn render_notice(&self, notice: &Notice, cx: &mut Context<Self>) -> AnyElement {
         let row = h_flex()
             .w_full()
@@ -767,7 +745,7 @@ impl GroupPanel {
             .px_3()
             .py_2()
             .text_sm()
-            .text_color(cx.theme().text_placeholder);
+            .text_color(cx.theme().text_muted);
 
         match notice {
             Notice::Relay(reason) => row
@@ -781,7 +759,7 @@ impl GroupPanel {
 
                 if *closed {
                     return row
-                        .child("This group is closed; an invite link is required.")
+                        .child("Group is closed. An invite link is required.")
                         .into_any_element();
                 }
 
@@ -793,17 +771,17 @@ impl GroupPanel {
                     return row.into_any_element();
                 };
 
-                row.child(
-                    Button::new("join-group")
-                        .label("Request to join")
-                        .small()
-                        .on_click(cx.listener(move |_this, _event, _window, cx| {
-                            GroupsRegistry::global(cx).update(cx, |registry, cx| {
-                                registry.join_key(key.clone(), None, cx);
-                            });
-                        })),
-                )
-                .into_any_element()
+                row.child("You're in preview mode. Join this group to talk.")
+                    .child(
+                        Button::new("join")
+                            .label("Request to Join")
+                            .small()
+                            .ghost_alt()
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.request_join(key.clone(), cx);
+                            })),
+                    )
+                    .into_any_element()
             }
             Notice::Pending => row
                 .child("Waiting for the relay to approve.")
@@ -871,17 +849,30 @@ impl GroupPanel {
         )
     }
 
-    fn render_composer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let can_send = self.group.upgrade().is_some_and(|group| {
+    fn render_composer(&self, cx: &mut Context<Self>) -> AnyElement {
+        let notice = self.group.upgrade().and_then(|group| {
             let group = group.read(cx);
-            let metadata = group.metadata();
-            let supports_text =
-                metadata.is_none_or(|metadata| metadata.supports(Kind::ChatMessage));
-            let writable = metadata.is_none_or(|metadata| !metadata.restricted)
-                || matches!(group.membership(), Membership::Member);
 
-            supports_text && writable
+            if !group
+                .metadata()
+                .is_none_or(|metadata| metadata.supports(Kind::ChatMessage))
+            {
+                return Some(Notice::Unsupported);
+            }
+
+            match group.membership() {
+                Membership::Member => None,
+                Membership::Pending { .. } => Some(Notice::Pending),
+                _ => Some(Notice::Join {
+                    refused: None,
+                    closed: group.metadata().is_some_and(|metadata| metadata.closed),
+                }),
+            }
         });
+
+        if let Some(notice) = notice {
+            return self.render_notice(&notice, cx);
+        }
 
         v_flex()
             .flex_shrink_0()
@@ -912,12 +903,12 @@ impl GroupPanel {
                             .tooltip("Send")
                             .ghost()
                             .large()
-                            .disabled(!can_send)
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.send(window, cx);
                             })),
                     ),
             )
+            .into_any_element()
     }
 
     fn render_attachments(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {

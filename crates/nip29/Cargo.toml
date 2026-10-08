@@ -7,6 +7,8 @@ publish.workspace = true
 [dependencies]
 nostr-sdk.workspace = true
 anyhow.workspace = true
+futures.workspace = true
+serde_json.workspace = true
 state = { path = "../state" }
 chat = { path = "../chat" }
 

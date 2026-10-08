@@ -1,6 +1,4 @@
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -10,19 +8,18 @@ use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
 
+mod discovery;
 mod group;
 mod protocol;
+mod utils;
 
+pub use discovery::Discovery;
 pub use group::*;
 pub use protocol::*;
+pub(crate) use utils::*;
 
 pub(crate) static LOCAL_KEYS: LazyLock<Keys> = LazyLock::new(Keys::generate);
 
-const LIST_SUBSCRIPTION: &str = "nip29-list";
-const FORK_SUBSCRIPTION: &str = "nip29-forks";
-const GROUP_PREFIX: &str = "grp-";
-const BROWSE_PREFIX: &str = "brw-";
-const PAGE_PREFIX: &str = "pg-";
 const BROWSE_LIMIT: usize = 500;
 const BROWSE_TIMEOUT: Duration = Duration::from_secs(10);
 const FORK_INTERVAL: Duration = Duration::from_secs(15 * 60);
@@ -41,63 +38,42 @@ pub enum GroupsEvent {
     Error(String),
     Browsed(Box<GroupCandidate>),
     BrowseSettled(RelayUrl),
+    /// A browsed group announced its member list.
+    Members {
+        key: GroupKey,
+        created_at: Timestamp,
+        members: usize,
+    },
+    /// The discovery synced new groups into the local database.
+    Synced,
 }
 
 #[derive(Debug)]
 enum Signal {
-    Event(SubscriptionId, Event),
+    Event(SubscriptionId, Box<Event>),
     Eose(SubscriptionId),
     Closed(SubscriptionId, String),
     BrowseSettled(SubscriptionId),
+    /// A reconciliation started on a relay.
+    Syncing(RelayUrl),
+    /// A relay finished answering a reconciliation.
+    Synced(RelayUrl),
     Forks,
-}
-
-fn list_subscription_id() -> SubscriptionId {
-    SubscriptionId::new(LIST_SUBSCRIPTION)
-}
-
-fn fork_subscription_id() -> SubscriptionId {
-    SubscriptionId::new(FORK_SUBSCRIPTION)
-}
-
-fn subscription_id(key: &GroupKey) -> SubscriptionId {
-    SubscriptionId::new(format!("{GROUP_PREFIX}{:08x}", key.uniq_id() as u32))
-}
-
-fn browse_subscription(relay: &RelayUrl) -> SubscriptionId {
-    let mut hasher = DefaultHasher::new();
-    relay.hash(&mut hasher);
-
-    SubscriptionId::new(format!("{BROWSE_PREFIX}{:08x}", hasher.finish() as u32))
-}
-
-fn page_subscription(key: &GroupKey) -> SubscriptionId {
-    SubscriptionId::new(format!("{PAGE_PREFIX}{:08x}", key.uniq_id() as u32))
-}
-
-fn is_page(id: &SubscriptionId) -> bool {
-    id.as_str().starts_with(PAGE_PREFIX)
-}
-
-fn is_own_subscription(id: &SubscriptionId) -> bool {
-    let id = id.as_str();
-    id == LIST_SUBSCRIPTION
-        || id == FORK_SUBSCRIPTION
-        || id.starts_with(GROUP_PREFIX)
-        || id.starts_with(BROWSE_PREFIX)
-        || id.starts_with(PAGE_PREFIX)
 }
 
 impl EventEmitter<GroupsEvent> for GroupsRegistry {}
 
 pub struct GroupsRegistry {
     groups: Vec<Entity<Group>>,
+    previews: HashMap<GroupKey, Entity<Group>>,
     list: GroupList,
     browse: HashMap<SubscriptionId, RelayUrl>,
     routes: HashMap<SubscriptionId, GroupKey>,
     observers: HashMap<GroupKey, Subscription>,
     forks: HashMap<PublicKey, (Timestamp, GroupList)>,
     fork_authors: HashSet<PublicKey>,
+    /// The relays with a discovery reconciliation in flight.
+    syncing: HashSet<RelayUrl>,
     signal_tx: flume::Sender<Signal>,
     signal_rx: flume::Receiver<Signal>,
     notification_listener: Option<Task<()>>,
@@ -132,26 +108,27 @@ impl GroupsRegistry {
         }));
 
         cx.defer(move |cx| {
-            if let Err(error) = this.update(cx, |this, cx| {
+            this.update(cx, |this, cx| {
                 this.handle_notifications(cx);
                 this.load_cached(cx);
 
                 if nostr.read(cx).current_user().is_some() {
                     this.load(cx);
                 }
-            }) {
-                log::warn!("nip29: initializing the registry failed: {error}");
-            }
+            })
+            .ok();
         });
 
         Self {
             groups: Vec::new(),
+            previews: HashMap::new(),
             list: GroupList::default(),
             browse: HashMap::new(),
             routes: HashMap::new(),
             observers: HashMap::new(),
             forks: HashMap::new(),
             fork_authors: HashSet::new(),
+            syncing: HashSet::new(),
             signal_tx: tx,
             signal_rx: rx,
             notification_listener: None,
@@ -170,6 +147,7 @@ impl GroupsRegistry {
             .iter()
             .find(|group| group.read(cx).key() == key)
             .cloned()
+            .or_else(|| self.previews.get(key).cloned())
     }
 
     pub fn join(&mut self, reference: GroupReference, cx: &mut Context<Self>) {
@@ -207,7 +185,7 @@ impl GroupsRegistry {
                         });
                     }
                 }) {
-                    log::warn!("nip29: marking the refused join failed: {error}");
+                    log::warn!("marking the refused join failed: {error}");
                 }
             }
         }));
@@ -253,22 +231,24 @@ impl GroupsRegistry {
         self.tasks.push(cx.background_spawn(async move {
             client.add_relay(relay.clone()).and_connect().await.ok();
 
-            let filter = Filter::new().kind(Kind::GroupMetadata).limit(BROWSE_LIMIT);
+            let metadata = Filter::new().kind(Kind::GroupMetadata).limit(BROWSE_LIMIT);
+            let members = Filter::new().kind(Kind::GroupMembers).limit(BROWSE_LIMIT);
+
             let opts = SubscribeAutoCloseOptions::default()
                 .exit_policy(ReqExitPolicy::ExitOnEOSE)
                 .timeout(Some(BROWSE_TIMEOUT));
 
             if let Err(error) = client
-                .subscribe(ReqTarget::single(relay.clone(), [filter]))
+                .subscribe(ReqTarget::single(relay.clone(), [metadata, members]))
                 .with_id(id.clone())
                 .close_on(opts)
                 .await
             {
-                log::warn!("nip29: browsing {relay} failed: {error}");
+                log::warn!("browsing {relay} failed: {error}");
             }
 
             if let Err(error) = tx.send_async(Signal::BrowseSettled(id)).await {
-                log::warn!("nip29: the browse settle signal was dropped: {error}");
+                log::warn!("the browse settle signal was dropped: {error}");
             }
         }));
     }
@@ -278,6 +258,49 @@ impl GroupsRegistry {
             return;
         };
         cx.emit(GroupsEvent::BrowseSettled(relay));
+    }
+
+    /// The (relay, group) pairs of every joined group.
+    fn joined_keys(&self, cx: &App) -> HashSet<(RelayUrl, GroupId)> {
+        self.groups
+            .iter()
+            .map(|group| {
+                let key = group.read(cx).key();
+                (key.relay().clone(), key.id().clone())
+            })
+            .collect()
+    }
+
+    /// Whether the group is one of the user's groups, not a preview.
+    fn joined(&self, key: &GroupKey, cx: &App) -> bool {
+        self.groups.iter().any(|group| group.read(cx).key() == key)
+    }
+
+    /// Load the discoverable groups from the local database only.
+    pub fn cached_discovery(&self, cx: &App) -> Task<Discovery> {
+        let client = NostrRegistry::global(cx).read(cx).client();
+        let joined = self.joined_keys(cx);
+
+        cx.background_spawn(Discovery::cached(client, joined))
+    }
+
+    /// Reconcile the discoverable groups with the relays.
+    pub fn discover(&self, cx: &App) -> Task<()> {
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
+        let joined = self.joined_keys(cx);
+
+        if nostr.read(cx).current_user().is_none() {
+            return Task::ready(());
+        }
+
+        cx.background_spawn(async move {
+            let Ok(me) = signer.get_public_key_async().await else {
+                return;
+            };
+            Discovery::default().sync(client, me, joined).await;
+        })
     }
 
     pub fn load_more(&mut self, key: &GroupKey, cx: &mut Context<Self>) {
@@ -307,7 +330,7 @@ impl GroupsRegistry {
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             if let Err(error) = sent.await {
-                log::warn!("nip29: leaving {} failed: {error}", key.id());
+                log::warn!("leaving {} failed: {error}", key.id());
                 return;
             }
             this.update(cx, |this, cx| {
@@ -325,9 +348,11 @@ impl GroupsRegistry {
         let routes = std::mem::take(&mut self.routes);
 
         self.groups.clear();
+        self.previews.clear();
         self.observers.clear();
         self.forks.clear();
         self.fork_authors.clear();
+        self.syncing.clear();
         self.list = GroupList::default();
 
         let nostr = NostrRegistry::global(cx);
@@ -343,7 +368,7 @@ impl GroupsRegistry {
         self.tasks.push(cx.background_spawn(async move {
             for id in ids {
                 if let Err(error) = client.unsubscribe(&id).await {
-                    log::warn!("nip29: unsubscribing {id} failed: {error}");
+                    log::warn!("unsubscribing {id} failed: {error}");
                 }
             }
         }));
@@ -375,11 +400,14 @@ impl GroupsRegistry {
         self.tasks
             .push(cx.spawn(async move |this, cx| match task.await {
                 Ok(list) => {
-                    if let Err(error) = this.update(cx, |this, cx| this.merge(list, cx)) {
-                        log::warn!("nip29: applying the cached group list failed: {error}");
-                    }
+                    this.update(cx, |this, cx| {
+                        this.merge(list, cx);
+                    })
+                    .ok();
                 }
-                Err(error) => log::warn!("nip29: loading the cached group list failed: {error}"),
+                Err(error) => {
+                    log::warn!("loading the cached group list failed: {error}");
+                }
             }));
     }
 
@@ -388,7 +416,7 @@ impl GroupsRegistry {
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
 
-        let updates: Task<Result<(), Error>> = cx.background_spawn(async move {
+        cx.background_spawn(async move {
             let me = signer.get_public_key_async().await?;
             let opts = SubscribeAutoCloseOptions::default().exit_policy(ReqExitPolicy::ExitOnEOSE);
             let filter = Filter::new().author(me).kind(Kind::SimpleGroups).limit(1);
@@ -399,14 +427,9 @@ impl GroupsRegistry {
                 .close_on(opts)
                 .await?;
 
-            Ok(())
-        });
-
-        self.tasks.push(cx.spawn(async move |_this, _cx| {
-            if let Err(error) = updates.await {
-                log::warn!("nip29: subscribing to the group list failed: {error}");
-            }
-        }));
+            Ok::<(), anyhow::Error>(())
+        })
+        .detach();
 
         self.watch_forks(cx);
     }
@@ -430,7 +453,6 @@ impl GroupsRegistry {
         self.tasks.push(cx.background_spawn(async move {
             loop {
                 executor.timer(FORK_INTERVAL).await;
-
                 if tx.send_async(Signal::Forks).await.is_err() {
                     break;
                 }
@@ -471,14 +493,14 @@ impl GroupsRegistry {
                 .with_id(fork_subscription_id())
                 .await
             {
-                log::warn!("nip29: subscribing to the admins' group lists failed: {error}");
+                log::warn!("subscribing to the admins' group lists failed: {error}");
             }
         }));
     }
 
     fn absorb_fork_list(&mut self, event: &Event, cx: &mut Context<Self>) {
         let Ok(list) = GroupList::parse(event) else {
-            log::warn!("nip29: ignoring a malformed admin group list");
+            log::warn!("ignoring a malformed admin group list");
             return;
         };
 
@@ -519,6 +541,12 @@ impl GroupsRegistry {
     }
 
     fn ensure(&mut self, key: GroupKey, cx: &mut Context<Self>) {
+        // A previewed group becomes one of the user's groups, keeping its state.
+        if let Some(group) = self.previews.remove(&key) {
+            self.groups.push(group);
+            return;
+        }
+
         if self.group(&key, cx).is_some() {
             return;
         }
@@ -526,9 +554,31 @@ impl GroupsRegistry {
         let group = cx.new(|_| Group::new(key.clone()));
         self.groups.push(group.clone());
 
+        self.observe_group(key.clone(), &group, cx);
+        self.subscribe(key.clone(), cx);
+        self.load_state(key, cx);
+    }
+
+    /// Track a group opened for preview: connected, but not joined.
+    pub fn open(&mut self, key: GroupKey, cx: &mut Context<Self>) -> Entity<Group> {
+        if let Some(group) = self.group(&key, cx) {
+            return group;
+        }
+
+        let group = cx.new(|_| Group::new(key.clone()));
+        self.previews.insert(key.clone(), group.clone());
+
+        self.observe_group(key.clone(), &group, cx);
+        self.subscribe(key.clone(), cx);
+        self.load_state(key, cx);
+
+        group
+    }
+
+    fn observe_group(&mut self, key: GroupKey, group: &Entity<Group>, cx: &mut Context<Self>) {
         self.observers.insert(
-            key.clone(),
-            cx.subscribe(&group, |this, group, event, cx| match event {
+            key,
+            cx.subscribe(group, |this, group, event, cx| match event {
                 GroupEvent::Sent(event) => {
                     if event.kind == Kind::GroupDeleteEvent {
                         this.forget_event(group, event.clone(), cx);
@@ -538,7 +588,13 @@ impl GroupsRegistry {
                     }
                 }
                 GroupEvent::Updated => {
-                    this.refresh_entry(group, cx);
+                    let key = group.read(cx).key().clone();
+
+                    // Only the user's groups belong in their group list.
+                    if this.joined(&key, cx) {
+                        this.refresh_entry(group, cx);
+                    }
+
                     this.sync_forks(false, cx);
 
                     cx.emit(GroupsEvent::Updated);
@@ -547,9 +603,6 @@ impl GroupsRegistry {
                 _ => {}
             }),
         );
-
-        self.subscribe(key.clone(), cx);
-        self.load_state(key, cx);
     }
 
     fn subscribe(&mut self, key: GroupKey, cx: &mut Context<Self>) {
@@ -573,6 +626,7 @@ impl GroupsRegistry {
         self.routes.remove(&page);
         self.observers.remove(&key);
         self.groups.retain(|group| group.read(cx).key() != &key);
+        self.previews.remove(&key);
         self.list.remove(&key);
 
         let nostr = NostrRegistry::global(cx);
@@ -581,7 +635,7 @@ impl GroupsRegistry {
         self.tasks.push(cx.background_spawn(async move {
             for id in [id, page] {
                 if let Err(error) = client.unsubscribe(&id).await {
-                    log::warn!("nip29: unsubscribing {id} failed: {error}");
+                    log::warn!("unsubscribing {id} failed: {error}");
                 }
             }
 
@@ -590,7 +644,7 @@ impl GroupsRegistry {
                 .custom_tag(SingleLetterTag::LOWERCASE_R, cache_tag);
 
             if let Err(error) = client.database().delete(filter).await {
-                log::warn!("nip29: clearing the group cache failed: {error}");
+                log::warn!("clearing the group cache failed: {error}");
             }
         }));
 
@@ -651,18 +705,17 @@ impl GroupsRegistry {
             let event = match builder.finalize_async(&signer).await {
                 Ok(event) => event,
                 Err(error) => {
-                    log::warn!("nip29: signing the group list failed: {error}");
+                    log::warn!("signing the group list failed: {error}");
                     return;
                 }
             };
 
             match client.send_event(&event).to_nip65().await {
                 Ok(output) if output.failed.is_empty() => {}
-                Ok(output) => log::warn!(
-                    "nip29: {} relay(s) rejected the group list",
-                    output.failed.len()
-                ),
-                Err(error) => log::warn!("nip29: publishing the group list failed: {error}"),
+                Ok(output) => {
+                    log::warn!("{} relay(s) rejected the group list", output.failed.len())
+                }
+                Err(error) => log::warn!("publishing the group list failed: {error}"),
             }
         }));
     }
@@ -687,7 +740,7 @@ impl GroupsRegistry {
                     .read_with(cx, |group, cx| group.save_envelope(event, cx))
                     .await
             {
-                log::warn!("nip29: caching failed: {error}");
+                log::warn!("caching failed: {error}");
                 return;
             }
 
@@ -698,7 +751,7 @@ impl GroupsRegistry {
                     });
                 }
                 Err(error) => {
-                    log::warn!("nip29: reloading {} failed: {error}", logged.id());
+                    log::warn!("reloading {} failed: {error}", logged.id());
                 }
             }
         }));
@@ -725,7 +778,7 @@ impl GroupsRegistry {
                     });
                 }
                 Err(error) => {
-                    log::warn!("nip29: loading {} state failed: {error}", logged.id());
+                    log::warn!("loading {} state failed: {error}", logged.id());
                 }
             }));
     }
@@ -745,7 +798,7 @@ impl GroupsRegistry {
                 .read_with(cx, |group, cx| group.save_envelope(event.clone(), cx))
                 .await
             {
-                log::warn!("nip29: caching failed: {error}");
+                log::warn!("caching failed: {error}");
                 return;
             }
 
@@ -791,7 +844,7 @@ impl GroupsRegistry {
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             if let Err(error) = purge.await {
-                log::warn!("nip29: dropping the deleted envelope failed: {error}");
+                log::warn!("dropping the deleted envelope failed: {error}");
             }
             this.update(cx, |this, cx| {
                 group.update(cx, |group, cx| {
@@ -807,7 +860,7 @@ impl GroupsRegistry {
         if id == list_subscription_id() {
             match GroupList::parse(&event) {
                 Ok(list) => self.merge(list, cx),
-                Err(error) => log::warn!("nip29: ignoring a malformed group list: {error}"),
+                Err(error) => log::warn!("ignoring a malformed group list: {error}"),
             }
             return;
         }
@@ -842,8 +895,17 @@ impl GroupsRegistry {
             return;
         };
 
+        if let Some((group, created_at, members)) = parse_members(event) {
+            cx.emit(GroupsEvent::Members {
+                key: GroupKey::new(relay, group),
+                created_at,
+                members,
+            });
+            return;
+        }
+
         let Ok(metadata) = GroupMetadata::parse(event) else {
-            log::warn!("nip29: ignoring malformed group metadata from {relay}");
+            log::warn!("ignoring malformed group metadata from {relay}");
             return;
         };
 
@@ -853,6 +915,7 @@ impl GroupsRegistry {
 
         cx.emit(GroupsEvent::Browsed(Box::new(GroupCandidate {
             key: GroupKey::new(relay, group),
+            created_at: event.created_at,
             metadata,
         })));
     }
@@ -887,12 +950,12 @@ impl GroupsRegistry {
 
     fn handle_closed(&mut self, id: SubscriptionId, reason: String, cx: &mut Context<Self>) {
         if let Some(relay) = self.browse.get(&id) {
-            log::warn!("nip29: browsing {relay} was refused: {reason}");
+            log::warn!("browsing {relay} was refused: {reason}");
             return;
         }
 
         if id == fork_subscription_id() {
-            log::debug!("nip29: the admins' group lists were refused: {reason}");
+            log::debug!("the admins' group lists were refused: {reason}");
             return;
         }
 
@@ -903,7 +966,7 @@ impl GroupsRegistry {
         if is_page(&id) {
             self.routes.remove(&id);
             log::warn!(
-                "nip29: loading older messages in {} was refused: {reason}",
+                "loading older messages in {} was refused: {reason}",
                 key.id()
             );
 
@@ -943,44 +1006,46 @@ impl GroupsRegistry {
             const MAX_PROCESSED: usize = 10_000;
 
             while let Some(notification) = notifications.next().await {
-                let ClientNotification::Message { message, .. } = notification else {
+                let ClientNotification::Message { relay_url, message } = notification else {
                     continue;
                 };
 
-                let signal = match *message {
+                match *message {
                     RelayMessage::Event {
                         subscription_id,
                         event,
-                    } => {
-                        let id = subscription_id.into_owned();
+                    } if is_own_subscription(&subscription_id) => {
+                        if processed.len() >= MAX_PROCESSED {
+                            processed.clear();
+                        }
 
-                        if !is_own_subscription(&id) {
-                            None
-                        } else {
-                            if processed.len() >= MAX_PROCESSED {
-                                processed.clear();
-                            }
-                            processed
-                                .insert(event.id)
-                                .then(|| Signal::Event(id, event.into_owned()))
+                        if processed.insert(event.id) {
+                            let signal = Signal::Event(
+                                subscription_id.into_owned(),
+                                Box::new(event.into_owned()),
+                            );
+
+                            tx.send_async(signal).await.ok();
                         }
                     }
-                    RelayMessage::EndOfStoredEvents(id) => {
-                        let id = id.into_owned();
-                        is_own_subscription(&id).then_some(Signal::Eose(id))
+                    RelayMessage::EndOfStoredEvents(id) if is_own_subscription(&id) => {
+                        tx.send_async(Signal::Eose(id.into_owned())).await.ok();
                     }
                     RelayMessage::Closed {
                         subscription_id,
                         message,
-                    } => {
-                        let id = subscription_id.into_owned();
-                        is_own_subscription(&id).then_some(Signal::Closed(id, message.into_owned()))
+                    } if is_own_subscription(&subscription_id) => {
+                        let signal =
+                            Signal::Closed(subscription_id.into_owned(), message.into_owned());
+                        tx.send_async(signal).await.ok();
                     }
-                    _ => None,
-                };
-
-                if let Some(signal) = signal {
-                    tx.send_async(signal).await.ok();
+                    RelayMessage::NegMsg { .. } => {
+                        tx.send_async(Signal::Syncing(relay_url)).await.ok();
+                    }
+                    RelayMessage::NegErr { .. } | RelayMessage::EndOfStoredEvents(_) => {
+                        tx.send_async(Signal::Synced(relay_url)).await.ok();
+                    }
+                    _ => {}
                 }
             }
         }));
@@ -989,7 +1054,7 @@ impl GroupsRegistry {
             while let Ok(signal) = rx.recv_async().await {
                 this.update(cx, |this, cx| match signal {
                     Signal::Event(id, event) => {
-                        this.handle_event(id, event, cx);
+                        this.handle_event(id, *event, cx);
                     }
                     Signal::Eose(id) => {
                         this.handle_eose(id, cx);
@@ -999,6 +1064,14 @@ impl GroupsRegistry {
                     }
                     Signal::BrowseSettled(id) => {
                         this.settle_browse(id, cx);
+                    }
+                    Signal::Syncing(relay) => {
+                        this.syncing.insert(relay);
+                    }
+                    Signal::Synced(relay) => {
+                        if this.syncing.remove(&relay) {
+                            cx.emit(GroupsEvent::Synced);
+                        }
                     }
                     Signal::Forks => {
                         this.sync_forks(true, cx);

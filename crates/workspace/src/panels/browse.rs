@@ -1,26 +1,32 @@
 use std::ops::Range;
+use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, WeakEntity, Window,
-    div, uniform_list,
+    InteractiveElement, IntoElement, ParentElement, Render, ScrollStrategy, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, div, px, relative,
+    size,
 };
-use nip29::{GroupCandidate, GroupKey, GroupsEvent, GroupsRegistry};
-use nostr_sdk::prelude::RelayUrl;
+use gpui_base::{VirtualListScrollHandle, v_virtual_list};
+use nip29::{Discovery, GroupCandidate, GroupKey, GroupsEvent, GroupsRegistry, Membership};
+use nostr_sdk::prelude::{RelayUrl, Timestamp};
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
 use theme::ActiveTheme;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelHandle};
-use ui::indicator::Indicator;
 use ui::input::{Input, InputEvent, InputState};
 use ui::notification::Notification;
-use ui::{Disableable, Icon, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::scroll::Scrollbar;
+use ui::{Icon, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 const TITLE: &str = "Browse";
 const INPUT_PLACEHOLDER: &str = "wss://relay.example.com";
+const HEADER_HEIGHT: f32 = 96.0;
+const CARD_HEIGHT: f32 = 164.0;
+const NO_DESCRIPTION: &str = "No description";
 
 pub fn init(dock: WeakEntity<DockArea>, window: &mut Window, cx: &mut App) -> Entity<BrowsePanel> {
     cx.new(|cx| BrowsePanel::new(dock, window, cx))
@@ -35,8 +41,15 @@ pub struct BrowsePanel {
     relay: Option<RelayUrl>,
     /// The groups the relay has announced so far
     candidates: Vec<GroupCandidate>,
+    /// The groups discovered from the cache and the relays
+    discovery: Discovery,
+    /// Whether the discovery sync is still running
+    discovering: bool,
+    /// The scroll position of the panel
+    scroll_handle: VirtualListScrollHandle,
     /// Whether the relay is still answering
     loading: bool,
+    tasks: SmallVec<[Task<()>; 2]>,
     _subscriptions: SmallVec<[Subscription; 2]>,
 }
 
@@ -63,9 +76,24 @@ impl BrowsePanel {
                 GroupsEvent::BrowseSettled(relay) => {
                     this.settle(relay.clone(), cx);
                 }
+                GroupsEvent::Synced => {
+                    this.refresh_discovery(cx);
+                }
+                GroupsEvent::Members {
+                    key,
+                    created_at,
+                    members,
+                } => {
+                    this.push_members(key.clone(), *created_at, *members, cx);
+                }
                 _ => {}
             }),
         );
+
+        cx.defer_in(window, |this, _window, cx| {
+            this.load_cached(cx);
+            this.sync_discovery(cx);
+        });
 
         Self {
             focus_handle: cx.focus_handle(),
@@ -73,9 +101,75 @@ impl BrowsePanel {
             input,
             relay: None,
             candidates: Vec::new(),
+            discovery: Discovery::default(),
+            discovering: true,
+            scroll_handle: VirtualListScrollHandle::new(),
             loading: false,
+            tasks: smallvec![],
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Load the groups from the local database.
+    fn load_cached(&mut self, cx: &mut Context<Self>) {
+        let registry = GroupsRegistry::global(cx);
+        let discovery = registry.read(cx).cached_discovery(cx);
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let discovery = discovery.await;
+
+            this.update(cx, |this, cx| {
+                this.discovery = discovery;
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// Sync the discoverable groups with the relays.
+    fn sync_discovery(&mut self, cx: &mut Context<Self>) {
+        self.discovering = true;
+
+        let registry = GroupsRegistry::global(cx);
+        let sync = registry.read(cx).discover(cx);
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            sync.await;
+
+            this.update(cx, |this, cx| {
+                this.discovering = false;
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// A browsed group announced its member list.
+    fn push_members(
+        &mut self,
+        key: GroupKey,
+        created_at: Timestamp,
+        members: usize,
+        cx: &mut Context<Self>,
+    ) {
+        self.discovery.set_members(key, created_at, members);
+        cx.notify();
+    }
+
+    /// The discovery synced new groups: re-query the local database.
+    fn refresh_discovery(&mut self, cx: &mut Context<Self>) {
+        let registry = GroupsRegistry::global(cx);
+        let discovery = registry.read(cx).cached_discovery(cx);
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let discovery = discovery.await;
+
+            this.update(cx, |this, cx| {
+                this.discovery = discovery;
+                cx.notify();
+            })
+            .ok();
+        }));
     }
 
     /// Browse the relay in the input.
@@ -98,6 +192,7 @@ impl BrowsePanel {
         self.relay = Some(relay.clone());
         self.candidates.clear();
         self.loading = true;
+        self.scroll_handle.scroll_to_item(0, ScrollStrategy::Top);
 
         registry.update(cx, |registry, cx| {
             registry.browse(relay, cx);
@@ -128,21 +223,13 @@ impl BrowsePanel {
         cx.notify();
     }
 
-    /// Join a browsed group and open it.
-    fn join(&self, key: GroupKey, window: &mut Window, cx: &mut App) {
-        let dock = self.dock.clone();
+    /// Open the group's panel to preview (or revisit) it.
+    fn open_panel(dock: &WeakEntity<DockArea>, key: GroupKey, window: &mut Window, cx: &mut App) {
         let registry = GroupsRegistry::global(cx);
-
-        registry.update(cx, |registry, cx| {
-            registry.join_key(key.clone(), None, cx);
-        });
-
-        let Some(group) = registry.read(cx).group(&key, cx) else {
-            return;
-        };
+        let group = registry.update(cx, |registry, cx| registry.open(key, cx));
 
         ui::dock::add_panel_to(
-            &dock,
+            dock,
             PanelHandle::new(nip29_ui::init(group, window, cx)),
             DockPlacement::Center,
             window,
@@ -150,95 +237,222 @@ impl BrowsePanel {
         );
     }
 
-    fn render_rows(&self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let hide_avatar = AppSettings::get_hide_avatar(cx);
-        let panel = cx.entity().downgrade();
-
-        let registry = GroupsRegistry::global(cx);
-        let joined: Vec<GroupKey> = registry
+    /// The discovered groups the user is not a member of.
+    fn discovered_cards(&self, cx: &App) -> Vec<GroupCandidate> {
+        let member_of: Vec<GroupKey> = GroupsRegistry::global(cx)
             .read(cx)
             .groups()
             .iter()
+            .filter(|group| matches!(group.read(cx).membership(), Membership::Member))
             .map(|group| group.read(cx).key().clone())
             .collect();
 
-        self.candidates
-            .get(range)
-            .into_iter()
-            .flatten()
-            .map(|candidate| {
-                let key = candidate.key.clone();
-                let name = SharedString::from(candidate.display_name().to_owned());
-                let picture = candidate
-                    .display_image()
-                    .map(|picture| SharedString::from(picture.to_owned()));
-                let seed = key.cache_tag();
-                let is_joined = joined.contains(&key);
+        self.discovery
+            .discovered()
+            .iter()
+            .filter(|candidate| !member_of.contains(&candidate.key))
+            .cloned()
+            .collect()
+    }
 
-                let action = if is_joined {
-                    Button::new(format!("browse-joined-{seed}"))
-                        .label("Joined")
-                        .small()
-                        .disabled(true)
-                        .into_any_element()
+    /// The panel header, item 0 of the list so it scrolls with the cards.
+    fn render_header(&self, cx: &Context<Self>) -> AnyElement {
+        h_flex()
+            .w_full()
+            .px_4()
+            .h_24()
+            .flex_shrink_0()
+            .justify_between()
+            .child(
+                v_flex()
+                    .min_w_0()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_semibold()
+                            .line_height(relative(1.2))
+                            .child("Public Groups"),
+                    )
+                    .child(
+                        div()
+                            .truncate()
+                            .text_xs()
+                            .text_color(cx.theme().text_muted)
+                            .map(|this| match &self.relay {
+                                Some(relay) => {
+                                    this.child(SharedString::from(relay.as_str().to_owned()))
+                                }
+                                None => this.child(SharedString::from(
+                                    "Hosted on current connected relays",
+                                )),
+                            }),
+                    ),
+            )
+            .child(
+                h_flex()
+                    .gap_1()
+                    .w_full()
+                    .max_w_64()
+                    .px_1()
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().surface_background)
+                    .child(
+                        Input::new(&self.input)
+                            .appearance(false)
+                            .small()
+                            .text_sm()
+                            .flex_1(),
+                    )
+                    .child(
+                        Button::new("relay-browse")
+                            .icon(IconName::ArrowRight)
+                            .tooltip("Browse by Relay")
+                            .ghost()
+                            .small()
+                            .on_click(cx.listener(|this, _event, window, cx| {
+                                this.browse(window, cx);
+                            })),
+                    ),
+            )
+            .into_any_element()
+    }
+
+    fn render_list_rows(&mut self, range: Range<usize>, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let discover = self.relay.is_none();
+
+        let cards: Vec<GroupCandidate> = if discover {
+            self.discovered_cards(cx)
+        } else {
+            self.candidates.clone()
+        };
+
+        range
+            .map(|ix| {
+                if ix == 0 {
+                    self.render_header(cx)
                 } else {
-                    let panel = panel.clone();
-                    let clicked = key.clone();
+                    let pair = cards.chunks(2).nth(ix - 1).unwrap_or(&[]);
 
-                    Button::new(format!("browse-join-{seed}"))
-                        .label("Join")
-                        .small()
-                        .on_click(move |_event, window, cx| {
-                            if let Err(error) = panel.update(cx, |panel, cx| {
-                                panel.join(clicked.clone(), window, cx);
-                            }) {
-                                log::error!("Failed to join a browsed group: {error}");
-                            }
+                    h_flex()
+                        .w_full()
+                        .h(px(CARD_HEIGHT))
+                        .px_4()
+                        .pb_4()
+                        .gap_4()
+                        .children(pair.first().map(|card| self.render_card(card, cx)))
+                        .child(match pair.get(1) {
+                            Some(card) => self.render_card(card, cx),
+                            None => div().flex_1().into_any_element(),
                         })
                         .into_any_element()
-                };
-
-                h_flex()
-                    .w_full()
-                    .gap_2()
-                    .px_1p5()
-                    .py_1()
-                    .when(!hide_avatar, |this| {
-                        this.child(
-                            Avatar::from_source(picture)
-                                .seed(seed)
-                                .small()
-                                .flex_shrink_0(),
-                        )
-                    })
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .child(div().text_sm().font_medium().truncate().child(name))
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().text_placeholder)
-                                    .truncate()
-                                    .child(SharedString::from(key.id().as_str().to_owned())),
-                            ),
-                    )
-                    .child(action)
-                    .into_any_element()
+                }
             })
             .collect()
     }
-}
 
-fn notice(text: &'static str, cx: &App) -> AnyElement {
-    h_flex()
-        .size_full()
-        .justify_center()
-        .text_sm()
-        .text_color(cx.theme().text_muted)
-        .child(text)
-        .into_any_element()
+    fn render_card(&self, candidate: &GroupCandidate, cx: &mut Context<Self>) -> AnyElement {
+        let hide_avatar = AppSettings::get_hide_avatar(cx);
+        let dock = self.dock.clone();
+
+        let key = candidate.key.clone();
+        let seed = key.cache_tag();
+        let members = self.discovery.members(&key).unwrap_or(0);
+
+        let name = SharedString::from(candidate.display_name().to_owned());
+        let relay = SharedString::from(key.relay().as_str().to_owned());
+
+        let picture = candidate
+            .display_image()
+            .map(|picture| SharedString::from(picture.to_owned()));
+
+        let about = candidate
+            .display_about()
+            .map(|about| SharedString::from(about.to_owned()));
+
+        v_flex()
+            .id(SharedString::from(format!("card-{seed}")))
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_hidden()
+            .rounded(cx.theme().radius)
+            .cursor_pointer()
+            .border_1()
+            .border_color(cx.theme().border_transparent)
+            .bg(cx.theme().surface_background)
+            .hover(|this| {
+                this.bg(cx.theme().elevated_surface_background)
+                    .border_color(cx.theme().border_focused)
+            })
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .p_2()
+                    .gap_2()
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .items_center()
+                            .gap_2()
+                            .when(!hide_avatar, |this| {
+                                this.child(Avatar::from_source(picture).seed(seed).flex_shrink_0())
+                            })
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_sm()
+                                            .truncate()
+                                            .font_semibold()
+                                            .line_height(relative(1.2))
+                                            .child(name),
+                                    )
+                                    .child(
+                                        div()
+                                            .truncate()
+                                            .text_xs()
+                                            .text_color(cx.theme().text_placeholder)
+                                            .child(relay),
+                                    ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .text_sm()
+                            .text_color(cx.theme().text_muted)
+                            .text_ellipsis()
+                            .line_clamp(2)
+                            .map(|this| {
+                                if let Some(about) = about {
+                                    this.child(about)
+                                } else {
+                                    this.child(NO_DESCRIPTION)
+                                }
+                            }),
+                    )
+                    .child(div().flex_1())
+                    .child(
+                        h_flex()
+                            .w_full()
+                            .gap_1p5()
+                            .text_color(cx.theme().text_muted)
+                            .child(Icon::new(IconName::Book))
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .child(SharedString::from(format!("{members} members"))),
+                            ),
+                    ),
+            )
+            .on_click(move |_event, window, cx| {
+                Self::open_panel(&dock, key.clone(), window, cx);
+            })
+            .into_any_element()
+    }
 }
 
 impl Panel for BrowsePanel {
@@ -248,7 +462,8 @@ impl Panel for BrowsePanel {
 
     fn title(&self, cx: &App) -> AnyElement {
         h_flex()
-            .gap_1p5()
+            .gap_1()
+            .text_xs()
             .child(
                 Icon::new(IconName::Compass)
                     .small()
@@ -269,44 +484,67 @@ impl Focusable for BrowsePanel {
 
 impl Render for BrowsePanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let count = self.candidates.len();
+        let view = cx.entity();
+        let discover = self.relay.is_none();
 
-        let body = if self.relay.is_none() {
-            notice("Enter a relay to browse its groups.", cx)
-        } else if count > 0 {
-            uniform_list(
-                "browse-groups",
-                count,
-                cx.processor(|this, range, _window, cx| this.render_rows(range, cx)),
-            )
-            .h_full()
-            .into_any_element()
-        } else if self.loading {
-            notice("Loading groups…", cx)
+        let cards: Vec<GroupCandidate> = if discover {
+            self.discovered_cards(cx)
         } else {
-            notice("No groups found.", cx)
+            self.candidates.clone()
         };
 
-        v_flex()
-            .size_full()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .p_3()
-                    .flex_shrink_0()
-                    .child(Input::new(&self.input).cleanable(true).flex_1())
-                    .child(
-                        Button::new("browse-go")
-                            .label("Go")
-                            .primary()
-                            .on_click(cx.listener(|this, _event, window, cx| {
-                                this.browse(window, cx);
-                            })),
-                    )
-                    .when(self.loading, |this| {
-                        this.child(Indicator::new().small().color(cx.theme().icon_accent))
-                    }),
+        let rows = cards.len().div_ceil(2);
+
+        let content: AnyElement = if rows > 0 {
+            let mut item_sizes = vec![size(px(0.), px(HEADER_HEIGHT))];
+            item_sizes.resize(rows + 1, size(px(0.), px(CARD_HEIGHT)));
+
+            v_virtual_list(
+                view,
+                "groups",
+                Rc::new(item_sizes),
+                |this, range, _window, cx| this.render_list_rows(range, cx),
             )
-            .child(div().flex_1().min_h_0().child(body))
+            .track_scroll(&self.scroll_handle)
+            .h_full()
+            .into_any_element()
+        } else {
+            let text = if discover {
+                if self.discovering {
+                    "Discovering groups…"
+                } else {
+                    "No groups found."
+                }
+            } else if self.loading {
+                "Loading groups…"
+            } else {
+                "No groups found."
+            };
+
+            v_flex()
+                .id("browse-content")
+                .size_full()
+                .overflow_y_scroll()
+                .track_scroll(&self.scroll_handle)
+                .child(self.render_header(cx))
+                .child(notice(text, cx))
+                .into_any_element()
+        };
+
+        div()
+            .size_full()
+            .relative()
+            .child(content)
+            .child(Scrollbar::vertical(&self.scroll_handle))
     }
+}
+
+fn notice(text: &'static str, cx: &App) -> AnyElement {
+    h_flex()
+        .size_full()
+        .justify_center()
+        .text_sm()
+        .text_color(cx.theme().text_muted)
+        .child(text)
+        .into_any_element()
 }

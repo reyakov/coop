@@ -30,9 +30,6 @@ pub use nip05::*;
 pub use signer::{CoopAuthUrlHandler, UniversalSigner};
 
 pub fn init(cx: &mut App, cli_key: Option<SecretKey>) {
-    // rustls uses the `aws_lc_rs` provider by default
-    // This only errors if the default provider has already
-    // been installed. We can ignore this `Result`.
     #[cfg(not(target_arch = "wasm32"))]
     rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
@@ -136,22 +133,20 @@ impl NostrRegistry {
 
         // Connect to bootstrap relays once the registry has been returned to the app
         cx.defer(move |cx| {
-            entity
-                .update(cx, |this, cx| {
-                    this.connect_bootstrap_relays(cx);
+            let _ = entity.update(cx, |this, cx| {
+                this.connect_bootstrap_relays(cx);
 
-                    if cfg!(target_arch = "wasm32") {
-                        this.mark_ready(cx);
-                        cx.emit(StateEvent::NoSigner);
-                    } else if let Some(secret) = cli_key {
-                        // Use CLI-provided key -- same path as get_user_credential
-                        let keys = Keys::new(secret);
-                        this.set_signer(keys, cx);
-                    } else {
-                        this.get_user_credential(cx);
-                    }
-                })
-                .ok();
+                if cfg!(target_arch = "wasm32") {
+                    this.mark_ready(cx);
+                    cx.emit(StateEvent::NoSigner);
+                } else if let Some(secret) = cli_key {
+                    // Use CLI-provided key -- same path as get_user_credential
+                    let keys = Keys::new(secret);
+                    this.set_signer(keys, cx);
+                } else {
+                    this.get_user_credential(cx);
+                }
+            });
         });
 
         Self {
