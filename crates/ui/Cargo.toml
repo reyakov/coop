@@ -14,3 +14,6 @@ serde.workspace = true
 smallvec.workspace = true
 
 uuid = "1.10"
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

@@ -39,6 +39,12 @@ mod window_ext;
 /// You can initialize the UI module at your application's entry point.
 pub fn init(cx: &mut gpui::App) {
     gpui_base::init(cx);
+    #[cfg(not(target_os = "macos"))]
+    cx.bind_keys([gpui::KeyBinding::new(
+        "shift-insert",
+        gpui_base::input::Paste,
+        Some("Input"),
+    )]);
     theme::sync_base(cx);
     menu::init(cx);
 }
