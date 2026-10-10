@@ -14,7 +14,7 @@ use nostr_sdk::prelude::*;
 use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, StateEvent};
-use theme::{ActiveTheme, TextStyle, Typeset as _, SIDEBAR_WIDTH, Theme};
+use theme::{ActiveTheme, SIDEBAR_WIDTH, TextStyle, Theme, Typeset as _};
 use ui::button::Button;
 use ui::dock::{self, DockArea, DockLayout, DockPlacement, Panel, PanelHandle};
 use ui::notification::{Notification, NotificationKind};
@@ -298,7 +298,7 @@ impl Workspace {
                 new_chat::open(self.dock.downgrade(), window, cx);
             }
             Command::NewGroup => {
-                new_group::open(window, cx);
+                new_group::open(self.dock.downgrade(), window, cx);
             }
             Command::JoinGroup => {
                 join_group::open(window, cx);
@@ -368,6 +368,25 @@ impl Workspace {
                 }
             }
         }
+    }
+
+    /// Open the channel creation dialog under the action's group.
+    fn on_create_channel(
+        &mut self,
+        action: &nip29_ui::CreateChannel,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(id) = GroupId::new(action.parent.clone()) else {
+            return;
+        };
+
+        new_group::open_channel(
+            self.dock.downgrade(),
+            GroupKey::new(action.relay.clone(), id),
+            window,
+            cx,
+        );
     }
 
     /// Show the sidebar's information for the group a panel belongs to.
@@ -453,6 +472,7 @@ impl Render for Workspace {
         div()
             .id("workspace")
             .on_action(cx.listener(Self::on_command))
+            .on_action(cx.listener(Self::on_create_channel))
             .relative()
             .size_full()
             .child(self.dock.clone())

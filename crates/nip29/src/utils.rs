@@ -58,3 +58,44 @@ pub(crate) fn parse_members(event: &Event) -> Option<(GroupId, Timestamp, usize)
 
     Some((id, event.created_at, members))
 }
+
+const ONSETS: [&str; 34] = [
+    "b", "c", "d", "f", "g", "h", "j", "k", "l", "m", "n", "p", "r", "s", "t", "v", "br", "cr",
+    "dr", "fr", "gr", "pr", "tr", "bl", "cl", "fl", "gl", "pl", "sl", "sh", "ch", "th", "st", "sk",
+];
+const NUCLEI: [&str; 9] = ["a", "e", "i", "o", "u", "ae", "ei", "io", "ou"];
+const CODAS: [&str; 11] = ["", "", "", "n", "r", "s", "t", "d", "l", "m", "k"];
+
+/// A short pronounceable id for new groups, seeded from a fresh key.
+pub(crate) fn readable_id() -> String {
+    let mut picks = SecretKey::generate().secret_bytes().into_iter();
+
+    let mut id = String::with_capacity(18);
+
+    for _ in 0..3 {
+        let onset = ONSETS[usize::from(picks.next().unwrap_or(0)) % ONSETS.len()];
+        let nucleus = NUCLEI[usize::from(picks.next().unwrap_or(0)) % NUCLEI.len()];
+        let coda = CODAS[usize::from(picks.next().unwrap_or(0)) % CODAS.len()];
+
+        id.push_str(onset);
+        id.push_str(nucleus);
+        id.push_str(coda);
+    }
+
+    id
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_readable_id() {
+        for _ in 0..32 {
+            let id = readable_id();
+
+            assert!((6..=15).contains(&id.len()));
+            assert!(id.chars().all(|character| character.is_ascii_lowercase()));
+        }
+    }
+}

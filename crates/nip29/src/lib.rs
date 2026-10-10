@@ -6,7 +6,7 @@ use anyhow::{Error, Result};
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
-use state::NostrRegistry;
+use state::{NostrRegistry, UniversalSigner};
 
 mod discovery;
 mod group;
@@ -23,6 +23,10 @@ pub(crate) static LOCAL_KEYS: LazyLock<Keys> = LazyLock::new(Keys::generate);
 const BROWSE_LIMIT: usize = 500;
 const BROWSE_TIMEOUT: Duration = Duration::from_secs(10);
 const FORK_INTERVAL: Duration = Duration::from_secs(15 * 60);
+const CONFIRM_POLLS: usize = 20;
+const CONFIRM_INTERVAL: Duration = Duration::from_millis(250);
+const METADATA_WARNING: &str =
+    "Group created, but the relay did not accept its name. Edit the group to set it.";
 
 pub fn init(cx: &mut App) {
     GroupsRegistry::set_global(cx.new(GroupsRegistry::new), cx);
@@ -46,6 +50,11 @@ pub enum GroupsEvent {
     },
     /// The discovery synced new groups into the local database.
     Synced,
+    /// A relay accepted a new group; the warning carries a non-fatal issue.
+    Created {
+        key: GroupKey,
+        warning: Option<String>,
+    },
 }
 
 #[derive(Debug)]
@@ -161,7 +170,7 @@ impl GroupsRegistry {
             return;
         };
 
-        self.upsert_entry(&key, None);
+        self.upsert_entry(&key, None, false);
         self.publish_list(cx);
 
         cx.emit(GroupsEvent::Updated);
@@ -191,31 +200,94 @@ impl GroupsRegistry {
         }));
     }
 
-    pub fn create(&mut self, key: GroupKey, metadata: GroupMetadata, cx: &mut Context<Self>) {
+    pub fn create(&mut self, relay: RelayUrl, options: GroupCreateOptions, cx: &mut Context<Self>) {
+        let name = options.name.trim().to_owned();
+
+        if name.is_empty() {
+            cx.emit(GroupsEvent::Error("group name is empty".to_owned()));
+            return;
+        }
+
+        let raw = options.custom_id.as_deref().unwrap_or_default();
+        let id = if raw.is_empty() {
+            readable_id()
+        } else {
+            raw.trim().to_lowercase()
+        };
+
+        let id = match GroupId::new(id) {
+            Ok(id) => id,
+            Err(error) => {
+                cx.emit(GroupsEvent::Error(error.to_string()));
+                return;
+            }
+        };
+
+        let key = GroupKey::new(relay, id);
         self.ensure(key.clone(), cx);
 
         let Some(group) = self.group(&key, cx) else {
             return;
         };
 
-        self.upsert_entry(&key, metadata.name().map(str::to_owned));
-        self.publish_list(cx);
-
-        cx.emit(GroupsEvent::Updated);
-        cx.notify();
-
-        let builder = key.id().create_group(&metadata, None);
+        let metadata = options.metadata(name.clone());
+        let list_private = options.list_private;
+        let builder = key.id().create_group(None);
         let published = group.read(cx).publish(builder, cx);
-        let logged = key.clone();
+        let created = key;
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            if let Err(e) = published.await {
+            if let Err(error) = published.await {
                 this.update(cx, |this, cx| {
-                    this.forget(logged, cx);
-                    cx.emit(GroupsEvent::Error(e.to_string()));
+                    this.forget(created, cx);
+                    cx.emit(GroupsEvent::Error(error.to_string()));
                 })
                 .ok();
+                return;
             }
+
+            // Give the relay time to publish the group's metadata event,
+            // which settles the group id (the relay may override the suggested one).
+            for _ in 0..CONFIRM_POLLS {
+                if group.read_with(cx, |group, _cx| group.metadata().is_some()) {
+                    break;
+                }
+                cx.background_executor().timer(CONFIRM_INTERVAL).await;
+            }
+
+            // The relay can reject the metadata while the admin grant from the
+            // create is still settling, one delayed retry covers that race.
+            let mut warning = None;
+
+            for attempt in 0..2 {
+                if attempt > 0 {
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                }
+
+                let published = group.update(cx, |group, cx| group.edit_metadata(&metadata, cx));
+                let accepted = published.await.is_ok();
+
+                if accepted {
+                    break;
+                }
+
+                if attempt == 1 {
+                    warning = Some(METADATA_WARNING.to_owned());
+                }
+            }
+
+            this.update(cx, |this, cx| {
+                this.upsert_entry(&created, Some(name), list_private);
+                this.publish_list(cx);
+
+                cx.emit(GroupsEvent::Updated);
+                cx.emit(GroupsEvent::Created {
+                    key: created,
+                    warning,
+                });
+                cx.notify();
+            })
+            .ok();
         }));
     }
 
@@ -392,7 +464,10 @@ impl GroupsRegistry {
             let filter = Filter::new().author(me).kind(Kind::SimpleGroups).limit(1);
 
             match client.database().query(filter).await?.into_iter().next() {
-                Some(event) => GroupList::parse(&event),
+                Some(event) => {
+                    let list = GroupList::parse(&event)?;
+                    Ok(Self::hydrate_list(list, &signer, &me).await)
+                }
                 None => Ok(GroupList::default()),
             }
         });
@@ -435,6 +510,10 @@ impl GroupsRegistry {
     }
 
     fn merge(&mut self, list: GroupList, cx: &mut Context<Self>) {
+        // Carry the event's private section so a later publish can preserve it.
+        self.list
+            .set_content(list.content().map(str::to_owned), list.content_readable());
+
         let entries = list.entries().to_vec();
 
         for entry in entries {
@@ -444,6 +523,58 @@ impl GroupsRegistry {
 
         cx.emit(GroupsEvent::Updated);
         cx.notify();
+    }
+
+    /// Decrypt a list event's private section into its entries.
+    async fn hydrate_list(
+        mut list: GroupList,
+        signer: &UniversalSigner,
+        me: &PublicKey,
+    ) -> GroupList {
+        let Some(content) = list.content().map(str::to_owned) else {
+            return list;
+        };
+
+        match signer.nip44_decrypt(me, &content).await {
+            Ok(plaintext) => match parse_private_section(&plaintext) {
+                Some(entries) => {
+                    list.merge_private(entries);
+                    list.mark_readable();
+                }
+                None => log::warn!("ignoring a malformed private group list section"),
+            },
+            Err(error) => log::warn!("decrypting the private group list failed: {error}"),
+        }
+
+        list
+    }
+
+    /// Absorb a list event, decrypting its private section off the hot path.
+    fn absorb_list(&mut self, event: Event, cx: &mut Context<Self>) {
+        let list = match GroupList::parse(&event) {
+            Ok(list) => list,
+            Err(error) => {
+                log::warn!("ignoring a malformed group list: {error}");
+                return;
+            }
+        };
+
+        if list.content().is_none() {
+            self.merge(list, cx);
+            return;
+        }
+
+        let nostr = NostrRegistry::global(cx);
+        let signer = nostr.read(cx).signer();
+        let Some(me) = nostr.read(cx).current_user() else {
+            self.merge(list, cx);
+            return;
+        };
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let list = Self::hydrate_list(list, &signer, &me).await;
+            this.update(cx, |this, cx| this.merge(list, cx)).ok();
+        }));
     }
 
     fn watch_forks(&mut self, cx: &mut Context<Self>) {
@@ -662,13 +793,14 @@ impl GroupsRegistry {
             .and_then(|entry| entry.name.clone())
     }
 
-    fn upsert_entry(&mut self, key: &GroupKey, name: Option<String>) {
+    fn upsert_entry(&mut self, key: &GroupKey, name: Option<String>, private: bool) {
         let name = name.or_else(|| self.entry_name(key));
 
         self.list.upsert(GroupListEntry {
             id: key.id().clone(),
             relay: key.relay().clone(),
             name,
+            private,
         });
     }
 
@@ -690,7 +822,9 @@ impl GroupsRegistry {
             return;
         }
 
-        self.upsert_entry(&key, Some(name));
+        let private = self.list.entry(&key).is_some_and(|entry| entry.private);
+
+        self.upsert_entry(&key, Some(name), private);
         self.publish_list(cx);
     }
 
@@ -698,10 +832,30 @@ impl GroupsRegistry {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
-
-        let builder = self.list.to_builder();
+        let me = nostr.read(cx).current_user();
+        let list = self.list.clone();
 
         self.tasks.push(cx.spawn(async move |_this, _cx| {
+            // Re-encrypt the private section when it carries local entries; a
+            // section this session could not read is carried verbatim.
+            let content = match (list.has_private(), list.content_readable()) {
+                (true, _) => match list.encode_private().zip(me) {
+                    Some((plaintext, me)) => match signer.nip44_encrypt(&me, &plaintext).await {
+                        Ok(content) => Some(content),
+                        Err(error) => {
+                            log::warn!("encrypting the private group list failed: {error}");
+                            list.content().map(str::to_owned)
+                        }
+                    },
+                    None => None,
+                },
+                (false, false) => list.content().map(str::to_owned),
+                (false, true) => None,
+            };
+
+            let builder = EventBuilder::new(Kind::SimpleGroups, content.unwrap_or_default())
+                .tags(list.public_tags());
+
             let event = match builder.finalize_async(&signer).await {
                 Ok(event) => event,
                 Err(error) => {
@@ -858,10 +1012,7 @@ impl GroupsRegistry {
 
     fn handle_event(&mut self, id: SubscriptionId, event: Event, cx: &mut Context<Self>) {
         if id == list_subscription_id() {
-            match GroupList::parse(&event) {
-                Ok(list) => self.merge(list, cx),
-                Err(error) => log::warn!("ignoring a malformed group list: {error}"),
-            }
+            self.absorb_list(event, cx);
             return;
         }
 

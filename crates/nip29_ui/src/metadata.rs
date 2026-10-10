@@ -77,28 +77,28 @@ pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) 
                             .child(
                                 Switch::new("private")
                                     .label("Private")
-                                    .description("Only members can read messages.")
+                                    .description("Only members can read group messages")
                                     .checked(current.private)
                                     .on_click(toggle(&flags, |flags| &mut flags.private)),
                             )
                             .child(
                                 Switch::new("restricted")
                                     .label("Restricted")
-                                    .description("Only members can send messages.")
+                                    .description("Only members can post messages")
                                     .checked(current.restricted)
                                     .on_click(toggle(&flags, |flags| &mut flags.restricted)),
                             )
                             .child(
                                 Switch::new("hidden")
                                     .label("Hidden")
-                                    .description("Hide the group from non-members.")
+                                    .description("Hidden from non-members, not discoverable")
                                     .checked(current.hidden)
                                     .on_click(toggle(&flags, |flags| &mut flags.hidden)),
                             )
                             .child(
                                 Switch::new("closed")
                                     .label("Closed")
-                                    .description("Ignore join requests.")
+                                    .description("Join requests are ignored (invite-only)")
                                     .checked(current.closed)
                                     .on_click(toggle(&flags, |flags| &mut flags.closed)),
                             )

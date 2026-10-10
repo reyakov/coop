@@ -51,6 +51,14 @@ pub struct HideGroupMeta {
     pub group: String,
 }
 
+/// Ask the shell to open the channel creation dialog under a group.
+#[derive(Action, Clone, PartialEq, Eq, Deserialize)]
+#[action(namespace = nip29_ui, no_json)]
+pub struct CreateChannel {
+    pub relay: RelayUrl,
+    pub parent: String,
+}
+
 const ADMIN_ROLE: &str = "admin";
 const LOAD_OLDER_THRESHOLD: usize = 20;
 
@@ -96,6 +104,7 @@ pub fn actions(group: WeakEntity<Group>, cx: &App) -> AnyElement {
     let info = group.clone();
     let edit = group.clone();
     let invite = group.clone();
+    let channel = group.clone();
     let leave = group;
 
     h_flex()
@@ -129,6 +138,27 @@ pub fn actions(group: WeakEntity<Group>, cx: &App) -> AnyElement {
                     .small()
                     .on_click(move |_event, window, cx| {
                         invite::open(invite.clone(), window, cx);
+                    }),
+            )
+            .child(
+                Button::new("group-channel")
+                    .icon(IconName::Plus)
+                    .tooltip("Create channel")
+                    .ghost()
+                    .small()
+                    .on_click(move |_, window, cx| {
+                        let Ok(key) = channel.read_with(cx, |group, _cx| group.key().clone())
+                        else {
+                            return;
+                        };
+
+                        window.dispatch_action(
+                            Box::new(CreateChannel {
+                                relay: key.relay().clone(),
+                                parent: key.id().as_str().to_owned(),
+                            }),
+                            cx,
+                        );
                     }),
             )
         })
@@ -927,7 +957,12 @@ impl Panel for GroupPanel {
                     .child(display_name(group))
                     .into_any_element()
             })
-            .unwrap_or_else(|| div().text_style(TextStyle::Caption).child("Unknown").into_any_element())
+            .unwrap_or_else(|| {
+                div()
+                    .text_style(TextStyle::Caption)
+                    .child("Unknown")
+                    .into_any_element()
+            })
     }
 
     fn toolbar_buttons(&self, _window: &Window, _cx: &App) -> Vec<Button> {

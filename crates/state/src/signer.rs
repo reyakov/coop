@@ -59,6 +59,26 @@ impl UniversalSigner {
     {
         *self.inner.write().expect("RwLock poisoned") = Arc::new(InnerSignerImpl(new_signer));
     }
+
+    /// Encrypt a payload to the given key with NIP-44.
+    pub async fn nip44_encrypt(
+        &self,
+        public_key: &PublicKey,
+        content: &str,
+    ) -> Result<String, UniversalSignerError> {
+        let inner = self.inner.read().expect("RwLock poisoned").clone();
+        inner.nip44_encrypt_async(public_key, content).await
+    }
+
+    /// Decrypt a NIP-44 payload from the given key.
+    pub async fn nip44_decrypt(
+        &self,
+        public_key: &PublicKey,
+        payload: &str,
+    ) -> Result<String, UniversalSignerError> {
+        let inner = self.inner.read().expect("RwLock poisoned").clone();
+        inner.nip44_decrypt_async(public_key, payload).await
+    }
 }
 
 trait InnerSigner: fmt::Debug + Send + Sync + 'static {

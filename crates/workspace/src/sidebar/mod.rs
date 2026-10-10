@@ -127,6 +127,12 @@ impl Sidebar {
                     GroupsEvent::Error(error) => {
                         window.push_notification(Notification::error(error.clone()), cx);
                     }
+                    GroupsEvent::Created {
+                        warning: Some(warning),
+                        ..
+                    } => {
+                        window.push_notification(Notification::warning(warning.clone()), cx);
+                    }
                     _ => {}
                 };
             }),

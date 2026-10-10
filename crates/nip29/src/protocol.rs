@@ -155,9 +155,9 @@ impl GroupId {
             .tag_maybe(previous)
     }
 
-    pub fn create_group(&self, metadata: &GroupMetadata, previous: Option<Tag>) -> EventBuilder {
+    pub fn create_group(&self, previous: Option<Tag>) -> EventBuilder {
         EventBuilder::new(Kind::GroupCreateGroup, "")
-            .tags(self.metadata_tags(metadata))
+            .tag(self.h_tag())
             .tag_maybe(previous)
     }
 
@@ -435,6 +435,38 @@ impl GroupMetadata {
     }
 }
 
+/// Input for creating a group: access flags are presence-only per NIP-29.
+#[derive(Debug, Clone, Default)]
+pub struct GroupCreateOptions {
+    pub name: String,
+    pub about: Option<String>,
+    pub picture: Option<String>,
+    pub private: bool,
+    pub closed: bool,
+    pub restricted: bool,
+    pub hidden: bool,
+    /// List the group in the NIP-44 encrypted section of the user's group list.
+    pub list_private: bool,
+    pub custom_id: Option<String>,
+    pub parent: Option<GroupId>,
+}
+
+impl GroupCreateOptions {
+    pub(crate) fn metadata(&self, name: String) -> GroupMetadata {
+        GroupMetadata {
+            name: Some(name),
+            picture: self.picture.clone(),
+            about: self.about.clone(),
+            private: self.private,
+            restricted: self.restricted,
+            hidden: self.hidden,
+            closed: self.closed,
+            parent: self.parent.clone(),
+            ..Default::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct GroupCandidate {
     pub key: GroupKey,
@@ -611,10 +643,19 @@ pub(crate) struct GroupListEntry {
     pub id: GroupId,
     pub relay: RelayUrl,
     pub name: Option<String>,
+    /// Kept in the encrypted section of the list event, not in public tags.
+    pub private: bool,
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct GroupList(Vec<GroupListEntry>);
+pub(crate) struct GroupList {
+    entries: Vec<GroupListEntry>,
+    /// The raw private section of the last seen list event.
+    content: Option<String>,
+    /// Whether the content was decrypted in this session; an opaque section
+    /// (another client's encryption, or a refused decrypt) is carried verbatim.
+    readable: bool,
+}
 
 impl GroupList {
     pub fn parse(event: &Event) -> Result<Self> {
@@ -642,36 +683,94 @@ impl GroupList {
                 id,
                 relay,
                 name: fields.get(3).cloned(),
+                private: false,
             });
         }
 
-        Ok(Self(entries))
+        let content = if event.content.is_empty() {
+            None
+        } else {
+            Some(event.content.clone())
+        };
+
+        Ok(Self {
+            entries,
+            readable: content.is_none(),
+            content,
+        })
     }
 
     pub fn entries(&self) -> &[GroupListEntry] {
-        &self.0
+        &self.entries
+    }
+
+    pub fn entry(&self, key: &GroupKey) -> Option<&GroupListEntry> {
+        self.entries
+            .iter()
+            .find(|entry| entry.id == *key.id() && entry.relay == *key.relay())
     }
 
     pub fn upsert(&mut self, entry: GroupListEntry) {
         match self
-            .0
+            .entries
             .iter_mut()
             .find(|existing| existing.id == entry.id && existing.relay == entry.relay)
         {
             Some(existing) => *existing = entry,
-            None => self.0.push(entry),
+            None => self.entries.push(entry),
         }
     }
 
     pub fn remove(&mut self, key: &GroupKey) {
-        self.0
+        self.entries
             .retain(|entry| entry.id != *key.id() || entry.relay != *key.relay());
     }
 
-    pub fn to_builder(&self) -> EventBuilder {
-        let mut tags: Vec<Tag> = Vec::with_capacity(self.0.len() * 2);
+    /// The raw private section of the list event, if any.
+    pub(crate) fn content(&self) -> Option<&str> {
+        self.content.as_deref()
+    }
 
-        for entry in &self.0 {
+    pub(crate) fn content_readable(&self) -> bool {
+        self.readable
+    }
+
+    pub(crate) fn set_content(&mut self, content: Option<String>, readable: bool) {
+        self.content = content;
+        self.readable = readable;
+    }
+
+    pub(crate) fn has_private(&self) -> bool {
+        self.entries.iter().any(|entry| entry.private)
+    }
+
+    /// Mark the private section as readable after a successful decrypt.
+    pub(crate) fn mark_readable(&mut self) {
+        self.readable = true;
+    }
+
+    /// Add decrypted private entries; the public listing wins on collision.
+    pub(crate) fn merge_private(&mut self, entries: Vec<GroupListEntry>) {
+        for entry in entries {
+            let public = self.entries.iter().any(|existing| {
+                !existing.private && existing.id == entry.id && existing.relay == entry.relay
+            });
+
+            if !public {
+                self.upsert(entry);
+            }
+        }
+    }
+
+    /// The tags of the public section of the list event.
+    pub(crate) fn public_tags(&self) -> Vec<Tag> {
+        let mut tags = Vec::with_capacity(self.entries.len() * 2);
+
+        for entry in &self.entries {
+            if entry.private {
+                continue;
+            }
+
             let mut values = vec![
                 entry.id.as_str().to_owned(),
                 entry.relay.as_str().to_owned(),
@@ -685,8 +784,68 @@ impl GroupList {
             tags.push(Tag::custom("r", [entry.relay.as_str()]));
         }
 
-        EventBuilder::new(Kind::SimpleGroups, "").tags(tags)
+        tags
     }
+
+    /// The private entries encoded as a tag array, ready for encryption.
+    pub(crate) fn encode_private(&self) -> Option<String> {
+        let tags: Vec<Vec<String>> = self
+            .entries
+            .iter()
+            .filter(|entry| entry.private)
+            .map(|entry| {
+                let mut values = vec![
+                    entry.id.as_str().to_owned(),
+                    entry.relay.as_str().to_owned(),
+                ];
+
+                if let Some(name) = &entry.name {
+                    values.push(name.clone());
+                }
+
+                values
+            })
+            .collect();
+
+        if tags.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&tags).ok()
+        }
+    }
+}
+
+/// Parse a decrypted private section; `None` when it isn't a tag array.
+pub(crate) fn parse_private_section(plaintext: &str) -> Option<Vec<GroupListEntry>> {
+    let tags = serde_json::from_str::<Vec<Vec<String>>>(plaintext).ok()?;
+
+    let mut entries = Vec::new();
+
+    for tag in tags {
+        if tag.first().map(String::as_str) != Some("group") {
+            continue;
+        }
+
+        let (Some(id), Some(relay)) = (tag.get(1), tag.get(2)) else {
+            continue;
+        };
+
+        let Ok(id) = GroupId::new(id) else {
+            continue;
+        };
+        let Ok(relay) = RelayUrl::parse(relay) else {
+            continue;
+        };
+
+        entries.push(GroupListEntry {
+            id,
+            relay,
+            name: tag.get(3).cloned(),
+            private: true,
+        });
+    }
+
+    Some(entries)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
