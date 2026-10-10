@@ -5,16 +5,16 @@ use chat::{ChatRegistry, Room, RoomKind};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Div, Entity, IntoElement, ParentElement,
-    PathPromptOptions, Render, SharedString, Styled, Task, Window, div, retain_all,
+    PathPromptOptions, Render, SharedString, Styled, Task, Window, div, px, retain_all,
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry, shorten_pubkey};
 use settings::AppSettings;
 use state::{NostrRegistry, upload};
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius};
 use ui::avatar::Avatar;
-use ui::button::{Button, ButtonVariants};
+use ui::button::{Button, ButtonVariants, IconPosition};
 use ui::dock::DockPlacement;
 use ui::input::{Input, InputState, Textarea, TextareaState};
 use ui::notification::Notification;
@@ -366,12 +366,13 @@ impl Render for ProfileDialog {
                     .w_full()
                     .items_center()
                     .justify_center()
-                    .bg(cx.theme().surface_background)
+                    .bg(cx.theme().surface)
                     .child(Avatar::new(avatar).seed(profile.avatar_seed()).large())
                     .when(self.editing, |this| {
                         this.child(
                             Button::new("upload")
-                                .icon(IconName::PlusCircle)
+                                .icon(IconName::ArrowRight)
+                                .icon_position(IconPosition::End)
                                 .label("Add an avatar")
                                 .xsmall()
                                 .ghost()
@@ -391,9 +392,9 @@ impl Render for ProfileDialog {
                         .w_full()
                         .justify_center()
                         .gap_3()
-                        .rounded(cx.theme().radius)
-                        .bg(cx.theme().surface_background)
-                        .text_sm()
+                        .rounded(px(button_radius()))
+                        .bg(cx.theme().surface)
+                        .text_style(TextStyle::Callout)
                         .child(shorten_pkey)
                         .child(
                             Button::new("copy")
@@ -464,6 +465,7 @@ impl Render for ProfileDialog {
                         this.child(
                             Button::new("update")
                                 .icon(IconName::Edit)
+                                .icon_position(IconPosition::End)
                                 .label("Update")
                                 .primary()
                                 .font_semibold()
@@ -476,6 +478,7 @@ impl Render for ProfileDialog {
                         this.child(
                             Button::new("message")
                                 .icon(IconName::Message)
+                                .icon_position(IconPosition::End)
                                 .label("Message")
                                 .primary()
                                 .font_semibold()
@@ -497,6 +500,7 @@ impl Render for ProfileDialog {
                         .child(
                             Button::new("save")
                                 .icon(IconName::CheckCircle)
+                                .icon_position(IconPosition::End)
                                 .label("Save")
                                 .primary()
                                 .font_semibold()
@@ -513,7 +517,7 @@ impl Render for ProfileDialog {
 
 fn label(label: &'static str, cx: &App) -> Div {
     div()
-        .text_xs()
+        .text_style(TextStyle::Caption)
         .text_color(cx.theme().text_muted)
         .font_semibold()
         .child(label)
@@ -530,8 +534,10 @@ fn field(
         None => (SharedString::from(placeholder), cx.theme().text_muted),
     };
 
-    v_flex()
-        .gap_1p5()
-        .child(label(text, cx))
-        .child(div().text_sm().text_color(color).child(content))
+    v_flex().gap_1p5().child(label(text, cx)).child(
+        div()
+            .text_style(TextStyle::Callout)
+            .text_color(color)
+            .child(content),
+    )
 }

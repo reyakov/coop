@@ -8,14 +8,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Context as AnyhowContext, Error, anyhow};
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, Global, IntoElement, ParentElement,
-    SharedString, Styled, Subscription, Task, Window, div, relative,
+    SharedString, Styled, Subscription, Task, Window, div, px, relative,
 };
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
 use state::{Announcement, CLIENT_NAME, NostrRegistry, UniversalSigner};
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _, control_radius};
 use ui::avatar::Avatar;
 use ui::button::Button;
 use ui::notification::{Notification, NotificationKind};
@@ -720,25 +720,25 @@ impl DeviceRegistry {
             .title("Encryption Key Request")
             .content(move |_this, _window, cx| {
                 v_flex()
-                    .gap_2()
-                    .text_sm()
+                    .gap(px(theme::SPACE))
+                    .text_style(TextStyle::Callout)
                     .child(
                         div()
-                            .text_sm()
+                            .text_style(TextStyle::Callout)
                             .line_height(relative(1.25))
                             .child(SharedString::from(MSG)),
                     )
                     .child(
                         v_flex()
-                            .gap_2()
+                            .gap(px(theme::SPACE))
                             .child(
                                 v_flex()
                                     .gap_1()
-                                    .text_sm()
+                                    .text_style(TextStyle::Callout)
                                     .child(
                                         div()
                                             .font_semibold()
-                                            .text_xs()
+                                            .text_style(TextStyle::Caption)
                                             .text_color(cx.theme().text_muted)
                                             .child(SharedString::from("From:")),
                                     )
@@ -747,11 +747,11 @@ impl DeviceRegistry {
                                             .h_8()
                                             .w_full()
                                             .px_2()
-                                            .rounded(cx.theme().radius)
-                                            .bg(cx.theme().elevated_surface_background)
+                                            .rounded(px(control_radius()))
+                                            .bg(cx.theme().surface_card)
                                             .child(
                                                 h_flex()
-                                                    .gap_2()
+                                                    .gap(px(theme::SPACE))
                                                     .child(
                                                         Avatar::new(profile.avatar())
                                                             .seed(profile.avatar_seed())
@@ -764,11 +764,11 @@ impl DeviceRegistry {
                             .child(
                                 v_flex()
                                     .gap_1()
-                                    .text_sm()
+                                    .text_style(TextStyle::Callout)
                                     .child(
                                         div()
                                             .font_semibold()
-                                            .text_xs()
+                                            .text_style(TextStyle::Caption)
                                             .text_color(cx.theme().text_muted)
                                             .child(SharedString::from("Code:")),
                                     )
@@ -777,8 +777,8 @@ impl DeviceRegistry {
                                             .h_8()
                                             .w_full()
                                             .px_2()
-                                            .rounded(cx.theme().radius)
-                                            .bg(cx.theme().elevated_surface_background)
+                                            .rounded(px(control_radius()))
+                                            .bg(cx.theme().surface_card)
                                             .child(code_label.clone()),
                                     ),
                             ),

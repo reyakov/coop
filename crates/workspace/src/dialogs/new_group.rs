@@ -3,8 +3,8 @@ use std::rc::Rc;
 use gpui::{App, AppContext, ClickEvent, Div, Entity, ParentElement, Styled, Window, px};
 use nip29::{GroupId, GroupKey, GroupMetadata, GroupsRegistry};
 use nostr_sdk::prelude::*;
-use theme::ActiveTheme;
-use ui::button::{Button, ButtonVariants};
+use theme::{ActiveTheme, TextStyle, Typeset as _};
+use ui::button::{Button, ButtonVariants, IconPosition};
 use ui::input::{Input, InputState};
 use ui::notification::Notification;
 use ui::{IconName, StyledExt, WindowExtension, h_flex, v_flex};
@@ -47,7 +47,8 @@ pub fn open(window: &mut Window, cx: &mut App) {
                     )
                     .child(
                         Button::new("create")
-                            .icon(IconName::CheckCircle)
+                            .icon(IconName::ArrowRight)
+                            .icon_position(IconPosition::End)
                             .label("Create")
                             .primary()
                             .font_semibold()
@@ -67,7 +68,7 @@ pub fn open(window: &mut Window, cx: &mut App) {
 fn field(label: &'static str, input: &Entity<InputState>, cx: &App) -> Div {
     v_flex()
         .gap_1()
-        .text_sm()
+        .text_style(TextStyle::Callout)
         .text_color(cx.theme().text_muted)
         .child(label)
         .child(Input::new(input))

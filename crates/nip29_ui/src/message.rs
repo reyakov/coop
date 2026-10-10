@@ -9,7 +9,7 @@ use nip29::{Activity, Group};
 use nostr_sdk::prelude::{EventId, Kind};
 use person::PersonRegistry;
 use settings::AppSettings;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _, bubble_radius};
 use ui::avatar::Avatar;
 use ui::menu::{ContextMenu, PopupMenu, PopupMenuItem};
 use ui::message::MessageRow;
@@ -138,10 +138,10 @@ pub(crate) fn render_activity(ix: usize, activity: &Activity, cx: &App) -> AnyEl
     h_flex()
         .id(ix)
         .w_full()
-        .gap_2()
+        .gap(px(theme::SPACE))
         .py_1()
         .px_3()
-        .hover(|this| this.bg(cx.theme().surface_background))
+        .hover(|this| this.bg(cx.theme().element_hover))
         .child(badge(activity, cx))
         .when(!hide_avatar, |this| {
             this.child(
@@ -155,7 +155,7 @@ pub(crate) fn render_activity(ix: usize, activity: &Activity, cx: &App) -> AnyEl
             div()
                 .min_w_0()
                 .truncate()
-                .text_sm()
+                .text_style(TextStyle::Callout)
                 .font_semibold()
                 .child(subject.name()),
         )
@@ -163,16 +163,16 @@ pub(crate) fn render_activity(ix: usize, activity: &Activity, cx: &App) -> AnyEl
             div()
                 .min_w_0()
                 .truncate()
-                .text_sm()
-                .text_color(cx.theme().text_placeholder)
+                .text_style(TextStyle::Callout)
+                .text_color(cx.theme().text_faint)
                 .child(SharedString::from(action(activity))),
         )
         .child(
             div()
                 .flex_shrink_0()
                 .ml_1()
-                .text_xs()
-                .text_color(cx.theme().text_placeholder)
+                .text_style(TextStyle::Caption)
+                .text_color(cx.theme().text_faint)
                 .child(activity.created_at.to_ago()),
         )
         .into_any_element()
@@ -180,11 +180,11 @@ pub(crate) fn render_activity(ix: usize, activity: &Activity, cx: &App) -> AnyEl
 
 fn badge(activity: &Activity, cx: &App) -> AnyElement {
     let (icon, color) = match activity.kind {
-        Kind::GroupJoinRequest => (IconName::Login, cx.theme().icon_accent),
-        Kind::GroupPutUser => (IconName::Login, cx.theme().icon_accent),
-        Kind::GroupLeaveRequest => (IconName::Logout, cx.theme().text_danger),
-        Kind::GroupRemoveUser => (IconName::Ban, cx.theme().text_danger),
-        _ => (IconName::Info, cx.theme().icon_muted),
+        Kind::GroupJoinRequest => (IconName::Login, cx.theme().accent),
+        Kind::GroupPutUser => (IconName::Login, cx.theme().accent),
+        Kind::GroupLeaveRequest => (IconName::Logout, cx.theme().danger),
+        Kind::GroupRemoveUser => (IconName::Ban, cx.theme().danger),
+        _ => (IconName::Info, cx.theme().text_faint),
     };
 
     h_flex()
@@ -211,10 +211,10 @@ fn media(media: &[SharedUri], cx: &App) -> AnyElement {
             .child(
                 img(only.clone())
                     .border_1()
-                    .border_color(cx.theme().border_variant)
+                    .border_color(cx.theme().border_faint)
                     .h(px(250.))
                     .object_fit(ObjectFit::Cover)
-                    .rounded(cx.theme().radius),
+                    .rounded(px(bubble_radius())),
             )
             .into_any_element();
     }
@@ -225,14 +225,14 @@ fn media(media: &[SharedUri], cx: &App) -> AnyElement {
         .flex()
         .flex_row()
         .flex_wrap()
-        .gap_2()
+        .gap(px(theme::SPACE))
         .children(media.iter().enumerate().map(|(ix, item)| {
             div().id(format!("media-{ix}")).child(
                 img(item.clone())
                     .h_32()
                     .border_1()
-                    .border_color(cx.theme().border_variant)
-                    .rounded(cx.theme().radius),
+                    .border_color(cx.theme().border_faint)
+                    .rounded(px(bubble_radius())),
             )
         }))
         .into_any_element()

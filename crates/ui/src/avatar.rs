@@ -1,4 +1,3 @@
-use gpui::prelude::FluentBuilder;
 use gpui::{
     AbsoluteLength, AnyElement, App, Bounds, Div, Hsla, ImageSource, InteractiveElement,
     Interactivity, IntoElement, ObjectFit, ParentElement, PathBuilder, Pixels, Point, RenderOnce,
@@ -24,7 +23,7 @@ const FALLBACK_SEED: &str = "coop";
 const CIRCLE_SEGMENTS: usize = 32;
 
 /// Returns the size of the avatar based on the given [`Size`].
-pub(super) fn avatar_size(size: Size) -> AbsoluteLength {
+fn avatar_size(size: Size) -> AbsoluteLength {
     match size {
         Size::Large => px(64.).into(),
         Size::Medium => px(32.).into(),
@@ -36,7 +35,7 @@ pub(super) fn avatar_size(size: Size) -> AbsoluteLength {
 
 /// A deterministic, offline pixel-art avatar derived from a seed.
 #[derive(IntoElement)]
-pub(crate) struct PixelAvatar {
+struct PixelAvatar {
     seed: u64,
     size: Size,
     style: StyleRefinement,
@@ -44,7 +43,7 @@ pub(crate) struct PixelAvatar {
 
 impl PixelAvatar {
     /// Creates a pixel avatar from `seed`.
-    pub fn new(seed: impl AsRef<str>) -> Self {
+    fn new(seed: impl AsRef<str>) -> Self {
         Self {
             seed: fnv1a(seed.as_ref().as_bytes()),
             size: Size::Medium,
@@ -188,8 +187,7 @@ fn paint_polygons<'a>(
     }
 }
 
-/// Approximates the circle of `radius` around `center` as a convex polygon,
-/// wound so that its interior is on the left of every directed edge.
+/// Approximates the circle of `radius` around `center` as a convex polygon wound left-interior.
 fn circle_polygon(center: Point<Pixels>, radius: f32) -> Vec<Point<Pixels>> {
     let center_x = center.x.as_f32();
     let center_y = center.y.as_f32();
@@ -354,11 +352,9 @@ fn generated_avatar(seed: Option<&str>, size: Pixels) -> AnyElement {
 pub struct Avatar {
     base: Div,
     picture: Option<ImageSource>,
-    grayscale: bool,
     seed: Option<String>,
     style: StyleRefinement,
     size: Size,
-    border_color: Option<Hsla>,
     selected: bool,
 }
 
@@ -377,11 +373,9 @@ impl Avatar {
         Avatar {
             base: div(),
             picture,
-            grayscale: false,
             seed: None,
             style: StyleRefinement::default(),
             size: Size::Medium,
-            border_color: None,
             selected: false,
         }
     }
@@ -424,27 +418,17 @@ impl InteractiveElement for Avatar {
 }
 
 impl RenderOnce for Avatar {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let border_width = if self.border_color.is_some() {
-            px(2.)
-        } else {
-            px(0.)
-        };
-
+    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
         let image_size = avatar_size(self.size).to_pixels(window.rem_size());
-        let container_size = image_size + border_width * 2.;
 
         let content = match self.picture {
             Some(picture) => {
                 let seed = self.seed;
-                let grayscale = self.grayscale;
 
                 img(picture)
                     .size(image_size)
                     .rounded_full()
                     .object_fit(ObjectFit::Cover)
-                    .grayscale(grayscale)
-                    .bg(cx.theme().ghost_element_background)
                     .with_fallback(move || generated_avatar(seed.as_deref(), image_size))
                     .into_any_element()
             }
@@ -453,12 +437,9 @@ impl RenderOnce for Avatar {
 
         div()
             .flex_shrink_0()
-            .size(container_size)
+            .size(image_size)
             .rounded_full()
             .overflow_hidden()
-            .when_some(self.border_color, |this, color| {
-                this.border(border_width).border_color(color)
-            })
             .child(content)
     }
 }

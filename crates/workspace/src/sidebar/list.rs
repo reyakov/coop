@@ -8,7 +8,7 @@ use gpui::{
 };
 use nip29::GroupsRegistry;
 use settings::AppSettings;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _, control_radius};
 use ui::nav_item::NavItem;
 use ui::scroll::Scrollbar;
 use ui::{Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
@@ -61,7 +61,7 @@ impl Sidebar {
             .flex_1()
             .min_h_0()
             .relative()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .child(
                 v_flex()
                     .px_2()
@@ -85,34 +85,30 @@ impl Sidebar {
                                                 .px_1()
                                                 .min_w_6()
                                                 .justify_center()
-                                                .text_size(px(10.))
+                                                .text_style(TextStyle::Caption2)
                                                 .text_color(cx.theme().text_muted)
                                                 .text_center()
-                                                .rounded(cx.theme().radius)
-                                                .bg(cx.theme().elevated_surface_background)
+                                                .rounded(px(control_radius()))
+                                                .bg(cx.theme().surface_raised)
                                                 .child(SharedString::from(
                                                     request_count.to_string(),
                                                 )),
                                         )
                                         .when(self.new_requests && !requests_open, |this| {
                                             this.child(
-                                                div().size_1().rounded_full().bg(cx.theme().cursor),
+                                                div().size_1().rounded_full().bg(cx.theme().accent),
                                             )
                                         }),
                                 )
                             })
-                            .when(requests_open, |this| {
-                                this.bg(cx.theme().ghost_element_active)
-                            })
+                            .when(requests_open, |this| this.bg(cx.theme().element_active))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.toggle_requests(cx);
                             })),
                     )
                     .child(
                         NavItem::new("contacts", "Contacts", Icon::new(IconName::Book).small())
-                            .when(contacts_open, |this| {
-                                this.bg(cx.theme().ghost_element_active)
-                            })
+                            .when(contacts_open, |this| this.bg(cx.theme().element_active))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.toggle_contacts(window, cx);
                             })),
@@ -122,9 +118,9 @@ impl Sidebar {
                 this.child(
                     div()
                         .px_4()
-                        .text_xs()
+                        .text_style(TextStyle::Caption)
                         .font_semibold()
-                        .text_color(cx.theme().text_placeholder)
+                        .text_color(cx.theme().text_faint)
                         .child(list_title),
                 )
             })

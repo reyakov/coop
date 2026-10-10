@@ -5,7 +5,7 @@ use gpui::{
     Styled, Window,
 };
 use smallvec::SmallVec;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 
 use crate::{Disableable, StyledExt, h_flex};
 
@@ -39,15 +39,9 @@ impl MenuItemElement {
         }
     }
 
-    /// Set ListItem as the selected item style.
+    /// Set the selected style of the item.
     pub(crate) fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
-        self
-    }
-
-    /// Set the disabled state of the MenuItem.
-    pub(crate) fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
         self
     }
 
@@ -61,7 +55,10 @@ impl MenuItemElement {
     }
 
     /// Set a handler for when the mouse enters the MenuItem.
-    pub fn on_hover(mut self, handler: impl Fn(&bool, &mut Window, &mut App) + 'static) -> Self {
+    pub(crate) fn on_hover(
+        mut self,
+        handler: impl Fn(&bool, &mut Window, &mut App) + 'static,
+    ) -> Self {
         self.on_hover = Some(Box::new(handler));
         self
     }
@@ -93,7 +90,7 @@ impl RenderOnce for MenuItemElement {
             .group(&self.group_name)
             .gap_x_1()
             .p_1()
-            .text_sm()
+            .text_style(TextStyle::Callout)
             .text_color(cx.theme().text)
             .relative()
             .items_center()
@@ -104,12 +101,12 @@ impl RenderOnce for MenuItemElement {
             })
             .when(!self.disabled, |this| {
                 this.group_hover(self.group_name, |this| {
-                    this.bg(cx.theme().secondary_background)
-                        .text_color(cx.theme().secondary_foreground)
+                    this.bg(cx.theme().element_hover)
+                        .text_color(cx.theme().text)
                 })
                 .when(self.selected, |this| {
-                    this.bg(cx.theme().secondary_background)
-                        .text_color(cx.theme().secondary_foreground)
+                    this.bg(cx.theme().element_active)
+                        .text_color(cx.theme().text)
                 })
                 .when_some(self.on_click, |this, on_click| {
                     this.on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -118,7 +115,7 @@ impl RenderOnce for MenuItemElement {
                     .on_click(on_click)
                 })
             })
-            .when(self.disabled, |this| this.text_color(cx.theme().text_muted))
+            .when(self.disabled, |this| this.text_color(cx.theme().text_faint))
             .children(self.children)
     }
 }

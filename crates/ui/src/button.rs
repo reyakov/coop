@@ -4,10 +4,13 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, Hsla, InteractiveElement, IntoElement, MouseButton,
     ParentElement, RenderOnce, SharedString, StatefulInteractiveElement as _, StyleRefinement,
-    Styled, Window, div, relative,
+    Styled, Window, div, px, relative,
 };
 use gpui_base::Button as BaseButton;
-use theme::ActiveTheme;
+use theme::{
+    ActiveTheme, TextStyle, Typeset as _, bubble_radius, button_radius, plate_active, plate_hover,
+    wash,
+};
 
 use crate::indicator::Indicator;
 use crate::tooltip::Tooltip;
@@ -24,10 +27,10 @@ pub struct ButtonCustomVariant {
 impl ButtonCustomVariant {
     pub fn new(_window: &Window, cx: &App) -> Self {
         Self {
-            color: cx.theme().element_background,
-            foreground: cx.theme().element_foreground,
-            hover: cx.theme().element_hover,
-            active: cx.theme().element_active,
+            color: cx.theme().solid,
+            foreground: cx.theme().on_solid,
+            hover: plate_hover(cx.theme().solid),
+            active: plate_active(cx.theme().solid),
         }
     }
 
@@ -70,45 +73,47 @@ pub enum ButtonVariant {
 pub trait ButtonVariants: Sized {
     fn with_variant(self, variant: ButtonVariant) -> Self;
 
-    /// With the primary style for the Button.
     fn primary(self) -> Self {
         self.with_variant(ButtonVariant::Primary)
     }
 
-    /// With the secondary style for the Button.
     fn secondary(self) -> Self {
         self.with_variant(ButtonVariant::Secondary)
     }
 
-    /// With the danger style for the Button.
     fn danger(self) -> Self {
         self.with_variant(ButtonVariant::Danger)
     }
 
-    /// With the warning style for the Button.
     fn warning(self) -> Self {
         self.with_variant(ButtonVariant::Warning)
     }
 
-    /// With the ghost style for the Button.
     fn ghost(self) -> Self {
         self.with_variant(ButtonVariant::Ghost { alt: false })
     }
 
-    /// With the ghost style for the Button.
     fn ghost_alt(self) -> Self {
         self.with_variant(ButtonVariant::Ghost { alt: true })
     }
 
-    /// With the transparent style for the Button.
     fn transparent(self) -> Self {
         self.with_variant(ButtonVariant::Transparent)
     }
 
-    /// With the custom style for the Button.
     fn custom(self, style: ButtonCustomVariant) -> Self {
         self.with_variant(ButtonVariant::Custom(style))
     }
+}
+
+/// Which side of the label the icon sits on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IconPosition {
+    /// Left of the label.
+    #[default]
+    Start,
+    /// Right of the label.
+    End,
 }
 
 /// A Button element.
@@ -127,13 +132,10 @@ pub struct Button {
     rounded: bool,
     compact: bool,
     caret: bool,
-    indicator: bool,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
-    on_hover: Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>,
-    tab_index: isize,
     tab_stop: bool,
-
-    pub(crate) selected: bool,
+    selected: bool,
+    icon_position: IconPosition,
 }
 
 impl From<Button> for AnyElement {
@@ -151,22 +153,19 @@ impl Button {
             variant: ButtonVariant::default(),
             disabled: false,
             selected: false,
-            indicator: false,
             compact: false,
             caret: false,
             rounded: false,
             size: Size::Medium,
             tooltip: None,
             on_click: None,
-            on_hover: None,
             loading: false,
             children: Vec::new(),
-            tab_index: 0,
             tab_stop: true,
+            icon_position: IconPosition::Start,
         }
     }
 
-    /// Make the button rounded.
     pub fn rounded(mut self) -> Self {
         self.rounded = true;
         self
@@ -178,19 +177,23 @@ impl Button {
         self
     }
 
-    /// Set the icon of the button, if the Button have no label, the button well in Icon Button mode.
+    /// Set the icon of the button, if the Button has no label, the button will be in Icon Button mode.
     pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
         self.icon = Some(icon.into());
         self
     }
 
-    /// Set the tooltip of the button.
+    /// Set which side of the label the icon sits on (default [`IconPosition::Start`]).
+    pub fn icon_position(mut self, position: IconPosition) -> Self {
+        self.icon_position = position;
+        self
+    }
+
     pub fn tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
         self.tooltip = Some(tooltip.into());
         self
     }
 
-    /// Set true to show the loading indicator.
     pub fn loading(mut self, loading: bool) -> Self {
         self.loading = loading;
         self
@@ -202,13 +205,11 @@ impl Button {
         self
     }
 
-    /// Set true to show the caret indicator.
     pub fn caret(mut self) -> Self {
         self.caret = true;
         self
     }
 
-    /// Add click handler.
     pub fn on_click(
         mut self,
         handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
@@ -217,9 +218,7 @@ impl Button {
         self
     }
 
-    /// Set the tab stop of the button, if true, the button will be focusable by tab key.
-    ///
-    /// Default is true.
+    /// Set whether the button can be focused with the tab key (default true).
     pub fn tab_stop(mut self, tab_stop: bool) -> Self {
         self.tab_stop = tab_stop;
         self
@@ -228,11 +227,6 @@ impl Button {
     #[inline]
     fn clickable(&self) -> bool {
         !(self.disabled || self.loading) && self.on_click.is_some()
-    }
-
-    #[inline]
-    fn hoverable(&self) -> bool {
-        !(self.disabled || self.loading) && self.on_hover.is_some()
     }
 }
 
@@ -288,24 +282,23 @@ impl InteractiveElement for Button {
 
 impl RenderOnce for Button {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let style: ButtonVariant = self.variant;
+        let style = self.variant;
         let clickable = self.clickable();
-        let hoverable = self.hoverable();
         let normal_style = style.normal(cx);
         let icon_size = match self.size {
             Size::Size(v) => Size::Size(v * 0.75),
             Size::Large => Size::Medium,
             _ => self.size,
         };
+        let icon_start = self.icon_position == IconPosition::Start;
 
         self.base
-            .tab_index(self.tab_index)
+            .tab_index(0)
             .tab_stop(self.tab_stop)
             .disabled(self.disabled)
             .when_some(self.on_click.clone(), |this, on_click| {
                 this.on_click(move |event, window, cx| {
-                    // Stop handle any click event when disabled.
-                    // To avoid handle dropdown menu open when button is disabled.
+                    // Stop clicks when disabled, so a parent (e.g. dropdown menu) doesn't handle them.
                     if !clickable {
                         cx.stop_propagation();
                         return;
@@ -322,9 +315,16 @@ impl RenderOnce for Button {
             .cursor_default()
             .overflow_hidden()
             .map(|this| match self.rounded {
-                false => this.rounded(cx.theme().radius),
-                true => this.rounded_full(),
+                false => this.rounded(px(button_radius())),
+                true => this.rounded(px(bubble_radius())),
             })
+            .when_some(
+                match style {
+                    ButtonVariant::Secondary => Some(cx.theme().border),
+                    _ => None,
+                },
+                |this, border_color| this.border_1().border_color(border_color),
+            )
             .when(!self.compact, |this| {
                 if self.label.is_none() && self.children.is_empty() {
                     // Icon Button
@@ -337,7 +337,7 @@ impl RenderOnce for Button {
                     }
                 } else {
                     // Normal Button
-                    match self.size {
+                    let this = match self.size {
                         Size::Size(size) => this.px(size * 0.2),
                         Size::XSmall => {
                             if self.icon.is_some() {
@@ -367,12 +367,21 @@ impl RenderOnce for Button {
                                 this.h_10().px_3()
                             }
                         }
+                    };
+
+                    if !icon_start && self.icon.is_some() {
+                        match self.size {
+                            Size::XSmall | Size::Small => this.pl_2p5().pr_2(),
+                            Size::Medium | Size::Large => this.pl_3p5().pr_3(),
+                            Size::Size(_) => this,
+                        }
+                    } else {
+                        this
                     }
                 }
             })
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                // Stop handle any click event when disabled.
-                // To avoid handle dropdown menu open when button is disabled.
+                // Stop clicks when disabled, so a parent (e.g. dropdown menu) doesn't handle them.
                 if self.disabled {
                     cx.stop_propagation();
                     return;
@@ -380,30 +389,35 @@ impl RenderOnce for Button {
                 // Avoid focus on mouse down.
                 window.prevent_default();
             })
-            .when_some(self.on_hover.filter(|_| hoverable), |this, on_hover| {
-                this.on_hover(move |hovered, window, cx| {
-                    (on_hover)(hovered, window, cx);
-                })
-            })
             .child({
                 h_flex()
                     .id("label")
                     .justify_center()
                     .map(|this| match self.size {
-                        Size::XSmall => this.text_xs().gap_1(),
-                        Size::Small => this.text_sm().gap_1p5(),
-                        _ => this.text_sm().gap_2(),
+                        Size::XSmall => this.text_style(TextStyle::Caption).gap_1(),
+                        Size::Small => this.text_style(TextStyle::Callout).gap_1p5(),
+                        _ => this.text_style(TextStyle::Callout).gap(px(theme::SPACE)),
                     })
-                    .when(!self.loading, |this| {
-                        this.when_some(self.icon, |this, icon| {
+                    .when(!self.loading && icon_start, |this| {
+                        this.when_some(self.icon.clone(), |this, icon| {
                             this.child(icon.with_size(icon_size))
                         })
                     })
-                    .when(self.loading, |this| this.child(Indicator::new()))
+                    .when(self.loading && icon_start, |this| {
+                        this.child(Indicator::new())
+                    })
                     .when_some(self.label, |this, label| {
                         this.child(div().flex_none().line_height(relative(1.)).child(label))
                     })
                     .children(self.children)
+                    .when(!self.loading && !icon_start, |this| {
+                        this.when_some(self.icon.clone(), |this, icon| {
+                            this.child(icon.with_size(icon_size))
+                        })
+                    })
+                    .when(self.loading && !icon_start, |this| {
+                        this.child(Indicator::new())
+                    })
                     .when(self.caret, |this| {
                         this.justify_between().gap_0p5().child(
                             Icon::new(IconName::ChevronDown)
@@ -413,17 +427,6 @@ impl RenderOnce for Button {
                     })
             })
             .text_color(normal_style.fg)
-            .when(self.indicator && !self.disabled, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .bottom_px()
-                        .right_px()
-                        .size_1()
-                        .rounded_full()
-                        .bg(gpui::green()),
-                )
-            })
             .when(!self.disabled && !self.selected, |this| {
                 this.bg(normal_style.bg)
                     .hover(|this| {
@@ -470,15 +473,15 @@ impl ButtonVariant {
 
     fn bg_color(&self, cx: &App) -> Hsla {
         match self {
-            ButtonVariant::Primary => cx.theme().element_background,
-            ButtonVariant::Secondary => cx.theme().secondary_background,
-            ButtonVariant::Danger => cx.theme().danger_background,
-            ButtonVariant::Warning => cx.theme().warning_background,
+            ButtonVariant::Primary => cx.theme().solid,
+            ButtonVariant::Secondary => cx.theme().surface_raised,
+            ButtonVariant::Danger => cx.theme().danger_strong,
+            ButtonVariant::Warning => cx.theme().warning_muted,
             ButtonVariant::Ghost { alt } => {
                 if *alt {
-                    cx.theme().ghost_element_background_alt
+                    cx.theme().surface_raised
                 } else {
-                    cx.theme().ghost_element_background
+                    gpui::transparent_black()
                 }
             }
             ButtonVariant::Custom(colors) => colors.color,
@@ -488,11 +491,15 @@ impl ButtonVariant {
 
     fn text_color(&self, cx: &App) -> Hsla {
         match self {
-            ButtonVariant::Primary => cx.theme().element_foreground,
-            ButtonVariant::Secondary => cx.theme().secondary_foreground,
-            ButtonVariant::Danger => cx.theme().danger_foreground,
-            ButtonVariant::Warning => cx.theme().warning_foreground,
-            ButtonVariant::Transparent => cx.theme().text_placeholder,
+            ButtonVariant::Primary => cx.theme().on_solid,
+            ButtonVariant::Secondary => cx.theme().text,
+            // Bezel's destructive pairing: the red plate carries white ink in
+            // both appearances, not the appearance-flipping on_accent.
+            ButtonVariant::Danger => gpui::white(),
+            // warning_muted is a translucent amber wash, so the label is the
+            // amber token itself — dark amber in light, bright in dark.
+            ButtonVariant::Warning => cx.theme().warning,
+            ButtonVariant::Transparent => cx.theme().text_faint,
             ButtonVariant::Ghost { alt } => {
                 if *alt {
                     cx.theme().text
@@ -506,19 +513,19 @@ impl ButtonVariant {
 
     fn hovered(&self, cx: &App) -> ButtonVariantStyle {
         let bg = match self {
-            ButtonVariant::Primary => cx.theme().element_hover,
-            ButtonVariant::Secondary => cx.theme().secondary_hover,
-            ButtonVariant::Danger => cx.theme().danger_hover,
-            ButtonVariant::Warning => cx.theme().warning_hover,
-            ButtonVariant::Ghost { .. } => cx.theme().ghost_element_hover,
+            ButtonVariant::Primary => plate_hover(cx.theme().solid),
+            ButtonVariant::Secondary => cx.theme().surface_raised_hover,
+            ButtonVariant::Danger => plate_hover(cx.theme().danger_strong),
+            ButtonVariant::Warning => plate_hover(cx.theme().warning_muted),
+            ButtonVariant::Ghost { .. } => cx.theme().element_hover,
             ButtonVariant::Transparent => gpui::transparent_black(),
             ButtonVariant::Custom(colors) => colors.hover,
         };
 
         let fg = match self {
-            ButtonVariant::Secondary => cx.theme().secondary_foreground,
+            ButtonVariant::Secondary => cx.theme().text,
             ButtonVariant::Ghost { .. } => cx.theme().text,
-            ButtonVariant::Transparent => cx.theme().text_placeholder,
+            ButtonVariant::Transparent => cx.theme().text_faint,
             _ => self.text_color(cx),
         };
 
@@ -527,18 +534,18 @@ impl ButtonVariant {
 
     fn active(&self, cx: &App) -> ButtonVariantStyle {
         let bg = match self {
-            ButtonVariant::Primary => cx.theme().element_active,
-            ButtonVariant::Secondary => cx.theme().secondary_active,
-            ButtonVariant::Danger => cx.theme().danger_active,
-            ButtonVariant::Warning => cx.theme().warning_active,
-            ButtonVariant::Ghost { .. } => cx.theme().ghost_element_active,
+            ButtonVariant::Primary => plate_active(cx.theme().solid),
+            ButtonVariant::Secondary => plate_active(cx.theme().surface_raised),
+            ButtonVariant::Danger => plate_active(cx.theme().danger_strong),
+            ButtonVariant::Warning => plate_active(cx.theme().warning_muted),
+            ButtonVariant::Ghost { .. } => cx.theme().element_active,
             ButtonVariant::Transparent => gpui::transparent_black(),
             ButtonVariant::Custom(colors) => colors.active,
         };
 
         let fg = match self {
-            ButtonVariant::Secondary => cx.theme().secondary_foreground,
-            ButtonVariant::Transparent => cx.theme().text_placeholder,
+            ButtonVariant::Secondary => cx.theme().text,
+            ButtonVariant::Transparent => cx.theme().text_faint,
             _ => self.text_color(cx),
         };
 
@@ -547,18 +554,18 @@ impl ButtonVariant {
 
     fn selected(&self, cx: &App) -> ButtonVariantStyle {
         let bg = match self {
-            ButtonVariant::Primary => cx.theme().element_selected,
-            ButtonVariant::Secondary => cx.theme().secondary_selected,
-            ButtonVariant::Danger => cx.theme().danger_selected,
-            ButtonVariant::Warning => cx.theme().warning_selected,
-            ButtonVariant::Ghost { .. } => cx.theme().ghost_element_selected,
+            ButtonVariant::Primary => cx.theme().element_active,
+            ButtonVariant::Secondary => cx.theme().element_active,
+            ButtonVariant::Danger => plate_active(cx.theme().danger_strong),
+            ButtonVariant::Warning => plate_active(cx.theme().warning_muted),
+            ButtonVariant::Ghost { .. } => cx.theme().element_active,
             ButtonVariant::Transparent => gpui::transparent_black(),
             ButtonVariant::Custom(colors) => colors.active,
         };
 
         let fg = match self {
-            ButtonVariant::Secondary => cx.theme().secondary_foreground,
-            ButtonVariant::Transparent => cx.theme().text_placeholder,
+            ButtonVariant::Secondary => cx.theme().text,
+            ButtonVariant::Transparent => cx.theme().text_faint,
             _ => self.text_color(cx),
         };
 
@@ -566,18 +573,8 @@ impl ButtonVariant {
     }
 
     fn disabled(&self, cx: &App) -> ButtonVariantStyle {
-        let bg = match self {
-            ButtonVariant::Danger => cx.theme().danger_disabled,
-            ButtonVariant::Warning => cx.theme().warning_disabled,
-            ButtonVariant::Ghost { .. } => cx.theme().ghost_element_disabled,
-            ButtonVariant::Secondary => cx.theme().secondary_disabled,
-            _ => cx.theme().element_disabled,
-        };
-
-        let fg = match self {
-            ButtonVariant::Primary => cx.theme().text_muted,
-            _ => cx.theme().text_muted,
-        };
+        let bg = wash(0.08);
+        let fg = cx.theme().text_muted;
 
         ButtonVariantStyle { bg, fg }
     }

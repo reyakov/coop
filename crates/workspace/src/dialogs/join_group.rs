@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui::{App, AppContext, ClickEvent, ParentElement, Styled, Window, px};
 use nip29::{GroupReference, GroupsRegistry};
-use ui::button::{Button, ButtonVariants};
+use ui::button::{Button, ButtonVariants, IconPosition};
 use ui::input::{Input, InputState};
 use ui::notification::Notification;
 use ui::{IconName, StyledExt, WindowExtension, h_flex, v_flex};
@@ -43,7 +43,7 @@ pub fn open(window: &mut Window, cx: &mut App) {
             .child(
                 v_flex()
                     .gap_3()
-                    .child(Input::new(&input).cleanable(true).text_sm())
+                    .child(Input::new(&input).cleanable(true))
                     .child(
                         h_flex()
                             .gap_1()
@@ -56,7 +56,8 @@ pub fn open(window: &mut Window, cx: &mut App) {
                             )
                             .child(
                                 Button::new("join")
-                                    .icon(IconName::CheckCircle)
+                                    .icon(IconName::ArrowRight)
+                                    .icon_position(IconPosition::End)
                                     .label("Join")
                                     .primary()
                                     .font_semibold()

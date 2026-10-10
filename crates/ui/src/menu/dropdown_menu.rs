@@ -75,12 +75,6 @@ where
         }
     }
 
-    /// Set the anchor corner for the dropdown menu popover.
-    pub fn anchor(mut self, anchor: impl Into<Anchor>) -> Self {
-        self.anchor = anchor.into();
-        self
-    }
-
     /// Set the style refinement for the dropdown menu trigger.
     fn trigger_style(mut self, style: StyleRefinement) -> Self {
         self.style = style;
@@ -88,13 +82,10 @@ where
     }
 }
 
-/// Opens a [`PopupMenu`] when its child is clicked with a mouse button
-/// (right by default), keeping the child's own click handler intact.
+/// Opens a [`PopupMenu`] when its child is right-clicked, keeping the child's own click handler.
 #[derive(IntoElement)]
 pub struct ContextMenu {
     id: ElementId,
-    anchor: Anchor,
-    mouse_button: MouseButton,
     child: AnyElement,
     builder: Rc<MenuBuilder>,
 }
@@ -107,23 +98,9 @@ impl ContextMenu {
     ) -> Self {
         Self {
             id: id.into(),
-            anchor: Anchor::TopLeft,
-            mouse_button: MouseButton::Right,
             child: child.into_any_element(),
             builder: Rc::new(builder),
         }
-    }
-
-    /// Set the anchor corner of the menu, default is `Anchor::TopLeft`.
-    pub fn anchor(mut self, anchor: impl Into<Anchor>) -> Self {
-        self.anchor = anchor.into();
-        self
-    }
-
-    /// Set the mouse button that opens the menu, default is `MouseButton::Right`.
-    pub fn mouse_button(mut self, mouse_button: MouseButton) -> Self {
-        self.mouse_button = mouse_button;
-        self
     }
 }
 
@@ -132,10 +109,7 @@ struct MenuState {
     menu: Option<Entity<PopupMenu>>,
 }
 
-/// Builds the menu once and reuses it until it is dismissed.
-///
-/// The popover content closure runs on every render, so rebuilding the menu
-/// entity each time would drop its focus and selection state.
+/// Builds the menu once and reuses it until dismissed, preserving focus and selection state.
 fn cached_menu(
     menu_state: &Entity<MenuState>,
     builder: Rc<MenuBuilder>,
@@ -196,8 +170,8 @@ impl RenderOnce for ContextMenu {
         Popover::new(SharedString::from(format!("context-menu:{}", self.id)))
             .appearance(false)
             .overlay_closable(false)
-            .anchor(self.anchor)
-            .mouse_button(self.mouse_button)
+            .anchor(Anchor::TopLeft)
+            .mouse_button(MouseButton::Right)
             .trigger_with(move |_open, _window, _cx| self.child)
             .content(move |_, window, cx| cached_menu(&menu_state, builder.clone(), window, cx))
     }

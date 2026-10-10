@@ -2,7 +2,7 @@ use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, SharedString, Styled, Window,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 use ui::dock::{Panel, PanelEvent};
 use ui::{Icon, IconName, Sizable, h_flex};
 
@@ -35,7 +35,7 @@ impl Panel for InboxPanel {
             .child(
                 Icon::new(IconName::Inbox)
                     .small()
-                    .text_color(cx.theme().icon_muted),
+                    .text_color(cx.theme().text_faint),
             )
             .child(self.name.clone())
             .into_any_element()
@@ -55,7 +55,7 @@ impl Render for InboxPanel {
         h_flex()
             .size_full()
             .justify_center()
-            .text_sm()
+            .text_style(TextStyle::Callout)
             .text_color(cx.theme().text_muted)
             .child(self.name.clone())
     }

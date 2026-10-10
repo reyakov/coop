@@ -31,9 +31,6 @@ pub trait WindowExtension: Sized {
         key: impl Into<ElementId>,
         cx: &mut App,
     );
-
-    /// Clear all notifications
-    fn clear_notifications(&mut self, cx: &mut App);
 }
 
 impl WindowExtension for Window {
@@ -88,13 +85,6 @@ impl WindowExtension for Window {
         let key: ElementId = key.into();
         Root::update(self, cx, |root, window, cx| {
             root.clear_notification_by_id::<T>(key, window, cx);
-        })
-    }
-
-    #[inline]
-    fn clear_notifications(&mut self, cx: &mut App) {
-        Root::update(self, cx, move |root, window, cx| {
-            root.clear_notifications(window, cx);
         })
     }
 }

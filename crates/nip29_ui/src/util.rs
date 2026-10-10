@@ -2,7 +2,7 @@ use anyhow::Result;
 use gpui::{App, Div, Entity, ParentElement, SharedString, Styled, Task, Window};
 use nip29::{Group, Pin, Row};
 use nostr_sdk::prelude::Url;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 use ui::input::{Input, InputState};
 use ui::notification::Notification;
 use ui::{WindowExtension, v_flex};
@@ -52,7 +52,7 @@ pub(crate) fn opens_run(rows: &[Row], index: usize) -> bool {
 pub(crate) fn field(label: &'static str, input: &Entity<InputState>, cx: &App) -> Div {
     v_flex()
         .gap_1()
-        .text_sm()
+        .text_style(TextStyle::Callout)
         .text_color(cx.theme().text_muted)
         .child(label)
         .child(Input::new(input))

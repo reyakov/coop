@@ -1,4 +1,4 @@
-use gpui::{App, AppContext, Entity, ParentElement, Styled, WeakEntity, Window};
+use gpui::{App, AppContext, Entity, ParentElement, Styled, WeakEntity, Window, px};
 use nip29::{Group, GroupMetadata};
 use ui::dialog::DialogButtonProps;
 use ui::input::InputState;
@@ -73,7 +73,7 @@ pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) 
                     .child(field("Picture", &picture, cx))
                     .child(
                         v_flex()
-                            .gap_2()
+                            .gap(px(theme::SPACE))
                             .child(
                                 Switch::new("private")
                                     .label("Private")

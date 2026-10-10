@@ -2,20 +2,17 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Animation, AnimationExt as _, AnyElement, App, BoxShadow, ClickEvent, Div, FocusHandle,
-    IntoElement, ParentElement, Pixels, RenderOnce, SharedString, StyleRefinement, Styled, Window,
-    div, hsla, point, px,
+    AnimationExt as _, AnyElement, App, ClickEvent, Div, FocusHandle, IntoElement, ParentElement,
+    Pixels, RenderOnce, SharedString, StyleRefinement, Styled, Window, div, px, transparent_black,
 };
 use gpui_base::{DialogBackdrop, DialogPopup, DialogTitle};
-use instant::Duration;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, SCRIM_ALPHA_DARK, scrim, surface_radius, surface_shadows};
 
-use crate::animation::cubic_bezier;
 use crate::button::{Button, ButtonCustomVariant, ButtonVariant, ButtonVariants as _};
+use crate::motion::DIALOG_IN;
 use crate::scroll::ScrollableElement;
 use crate::{IconName, Root, StyledExt, WindowExtension, h_flex, v_flex};
 
-type OnClose = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
 type OnOk = Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static>>;
 type OnCancel = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static>;
 type RenderButtonFn = Box<dyn FnOnce(&mut Window, &mut App) -> AnyElement>;
@@ -70,7 +67,6 @@ pub struct Dialog {
     width: Pixels,
     max_width: Option<Pixels>,
 
-    on_close: OnClose,
     on_ok: OnOk,
     on_cancel: OnCancel,
 
@@ -80,10 +76,10 @@ pub struct Dialog {
     show_close: bool,
     button_props: DialogButtonProps,
 
-    /// This will be change when open the dialog, the focus handle is create when open the dialog.
-    pub focus_handle: FocusHandle,
-    pub layer_ix: usize,
-    pub overlay_visible: bool,
+    /// The focus handle created when the dialog is opened, owned by the `Root`.
+    pub(crate) focus_handle: FocusHandle,
+    pub(crate) layer_ix: usize,
+    pub(crate) overlay_visible: bool,
 }
 
 impl Dialog {
@@ -100,7 +96,6 @@ impl Dialog {
             keyboard: true,
             layer_ix: 0,
             overlay_visible: false,
-            on_close: Rc::new(|_, _, _| {}),
             on_ok: None,
             on_cancel: Rc::new(|_, _, _| true),
             button_props: DialogButtonProps::default(),
@@ -115,15 +110,8 @@ impl Dialog {
         self
     }
 
-    /// Set the footer of the dialog.
-    ///
-    /// The `footer` is a function that takes two `RenderButtonFn` and a `WindowContext` and returns a list of `AnyElement`.
-    ///
-    /// - First `RenderButtonFn` is the render function for the OK button.
-    /// - Second `RenderButtonFn` is the render function for the CANCEL button.
-    ///
-    /// When you set the footer, the footer will be placed default footer buttons.
-    pub fn footer<E, F>(mut self, footer: F) -> Self
+    /// Sets a custom footer, replacing the default footer buttons.
+    fn footer<E, F>(mut self, footer: F) -> Self
     where
         E: IntoElement,
         F: Fn(RenderButtonFn, RenderButtonFn, &mut Window, &mut App) -> Vec<E> + 'static,
@@ -150,20 +138,7 @@ impl Dialog {
         self
     }
 
-    /// Sets the callback for when the dialog is closed.
-    ///
-    /// Called after [`Self::on_ok`] or [`Self::on_cancel`] callback.
-    pub fn on_close(
-        mut self,
-        on_close: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
-    ) -> Self {
-        self.on_close = Rc::new(on_close);
-        self
-    }
-
-    /// Sets the callback for when the dialog is has been confirmed.
-    ///
-    /// The callback should return `true` to close the dialog, if return `false` the dialog will not be closed.
+    /// Sets the confirm callback, returning `false` keeps the dialog open.
     pub fn on_ok(
         mut self,
         on_ok: impl Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static,
@@ -172,9 +147,7 @@ impl Dialog {
         self
     }
 
-    /// Sets the callback for when the dialog is has been canceled.
-    ///
-    /// The callback should return `true` to close the dialog, if return `false` the dialog will not be closed.
+    /// Sets the cancel callback, returning `false` keeps the dialog open.
     pub fn on_cancel(
         mut self,
         on_cancel: impl Fn(&ClickEvent, &mut Window, &mut App) -> bool + 'static,
@@ -189,15 +162,13 @@ impl Dialog {
         self
     }
 
-    /// Sets the width of the dialog, defaults to 480px.
+    /// Sets the width of the dialog, defaults to 380px.
     pub fn width(mut self, width: Pixels) -> Self {
         self.width = width;
         self
     }
 
-    /// Set the overlay closable of the dialog, defaults to `true`.
-    ///
-    /// When the overlay is clicked, the dialog will be closed.
+    /// Sets whether clicking the overlay closes the dialog, defaults to `true`.
     pub fn overlay_closable(mut self, overlay_closable: bool) -> Self {
         self.overlay_closable = overlay_closable;
         self
@@ -209,7 +180,7 @@ impl Dialog {
         self
     }
 
-    pub fn has_overlay(&self) -> bool {
+    pub(crate) fn has_overlay(&self) -> bool {
         self.overlay
     }
 }
@@ -232,13 +203,11 @@ impl RenderOnce for Dialog {
         let is_topmost = layer_ix + 1 == Root::read(window, cx).active_dialogs.len();
         let has_footer = self.footer.is_some();
 
-        let on_close = self.on_close.clone();
         let on_ok = self.on_ok.clone();
         let on_cancel = self.on_cancel.clone();
 
         let render_ok: RenderButtonFn = Box::new({
             let on_ok = on_ok.clone();
-            let on_close = on_close.clone();
             let ok_variant = self.button_props.ok_variant;
             let ok_text = self.button_props.ok_text.unwrap_or_else(|| "OK".into());
 
@@ -249,7 +218,6 @@ impl RenderOnce for Dialog {
                     .font_semibold()
                     .on_click({
                         let on_ok = on_ok.clone();
-                        let on_close = on_close.clone();
 
                         move |_, window, cx| {
                             if let Some(on_ok) = &on_ok
@@ -258,7 +226,6 @@ impl RenderOnce for Dialog {
                                 return;
                             }
 
-                            on_close(&ClickEvent::default(), window, cx);
                             window.close_dialog(cx);
                         }
                     })
@@ -268,7 +235,6 @@ impl RenderOnce for Dialog {
 
         let render_cancel: RenderButtonFn = Box::new({
             let on_cancel = on_cancel.clone();
-            let on_close = on_close.clone();
             let cancel_variant = self.button_props.cancel_variant;
             let cancel_text = self
                 .button_props
@@ -281,13 +247,11 @@ impl RenderOnce for Dialog {
                     .with_variant(cancel_variant)
                     .on_click({
                         let on_cancel = on_cancel.clone();
-                        let on_close = on_close.clone();
                         move |_, window, cx| {
                             if !on_cancel(&ClickEvent::default(), window, cx) {
                                 return;
                             }
 
-                            on_close(&ClickEvent::default(), window, cx);
                             window.close_dialog(cx);
                         }
                     })
@@ -306,25 +270,24 @@ impl RenderOnce for Dialog {
             padding_right = pr.to_pixels(self.width.into(), window.rem_size());
         }
 
-        let animation = Animation::new(Duration::from_secs_f64(0.25))
-            .with_easing(cubic_bezier(0.32, 0.72, 0., 1.));
-
         let backdrop = DialogBackdrop::new()
             .absolute()
             .inset_0()
-            .when(self.overlay_visible, |this| this.bg(cx.theme().overlay))
-            .with_animation("fade-in", animation.clone(), move |this, delta| {
+            .when(self.overlay_visible, |this| {
+                this.bg(scrim(SCRIM_ALPHA_DARK))
+            })
+            .with_animation("fade-in", DIALOG_IN.animation(), move |this, delta| {
                 this.opacity(delta)
             });
 
         let card = DialogPopup::new()
             .flex()
             .flex_col()
-            .bg(cx.theme().background)
+            .bg(cx.theme().surface_dialog)
             .border_1()
-            .border_color(cx.theme().border.alpha(0.4))
-            .rounded(cx.theme().radius_lg)
-            .when(cx.theme().shadow, |this| this.shadow_xl())
+            .border_color(cx.theme().border)
+            .rounded(px(surface_radius()))
+            .when(cx.theme().shadow, |this| this.shadow(surface_shadows()))
             .min_h_24()
             .refine_style(&self.style)
             .relative()
@@ -349,7 +312,6 @@ impl RenderOnce for Dialog {
                     })
                     .when(self.show_close, |this| {
                         let on_cancel = on_cancel.clone();
-                        let on_close = on_close.clone();
 
                         this.child(
                             div()
@@ -364,14 +326,13 @@ impl RenderOnce for Dialog {
                                         .icon(IconName::CloseCircleFill)
                                         .custom(
                                             ButtonCustomVariant::new(window, cx)
-                                                .foreground(cx.theme().icon_muted)
-                                                .color(cx.theme().ghost_element_background)
-                                                .hover(cx.theme().ghost_element_background)
-                                                .active(cx.theme().ghost_element_background),
+                                                .foreground(cx.theme().text_faint)
+                                                .color(transparent_black())
+                                                .hover(cx.theme().element_hover)
+                                                .active(cx.theme().element_active),
                                         )
                                         .on_click(move |_, window, cx| {
                                             on_cancel(&ClickEvent::default(), window, cx);
-                                            on_close(&ClickEvent::default(), window, cx);
                                             window.close_dialog(cx);
                                         }),
                                 ),
@@ -407,26 +368,12 @@ impl RenderOnce for Dialog {
                         .children(footer(render_ok, render_cancel, window, cx)),
                 )
             })
-            .with_animation("slide-down", animation, move |this, delta| {
-                // Settle at the target offset; only the entrance is animated.
-                let y_offset = px(30.) * (delta - 1.);
-                // This is equivalent to `shadow_xl` with an extra opacity.
-                let shadow = vec![
-                    BoxShadow {
-                        color: hsla(0., 0., 0., 0.1 * delta),
-                        offset: point(px(0.), px(20.)),
-                        blur_radius: px(25.),
-                        spread_radius: px(-5.),
-                        inset: false,
-                    },
-                    BoxShadow {
-                        color: hsla(0., 0., 0., 0.1 * delta),
-                        offset: point(px(0.), px(8.)),
-                        blur_radius: px(10.),
-                        spread_radius: px(-6.),
-                        inset: false,
-                    },
-                ];
+            .with_animation("slide-down", DIALOG_IN.animation(), move |this, delta| {
+                let y_offset = px(2.) * (delta - 1.);
+                let mut shadow = surface_shadows();
+                for shadow in &mut shadow {
+                    shadow.color.a *= delta;
+                }
                 this.top(y_offset).shadow(shadow)
             });
 
@@ -442,9 +389,6 @@ impl RenderOnce for Dialog {
                 None => has_footer,
             })
             .on_cancel(move |event, window, cx| on_cancel(event, window, cx))
-            .on_close(move |event, window, cx| {
-                on_close(event, window, cx);
-                window.close_dialog(cx);
-            })
+            .on_close(move |_, window, cx| window.close_dialog(cx))
     }
 }

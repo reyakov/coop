@@ -7,7 +7,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ObjectFit, ParentElement, Render, SharedString, Styled,
-    StyledImage, Subscription, Task, UniformListScrollHandle, WeakEntity, Window, div, img,
+    StyledImage, Subscription, Task, UniformListScrollHandle, WeakEntity, Window, div, img, px,
     retain_all,
 };
 use instant::Duration;
@@ -15,7 +15,7 @@ use nip29::{Group, GroupKey, GroupsEvent, GroupsRegistry};
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use state::{FIND_DELAY, NostrRegistry, StateEvent};
-use theme::{ActiveTheme, TABBAR_HEIGHT};
+use theme::{ActiveTheme, TABBAR_HEIGHT, TextStyle, Typeset as _};
 use ui::dock::{DockArea, Panel, PanelEvent};
 use ui::indicator::Indicator;
 use ui::input::{InputEvent, InputState};
@@ -276,8 +276,8 @@ impl Render for Sidebar {
             .image_cache(retain_all("sidebar"))
             .size_full()
             .relative()
-            .gap_2()
-            .bg(cx.theme().surface_background)
+            .gap(px(theme::SPACE))
+            .bg(cx.theme().surface)
             .when_some(current_user.as_ref(), |this, current_user| {
                 this.child(title_bar_drag_handlers(
                     self.render_user(current_user, cx),
@@ -326,17 +326,17 @@ impl Render for Sidebar {
                         .px_8()
                         .child(
                             h_flex()
-                                .gap_2()
+                                .gap(px(theme::SPACE))
                                 .w_full()
                                 .h_9()
                                 .justify_center()
-                                .bg(cx.theme().background.opacity(0.85))
+                                .bg(cx.theme().bg.opacity(0.85))
                                 .when(cx.theme().shadow, |this| this.shadow_md())
                                 .rounded_full()
-                                .text_xs()
+                                .text_style(TextStyle::Caption)
                                 .font_semibold()
                                 .text_color(cx.theme().text_muted)
-                                .child(Indicator::new().small().color(cx.theme().icon_accent))
+                                .child(Indicator::new().small().color(cx.theme().accent))
                                 .child("Getting messages..."),
                         ),
                 )

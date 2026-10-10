@@ -5,14 +5,14 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    Task, TextAlign, Window, div, rems, retain_all,
+    Task, TextAlign, Window, div, px, rems, retain_all,
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius, panel_radius};
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
@@ -233,12 +233,12 @@ impl ContactListPanel {
                     .h_8()
                     .px_2()
                     .justify_between()
-                    .rounded(cx.theme().radius)
-                    .hover(|this| this.bg(cx.theme().ghost_element_hover))
+                    .rounded(px(button_radius()))
+                    .hover(|this| this.bg(cx.theme().element_hover))
                     .child(
                         h_flex()
-                            .gap_2()
-                            .text_sm()
+                            .gap(px(theme::SPACE))
+                            .text_style(TextStyle::Callout)
                             .child(
                                 Avatar::new(profile.avatar())
                                     .seed(profile.avatar_seed())
@@ -273,8 +273,8 @@ impl ContactListPanel {
             .border_2()
             .border_dashed()
             .border_color(cx.theme().border)
-            .rounded(cx.theme().radius_lg)
-            .text_sm()
+            .rounded(px(panel_radius()))
+            .text_style(TextStyle::Callout)
             .text_align(TextAlign::Center)
             .child(SharedString::from("Please add some relays."))
     }
@@ -308,13 +308,13 @@ impl Render for ContactListPanel {
             .overflow_y_scrollbar()
             .child(
                 v_flex()
-                    .gap_2()
+                    .gap(px(theme::SPACE))
                     .flex_1()
                     .w_full()
-                    .text_sm()
+                    .text_style(TextStyle::Callout)
                     .child(
                         div()
-                            .text_xs()
+                            .text_style(TextStyle::Caption)
                             .font_semibold()
                             .text_color(cx.theme().text_muted)
                             .child("New contact:"),
@@ -342,8 +342,8 @@ impl Render for ContactListPanel {
                                 this.child(
                                     div()
                                         .italic()
-                                        .text_xs()
-                                        .text_color(cx.theme().text_danger)
+                                        .text_style(TextStyle::Caption)
+                                        .text_color(cx.theme().danger)
                                         .child(error.clone()),
                                 )
                             }),

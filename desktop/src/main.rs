@@ -34,7 +34,7 @@ fn main() {
             // Initialize components
             ui::init(cx);
 
-            // Initialize theme registry
+            // Initialize theme
             theme::init(cx);
 
             // Load embedded fonts in assets/fonts

@@ -4,12 +4,12 @@ use std::rc::Rc;
 use chat::{ChatRegistry, Room};
 use gpui::{
     AnyElement, App, Context, Entity, IntoElement, ParentElement, SharedString, Styled, Task,
-    Window, div, uniform_list,
+    Window, div, px, uniform_list,
 };
 use nip29::{Group, GroupsRegistry};
 use nostr_sdk::prelude::*;
 use state::{FIND_LIMIT, NostrRegistry};
-use theme::ActiveTheme;
+use theme::{ActiveTheme, button_radius};
 use ui::button::{Button, ButtonVariants};
 use ui::input::Input;
 use ui::scroll::Scrollbar;
@@ -201,14 +201,9 @@ impl Sidebar {
                     .px_1p5()
                     .gap_1()
                     .w_full()
-                    .rounded(cx.theme().radius)
-                    .bg(cx.theme().elevated_surface_background)
-                    .child(
-                        Input::new(&self.find_input)
-                            .appearance(false)
-                            .small()
-                            .text_xs(),
-                    )
+                    .rounded(px(button_radius()))
+                    .bg(cx.theme().surface_raised)
+                    .child(Input::new(&self.find_input).appearance(false).small())
                     .child(
                         Button::new("sidebar-global")
                             .icon(IconName::Compass)

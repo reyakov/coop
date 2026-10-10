@@ -1,17 +1,16 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, DefiniteLength, Edges, Entity, Hsla, InteractiveElement as _, IntoElement,
-    MouseButton, ParentElement as _, Pixels, Rems, RenderOnce, StyleRefinement, Styled, TextAlign,
-    Window, div, px,
+    App, DefiniteLength, Edges, Entity, Hsla, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement as _, Pixels, Rems, RenderOnce, StyleRefinement, Styled, TextAlign, Window, div,
+    px,
 };
 use gpui_base::InputBase;
 use gpui_base::input::{InputBaseState, InputEditorStyle, InputMode, InputModeKind, TextareaMode};
-use theme::ActiveTheme;
+use theme::{ActiveTheme, button_radius};
 
-use crate::button::{Button, ButtonVariants as _};
 use crate::indicator::Indicator;
 use crate::input::clear_button;
-use crate::{IconName, Selectable, Sizable, Size, StyleSized, StyledExt, h_flex, v_flex};
+use crate::{Sizable, Size, StyleSized, StyledExt, h_flex, v_flex};
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn primary_paste_offset(
@@ -45,35 +44,27 @@ fn primary_paste_offset(
 /// The background of an input frame, which reads muted while the input is disabled.
 fn input_background(disabled: bool, cx: &App) -> Hsla {
     if disabled {
-        cx.theme().surface_background
+        cx.theme().surface
     } else {
-        cx.theme().elevated_surface_background
+        cx.theme().input_bg
     }
 }
 
 /// The colors base paints input text with, read from the coop theme.
-///
-/// Base fills in any color left transparent from its own palette, and that
-/// palette is only a projection of this one, so every color coop paints with is
-/// named here rather than left to resolve.
 fn input_editor_style(cx: &App) -> InputEditorStyle {
     let theme = cx.theme();
     InputEditorStyle {
         foreground: theme.text,
-        muted_foreground: theme.text_muted,
-        background: theme.elevated_surface_background,
-        border: theme.border,
+        muted_foreground: theme.text_faint,
+        background: theme.input_bg,
+        border: theme.border_faint,
         selection: theme.selection,
-        caret: theme.cursor,
+        caret: theme.caret,
         ..InputEditorStyle::default()
     }
 }
 
 /// The input's own padding, resolved to pixels.
-///
-/// Base applies the multi-line padding itself so that the text, the gutter, and
-/// the scrollbar share one inset, and the single-line frame carries its own.
-/// Both come from the same size table, resolved through the window's rem size.
 fn input_paddings(size: Size, style: &StyleRefinement, window: &Window) -> Edges<Pixels> {
     let mut probe = div().input_px(size).input_py(size).refine_style(style);
     let padding = probe.style().padding.clone();
@@ -94,23 +85,14 @@ fn input_paddings(size: Size, style: &StyleRefinement, window: &Window) -> Edges
 }
 
 /// A text input element bound to an [`InputState`] or a [`TextareaState`].
-///
-/// The editing kind lives on the state, so `Input::new` accepts either and
-/// infers which one is rendered.
 #[derive(IntoElement)]
 pub struct Input<M: InputModeKind = InputMode> {
     state: Entity<InputBaseState<M>>,
     style: StyleRefinement,
     size: Size,
-    prefix: Option<AnyElement>,
-    suffix: Option<AnyElement>,
-    height: Option<DefiniteLength>,
     appearance: bool,
     cleanable: bool,
-    mask_toggle: bool,
     disabled: bool,
-    tab_index: isize,
-    selected: bool,
 }
 
 /// A styled multi-line text input.
@@ -123,17 +105,6 @@ impl<M: InputModeKind> Sizable for Input<M> {
     }
 }
 
-impl<M: InputModeKind> Selectable for Input<M> {
-    fn selected(mut self, selected: bool) -> Self {
-        self.selected = selected;
-        self
-    }
-
-    fn is_selected(&self) -> bool {
-        self.selected
-    }
-}
-
 impl<M: InputModeKind> Input<M> {
     /// Create a new [`Input`] element bind to the given state.
     pub fn new(state: &Entity<InputBaseState<M>>) -> Self {
@@ -141,26 +112,10 @@ impl<M: InputModeKind> Input<M> {
             state: state.clone(),
             size: Size::default(),
             style: StyleRefinement::default(),
-            prefix: None,
-            suffix: None,
-            height: None,
             appearance: true,
             cleanable: false,
-            mask_toggle: false,
             disabled: false,
-            tab_index: 0,
-            selected: false,
         }
-    }
-
-    pub fn prefix(mut self, prefix: impl IntoElement) -> Self {
-        self.prefix = Some(prefix.into_any_element());
-        self
-    }
-
-    pub fn suffix(mut self, suffix: impl IntoElement) -> Self {
-        self.suffix = Some(suffix.into_any_element());
-        self
     }
 
     /// Set the appearance of the input field, if false the input field will no border, background.
@@ -179,18 +134,6 @@ impl<M: InputModeKind> Input<M> {
     pub fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
-    }
-
-    fn render_toggle_mask_button(state: &Entity<InputBaseState<M>>) -> impl IntoElement {
-        Button::new("toggle-mask")
-            .icon(IconName::Eye)
-            .xsmall()
-            .ghost()
-            .tab_stop(false)
-            .on_click({
-                let state = state.clone();
-                move |_, window, cx| state.update(cx, |state, cx| state.toggle_masked(window, cx))
-            })
     }
 }
 
@@ -235,10 +178,8 @@ impl<M: InputModeKind> RenderOnce for Input<M> {
         let background = input_background(disabled, cx);
         let show_clear_button =
             self.cleanable && state.is_editable() && !loading && !text_is_empty && !multi_line;
-        let has_suffix = self.suffix.is_some() || loading || self.mask_toggle || show_clear_button;
+        let has_suffix = loading || show_clear_button;
 
-        let prefix = self.prefix;
-        let suffix = self.suffix;
         let state_entity = self.state.clone();
 
         InputBase::new(("input", self.state.entity_id()))
@@ -294,19 +235,15 @@ impl<M: InputModeKind> RenderOnce for Input<M> {
                 },
             )
             .items_center()
-            .when(multi_line, |this| {
-                this.h_auto()
-                    .when_some(self.height, |this, height| this.h(height))
-            })
+            .when(multi_line, |this| this.h_auto())
             .when(self.appearance, |this| {
                 this.bg(background)
                     .when(self.disabled, |this| this.opacity(0.5))
-                    .rounded(cx.theme().radius)
+                    .rounded(px(button_radius()))
             })
-            .tab_index(self.tab_index)
+            .tab_index(0)
             .gap(gap_x)
             .refine_style(&self.style)
-            .children(prefix)
             .when(!multi_line, |this| this.child(state_entity.clone()))
             .when(multi_line, |this| {
                 this.child(
@@ -322,9 +259,6 @@ impl<M: InputModeKind> RenderOnce for Input<M> {
                         .gap(gap_x)
                         .items_center()
                         .when(loading, |this| this.child(Indicator::new()))
-                        .when(self.mask_toggle, |this| {
-                            this.child(Self::render_toggle_mask_button(&state_entity))
-                        })
                         .when(show_clear_button, |this| {
                             this.child(clear_button(cx).on_click({
                                 let state = state_entity.clone();
@@ -335,8 +269,7 @@ impl<M: InputModeKind> RenderOnce for Input<M> {
                                     })
                                 }
                             }))
-                        })
-                        .children(suffix),
+                        }),
                 )
             })
     }

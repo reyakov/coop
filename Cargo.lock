@@ -8042,7 +8042,7 @@ dependencies = [
  "gpui-base",
  "gpui-pre",
  "instant",
- "serde",
+ "log",
  "smallvec",
  "theme",
  "uuid",

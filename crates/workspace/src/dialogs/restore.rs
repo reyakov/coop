@@ -7,8 +7,8 @@ use gpui::{
 use instant::Duration;
 use nip4e::DeviceRegistry;
 use nostr_sdk::prelude::*;
-use theme::ActiveTheme;
-use ui::button::{Button, ButtonVariants};
+use theme::{ActiveTheme, TextStyle, Typeset as _};
+use ui::button::{Button, ButtonVariants, IconPosition};
 use ui::input::{Input, InputEvent, InputState};
 use ui::{IconName, StyledExt, WindowExtension, h_flex, v_flex};
 
@@ -100,11 +100,11 @@ impl Render for RestoreEncryption {
         v_flex()
             .size_full()
             .gap_3()
-            .text_sm()
+            .text_style(TextStyle::Callout)
             .child(
                 v_flex()
                     .gap_1()
-                    .text_sm()
+                    .text_style(TextStyle::Callout)
                     .text_color(cx.theme().text_muted)
                     .child("Secret Key")
                     .child(Input::new(&self.key_input)),
@@ -112,7 +112,8 @@ impl Render for RestoreEncryption {
             .child(
                 h_flex().gap_1().justify_end().child(
                     Button::new("restore")
-                        .icon(IconName::CheckCircle)
+                        .icon(IconName::ArrowRight)
+                        .icon_position(IconPosition::End)
                         .label("Restore")
                         .primary()
                         .font_semibold()
@@ -124,9 +125,9 @@ impl Render for RestoreEncryption {
             .when_some(self.error.read(cx).as_ref(), |this, error| {
                 this.child(
                     div()
-                        .text_xs()
+                        .text_style(TextStyle::Caption)
                         .text_center()
-                        .text_color(cx.theme().text_danger)
+                        .text_color(cx.theme().danger)
                         .child(error.clone()),
                 )
             })

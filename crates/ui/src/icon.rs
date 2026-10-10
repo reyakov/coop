@@ -1,7 +1,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, Context, Hsla, IntoElement, Radians, Render, RenderOnce, SharedString,
-    StyleRefinement, Styled, Svg, Transformation, Window, svg,
+    AnyElement, App, Context, Hsla, IntoElement, Render, RenderOnce, SharedString, StyleRefinement,
+    Styled, Svg, Window, svg,
 };
 use theme::ActiveTheme;
 
@@ -18,13 +18,11 @@ pub enum IconName {
     ArrowLeft,
     ArrowRight,
     ArrowDownCircle,
-    Boom,
     Book,
     Ban,
     ChevronDown,
     CaretDown,
     CaretRight,
-    CaretUp,
     Check,
     CheckCircle,
     Close,
@@ -32,17 +30,14 @@ pub enum IconName {
     CloseCircleFill,
     Compass,
     Copy,
-    Device,
     Door,
     Ellipsis,
     Emoji,
     Eye,
-    Folder,
     Input,
     Info,
     Invite,
     Inbox,
-    InboxFill,
     Link,
     Loader,
     Lock,
@@ -54,23 +49,14 @@ pub enum IconName {
     PlusChat,
     PlusCircle,
     Profile,
-    Reset,
     Relay,
     Reply,
-    Refresh,
-    Scan,
     Search,
     Settings,
     Settings2,
     Sun,
-    Ship,
-    Shield,
     Group,
-    Hashtag,
-    History,
-    UserKey,
     Upload,
-    Usb,
     Edit,
     PanelLeft,
     PanelLeftOpen,
@@ -84,9 +70,6 @@ pub enum IconName {
     WindowMaximize,
     WindowMinimize,
     WindowRestore,
-    Fistbump,
-    FistbumpFill,
-    Zoom,
 }
 
 impl IconName {
@@ -95,13 +78,11 @@ impl IconName {
             Self::ArrowLeft => "icons/arrow-left.svg",
             Self::ArrowRight => "icons/arrow-right.svg",
             Self::ArrowDownCircle => "icons/arrow-down-circle.svg",
-            Self::Boom => "icons/boom.svg",
             Self::Book => "icons/book.svg",
             Self::Ban => "icons/ban.svg",
             Self::ChevronDown => "icons/chevron-down.svg",
             Self::CaretDown => "icons/caret-down.svg",
             Self::CaretRight => "icons/caret-right.svg",
-            Self::CaretUp => "icons/caret-up.svg",
             Self::Check => "icons/check.svg",
             Self::CheckCircle => "icons/check-circle.svg",
             Self::Close => "icons/close.svg",
@@ -109,17 +90,14 @@ impl IconName {
             Self::CloseCircleFill => "icons/close-circle-fill.svg",
             Self::Compass => "icons/compass.svg",
             Self::Copy => "icons/copy.svg",
-            Self::Device => "icons/device.svg",
             Self::Door => "icons/door.svg",
             Self::Ellipsis => "icons/ellipsis.svg",
             Self::Emoji => "icons/emoji.svg",
             Self::Eye => "icons/eye.svg",
-            Self::Folder => "icons/folder.svg",
             Self::Input => "icons/input.svg",
             Self::Info => "icons/info.svg",
             Self::Invite => "icons/invite.svg",
             Self::Inbox => "icons/inbox.svg",
-            Self::InboxFill => "icons/inbox-fill.svg",
             Self::Link => "icons/link.svg",
             Self::Loader => "icons/loader.svg",
             Self::Lock => "icons/lock.svg",
@@ -131,23 +109,14 @@ impl IconName {
             Self::PlusChat => "icons/plus-chat.svg",
             Self::PlusCircle => "icons/plus-circle.svg",
             Self::Profile => "icons/profile.svg",
-            Self::Reset => "icons/reset.svg",
             Self::Relay => "icons/relay.svg",
             Self::Reply => "icons/reply.svg",
-            Self::Refresh => "icons/refresh.svg",
-            Self::Scan => "icons/scan.svg",
             Self::Search => "icons/search.svg",
             Self::Settings => "icons/settings.svg",
             Self::Settings2 => "icons/settings2.svg",
             Self::Sun => "icons/sun.svg",
-            Self::Ship => "icons/ship.svg",
-            Self::Shield => "icons/shield.svg",
-            Self::UserKey => "icons/user-key.svg",
             Self::Upload => "icons/upload.svg",
-            Self::Usb => "icons/usb.svg",
             Self::Group => "icons/group.svg",
-            Self::Hashtag => "icons/hashtag.svg",
-            Self::History => "icons/history.svg",
             Self::PanelLeft => "icons/panel-left.svg",
             Self::PanelLeftOpen => "icons/panel-left-open.svg",
             Self::PanelRight => "icons/panel-right.svg",
@@ -161,9 +130,6 @@ impl IconName {
             Self::WindowMaximize => "icons/window-maximize.svg",
             Self::WindowMinimize => "icons/window-minimize.svg",
             Self::WindowRestore => "icons/window-restore.svg",
-            Self::Fistbump => "icons/fistbump.svg",
-            Self::FistbumpFill => "icons/fistbump-fill.svg",
-            Self::Zoom => "icons/zoom.svg",
         }
         .into()
     }
@@ -188,7 +154,6 @@ pub struct Icon {
     path: SharedString,
     text_color: Option<Hsla>,
     size: Option<Size>,
-    rotation: Option<Radians>,
 }
 
 impl Default for Icon {
@@ -199,7 +164,6 @@ impl Default for Icon {
             path: "".into(),
             text_color: None,
             size: None,
-            rotation: None,
         }
     }
 }
@@ -208,7 +172,6 @@ impl Clone for Icon {
     fn clone(&self) -> Self {
         let mut this = Self::default().path(self.path.clone());
         this.style = self.style.clone();
-        this.rotation = self.rotation;
         this.size = self.size;
         this.text_color = self.text_color;
         this
@@ -224,9 +187,7 @@ impl Icon {
         Self::default().path(name.path())
     }
 
-    /// Set the icon path of the Assets bundle
-    ///
-    /// For example: `icons/foo.svg`
+    /// Sets the icon path, relative to the assets bundle (for example `icons/foo.svg`).
     pub fn path(mut self, path: impl Into<SharedString>) -> Self {
         self.path = path.into();
         self
@@ -291,7 +252,7 @@ impl From<Icon> for AnyElement {
 
 impl Render for Icon {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let text_color = self.text_color.unwrap_or_else(|| cx.theme().icon);
+        let text_color = self.text_color.unwrap_or_else(|| cx.theme().text_muted);
         let text_size = window.text_style().font_size.to_pixels(window.rem_size());
         let has_base_size = self.style.size.width.is_some() || self.style.size.height.is_some();
 
@@ -309,8 +270,5 @@ impl Render for Icon {
                 Size::Large => this.size_6(),
             })
             .path(self.path.clone())
-            .when_some(self.rotation, |this, rotation| {
-                this.with_transformation(Transformation::rotate(rotation))
-            })
     }
 }

@@ -1,12 +1,12 @@
 use anyhow::Error;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window, div,
+    Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window, div, px,
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use state::USER_KEYRING;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
 use ui::input::{Input, InputState};
@@ -132,24 +132,24 @@ impl Render for BackupPanel {
             .w_full()
             .child(
                 div()
-                    .text_xs()
+                    .text_style(TextStyle::Caption)
                     .text_color(cx.theme().text_muted)
                     .child(SharedString::from(MSG)),
             )
             .child(divider(cx))
             .child(
                 v_flex()
-                    .gap_2()
+                    .gap(px(theme::SPACE))
                     .flex_1()
                     .w_full()
-                    .text_sm()
+                    .text_style(TextStyle::Callout)
                     .child(
                         v_flex()
                             .gap_1p5()
                             .w_full()
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_style(TextStyle::Caption)
                                     .font_semibold()
                                     .text_color(cx.theme().text_muted)
                                     .child(SharedString::from("Public Key:")),
@@ -162,7 +162,7 @@ impl Render for BackupPanel {
                             .w_full()
                             .child(
                                 div()
-                                    .text_xs()
+                                    .text_style(TextStyle::Caption)
                                     .font_semibold()
                                     .text_color(cx.theme().text_muted)
                                     .child(SharedString::from("Secret Key:")),

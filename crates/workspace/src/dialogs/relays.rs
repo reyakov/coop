@@ -11,8 +11,8 @@ use instant::Duration;
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
-use theme::ActiveTheme;
-use ui::button::{Button, ButtonVariants};
+use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius, panel_radius};
+use ui::button::{Button, ButtonVariants, IconPosition};
 use ui::input::{Input, InputEvent, InputState};
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::scroll::ScrollableElement;
@@ -108,10 +108,10 @@ impl RelayManager {
         let manager = cx.entity().downgrade();
 
         v_flex()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .child(
                 div()
-                    .text_xs()
+                    .text_style(TextStyle::Caption)
                     .text_color(cx.theme().text_muted)
                     .child(SharedString::from(GOSSIP_MSG)),
             )
@@ -132,7 +132,7 @@ impl RelayManager {
                             .tooltip("Relay metadata")
                             .ghost()
                             .h(rems(2.))
-                            .text_xs()
+                            .text_style(TextStyle::Caption)
                             .dropdown_menu(move |menu, _window, _cx| {
                                 menu.item(metadata_item(&manager, RelayMetadata::Read))
                                     .item(metadata_item(&manager, RelayMetadata::Write))
@@ -153,8 +153,8 @@ impl RelayManager {
                 this.child(
                     div()
                         .italic()
-                        .text_xs()
-                        .text_color(cx.theme().text_danger)
+                        .text_style(TextStyle::Caption)
+                        .text_color(cx.theme().danger)
                         .child(error.clone()),
                 )
             })
@@ -197,10 +197,10 @@ impl RelayManager {
 
     fn render_inbox(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .child(
                 div()
-                    .text_xs()
+                    .text_style(TextStyle::Caption)
                     .text_color(cx.theme().text_muted)
                     .child(SharedString::from(INBOX_MSG)),
             )
@@ -224,8 +224,8 @@ impl RelayManager {
                 this.child(
                     div()
                         .italic()
-                        .text_xs()
-                        .text_color(cx.theme().text_danger)
+                        .text_style(TextStyle::Caption)
+                        .text_color(cx.theme().danger)
                         .child(error.clone()),
                 )
             })
@@ -283,7 +283,8 @@ impl RelayManager {
 
         h_flex().gap_1().justify_end().child(
             Button::new("update")
-                .icon(IconName::CheckCircle)
+                .icon(IconName::ArrowRight)
+                .icon_position(IconPosition::End)
                 .label("Update")
                 .primary()
                 .font_semibold()
@@ -607,7 +608,7 @@ impl Render for RelayManager {
 
         v_flex()
             .gap_4()
-            .text_sm()
+            .text_style(TextStyle::Callout)
             .child(self.render_tab_bar(cx))
             .child(content)
             .child(self.render_actions(cx))
@@ -646,20 +647,19 @@ fn relay_row(
         .h_8()
         .px_2()
         .justify_between()
-        .rounded(cx.theme().radius)
-        .bg(cx.theme().surface_background)
+        .rounded(px(button_radius()))
+        .bg(cx.theme().surface)
         .child(
             h_flex()
                 .gap_1()
-                .text_sm()
+                .text_style(TextStyle::Callout)
                 .child(label)
                 .when_some(badge, |this, badge| {
                     this.child(
                         div()
                             .p_0p5()
                             .rounded_xs()
-                            .font_semibold()
-                            .text_size(px(8.))
+                            .text_style(TextStyle::Caption2)
                             .child(badge),
                     )
                 }),
@@ -682,8 +682,8 @@ fn empty_relays(cx: &App) -> impl IntoElement {
         .border_2()
         .border_dashed()
         .border_color(cx.theme().border)
-        .rounded(cx.theme().radius_lg)
-        .text_sm()
+        .rounded(px(panel_radius()))
+        .text_style(TextStyle::Callout)
         .text_align(TextAlign::Center)
         .child(SharedString::from("Please add some relays."))
 }

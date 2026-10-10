@@ -4,7 +4,7 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement, Interactivity, IntoElement,
     ParentElement, RenderOnce, SharedString, StatefulInteractiveElement as _, StyleRefinement,
-    Styled, Window, div,
+    Styled, Window, div, px,
 };
 use theme::ActiveTheme;
 
@@ -44,8 +44,7 @@ impl Nav {
         }
     }
 
-    /// Marks the row as clickable even when it has no `on_click` handler, so it
-    /// still shows the hover affordance. Used by rows whose click opens a menu.
+    /// Marks the row as clickable even without an `on_click` handler, keeping the hover affordance.
     pub fn clickable(mut self, clickable: bool) -> Self {
         self.clickable = clickable;
         self
@@ -104,15 +103,21 @@ impl Styled for Nav {
 impl RenderOnce for Nav {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let clickable = self.on_click.is_some() || self.clickable;
+        let text_color = if self.selected {
+            cx.theme().text
+        } else {
+            cx.theme().text_muted
+        };
 
-        v_flex().h_10().w_full().items_center().child(
+        v_flex().h_10().w_full().justify_center().child(
             h_flex()
                 .id(self.id)
                 .h_9()
                 .w_full()
                 .px_1p5()
                 .gap_1p5()
-                .rounded(cx.theme().radius_lg)
+                .rounded(px(theme::button_radius()))
+                .text_color(text_color)
                 .when_some(self.prefix, |this, prefix| this.child(prefix))
                 .child(
                     h_flex()
@@ -126,10 +131,8 @@ impl RenderOnce for Nav {
                 )
                 .when(clickable, |this| {
                     this.cursor_pointer()
-                        .hover(|this| this.bg(cx.theme().ghost_element_hover))
-                        .when(self.selected, |this| {
-                            this.bg(cx.theme().ghost_element_active)
-                        })
+                        .hover(|this| this.bg(cx.theme().element_hover))
+                        .when(self.selected, |this| this.bg(cx.theme().element_active))
                 })
                 .when_some(self.on_click, |this, handler| {
                     this.on_click(move |event, window, cx| handler(event, window, cx))

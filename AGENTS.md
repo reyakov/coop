@@ -2,7 +2,10 @@
 
 * Prioritize code correctness and clarity. Speed and efficiency are secondary priorities unless otherwise specified.
 * Do not write organizational or comments that summarize the code. Comments should only be written in order to explain "why" the code is written in some way in the case there is a reason that is tricky / non-obvious.
+* Keep doc comments and comments simple, one line, straightforward, and unbloated.
 * Prefer implementing functionality in existing files unless it is a new logical component. Avoid creating many small files.
+* Prefer `impl` blocks over standalone functions: place functionality as methods or associated functions on the relevant type, extending the type's existing `impl` block instead of creating a duplicate one in another file.
+* Bind a global store handle to a local before using it (`let state = GlobalState::global(cx);` then `state.update(...)`) instead of chaining on `GlobalState::global(cx)` inline.
 * Avoid using functions that panic like `unwrap()`, instead use mechanisms like `?` to propagate errors.
 * Be careful with operations like indexing which may panic if the indexes are out of bounds.
 * Never silently discard errors with `let _ =` on fallible operations. Always handle errors appropriately:
@@ -80,6 +83,8 @@ Both `cx.spawn` and `cx.background_spawn` return a `Task<R>`, which is a future 
 * Storing the task in a field, if the work should be halted when the struct is dropped.
 
 A task which doesn't do anything but provide a value can be created with `Task::ready(value)`.
+
+Prefer keeping a task in a field over `.detach()` when the work belongs to a view or store. A detached task outlives the view that started it (for example, a repository panel the user has closed), while a task stored in a field is cancelled when that struct drops. A finished `Task` held in a container is not reaped by GPUI - it stays alive until its handle is dropped - so if the container can accumulate many runs, either drop the finished handles before pushing a new one, or hold a single `Option<Task<_>>` and replace it.
 
 ## Elements
 

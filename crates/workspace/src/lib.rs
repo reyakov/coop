@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use ::settings::AppSettings;
 use anyhow::Error;
 use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry};
@@ -15,11 +14,11 @@ use nostr_sdk::prelude::*;
 use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, StateEvent};
-use theme::{ActiveTheme, SIDEBAR_WIDTH, Theme, ThemeRegistry};
-use ui::button::{Button, ButtonVariants};
+use theme::{ActiveTheme, TextStyle, Typeset as _, SIDEBAR_WIDTH, Theme};
+use ui::button::Button;
 use ui::dock::{self, DockArea, DockLayout, DockPlacement, Panel, PanelHandle};
 use ui::notification::{Notification, NotificationKind};
-use ui::{IconName, Root, Sizable, WindowExtension, h_flex, v_flex};
+use ui::{Root, WindowExtension, v_flex};
 
 use crate::dialogs::restore::RestoreEncryption;
 use crate::dialogs::{join_group, new_chat, new_group, profile, relays, settings};
@@ -40,7 +39,6 @@ struct MsgRelayNotification;
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = workspace, no_json)]
 enum Command {
-    ToggleTheme,
     Update,
     RefreshMessagingRelays,
     BackupEncryption,
@@ -327,9 +325,6 @@ impl Workspace {
             Command::ResetEncryption => {
                 self.confirm_reset_encryption(window, cx);
             }
-            Command::ToggleTheme => {
-                self.theme_selector(window, cx);
-            }
             Command::BackupEncryption => {
                 let device = DeviceRegistry::global(cx).downgrade();
                 let save_dialog = cx.prompt_for_new_path(download_dir(), Some("encryption.txt"));
@@ -420,12 +415,12 @@ impl Workspace {
                 .child(
                     v_flex()
                         .gap_1()
-                        .text_sm()
+                        .text_style(TextStyle::Callout)
                         .child(SharedString::from(ENC_MSG))
                         .child(
                             div()
                                 .italic()
-                                .text_color(cx.theme().text_danger)
+                                .text_color(cx.theme().danger)
                                 .child(SharedString::from(ENC_WARN)),
                         ),
                 )
@@ -446,86 +441,6 @@ impl Workspace {
             this.width(px(420.))
                 .title("Restore Encryption")
                 .child(restore.clone())
-        });
-    }
-
-    fn theme_selector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        window.open_dialog(cx, move |this, _window, cx| {
-            let registry = ThemeRegistry::global(cx);
-            let themes = registry.read(cx).themes();
-
-            this.width(px(520.))
-                .show_close(true)
-                .title("Select theme")
-                .child(v_flex().gap_2().w_full().children({
-                    let mut items = vec![];
-
-                    for (ix, (path, theme)) in themes.iter().enumerate() {
-                        items.push(
-                            h_flex()
-                                .id(ix)
-                                .group("")
-                                .px_2()
-                                .h_8()
-                                .w_full()
-                                .justify_between()
-                                .rounded(cx.theme().radius)
-                                .bg(cx.theme().ghost_element_background)
-                                .hover(|this| this.bg(cx.theme().ghost_element_hover))
-                                .child(
-                                    h_flex()
-                                        .gap_1p5()
-                                        .flex_1()
-                                        .text_sm()
-                                        .child(theme.name.clone())
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .italic()
-                                                .text_color(cx.theme().text_muted)
-                                                .child(theme.author.clone()),
-                                        ),
-                                )
-                                .child(
-                                    h_flex()
-                                        .gap_1()
-                                        .invisible()
-                                        .group_hover("", |this| this.visible())
-                                        .child(
-                                            Button::new(format!("url-{ix}"))
-                                                .icon(IconName::Link)
-                                                .ghost()
-                                                .small()
-                                                .on_click({
-                                                    let theme = theme.clone();
-                                                    move |_ev, _window, cx| {
-                                                        cx.open_url(&theme.url);
-                                                    }
-                                                }),
-                                        )
-                                        .child(
-                                            Button::new(format!("set-{ix}"))
-                                                .icon(IconName::Check)
-                                                .primary()
-                                                .small()
-                                                .on_click({
-                                                    let path = path.clone();
-                                                    move |_ev, window, cx| {
-                                                        let settings = AppSettings::global(cx);
-                                                        let path = path.clone();
-
-                                                        settings.update(cx, |this, cx| {
-                                                            this.set_theme(path, window, cx);
-                                                        })
-                                                    }
-                                                }),
-                                        ),
-                                ),
-                        );
-                    }
-
-                    items
-                }))
         });
     }
 }

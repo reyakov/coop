@@ -5,7 +5,7 @@ use gpui::{
 };
 use nip29::Group;
 use nostr_sdk::prelude::SecretKey;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 use ui::dialog::DialogButtonProps;
 use ui::input::InputState;
 use ui::notification::Notification;
@@ -40,7 +40,7 @@ pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) 
             .child(
                 v_flex().gap_3().child(
                     div()
-                        .text_sm()
+                        .text_style(TextStyle::Callout)
                         .text_color(cx.theme().text_muted)
                         .child("Share the code with whoever should be able to join. The relay must accept it."),
                 )

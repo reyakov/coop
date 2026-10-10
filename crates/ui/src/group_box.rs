@@ -1,10 +1,10 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, ElementId, InteractiveElement as _, IntoElement, ParentElement, RenderOnce,
-    StyleRefinement, Styled, Window, div, relative,
+    StyleRefinement, Styled, Window, div, px,
 };
 use smallvec::SmallVec;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 
 use crate::{StyledExt as _, v_flex};
 
@@ -22,12 +22,6 @@ pub trait GroupBoxVariants: Sized {
     #[must_use]
     fn with_variant(self, variant: GroupBoxVariant) -> Self;
 
-    /// Set to use [`GroupBoxVariant::Normal`] to GroupBox.
-    #[must_use]
-    fn normal(self) -> Self {
-        self.with_variant(GroupBoxVariant::Normal)
-    }
-
     /// Set to use [`GroupBoxVariant::Fill`] to GroupBox.
     #[must_use]
     fn fill(self) -> Self {
@@ -35,16 +29,13 @@ pub trait GroupBoxVariants: Sized {
     }
 }
 
-/// GroupBox is a styled container element that with
-/// an optional title to groups related content together.
+/// A styled container with an optional title that groups related content together.
 #[derive(IntoElement)]
 pub struct GroupBox {
     id: Option<ElementId>,
     variant: GroupBoxVariant,
     style: StyleRefinement,
-    title_style: StyleRefinement,
     title: Option<AnyElement>,
-    content_style: StyleRefinement,
     children: SmallVec<[AnyElement; 1]>,
 }
 
@@ -55,8 +46,6 @@ impl GroupBox {
             id: None,
             variant: GroupBoxVariant::default(),
             style: StyleRefinement::default(),
-            title_style: StyleRefinement::default(),
-            content_style: StyleRefinement::default(),
             title: None,
             children: SmallVec::new(),
         }
@@ -106,7 +95,7 @@ impl RenderOnce for GroupBox {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let (bg, has_paddings) = match self.variant {
             GroupBoxVariant::Normal => (None, false),
-            GroupBoxVariant::Fill => (Some(cx.theme().surface_background), true),
+            GroupBoxVariant::Fill => (Some(cx.theme().surface), true),
         };
 
         v_flex()
@@ -119,9 +108,7 @@ impl RenderOnce for GroupBox {
                 this.child(
                     div()
                         .text_color(cx.theme().text_muted)
-                        .line_height(relative(1.))
-                        .refine_style(&self.title_style)
-                        .text_sm()
+                        .text_style(TextStyle::Callout)
                         .font_semibold()
                         .child(title),
                 )
@@ -132,8 +119,7 @@ impl RenderOnce for GroupBox {
                     .text_color(cx.theme().text)
                     .when(has_paddings, |this| this.p_2())
                     .gap_4()
-                    .rounded(cx.theme().radius_lg)
-                    .refine_style(&self.content_style)
+                    .rounded(px(theme::panel_radius()))
                     .children(self.children),
             )
     }

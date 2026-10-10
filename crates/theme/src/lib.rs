@@ -1,25 +1,51 @@
 use std::ops::{Deref, DerefMut};
-use std::rc::Rc;
 
 use gpui::{App, Global, Pixels, SharedString, Window, px};
 
+mod brand;
+mod color;
 mod colors;
 mod geometry;
+mod layout;
 mod notification;
+mod paint;
+mod palette;
 mod platform_kind;
-mod registry;
-mod scale;
 mod scrollbar_mode;
+mod syntax;
 mod theme;
+mod typography;
 
+pub mod appearance;
+
+pub use appearance::AppearanceMode;
+pub use brand::{BASE_COLORS, Brand, Ink, TextInk, Tint};
+pub use color::{
+    contrast_ratio, flatten, grey, hsl_to_rgb, lightness, mix, neutral, oklch, oklch_to_srgb,
+    relative_luminance, rgb_to_hsl, tint,
+};
 pub use colors::*;
 pub use geometry::*;
+pub use layout::{
+    BASE_RADIUS, BUTTON_HEIGHT, CONTENT_MARGIN, CONTROL_HEIGHT_SMALL, EDGE, SPACE, bubble_radius,
+    button_radius, control_radius, inset_radius, panel_radius, surface_radius,
+};
 pub use notification::*;
+pub use paint::{
+    INK_FILL_SCALE, INK_HAIRLINE_SCALE, SCRIM_ALPHA_DARK, band, current_appearance, hairline, ink,
+    plate_active, plate_hover, scrim, set_current_appearance, surface_shadows, wash,
+};
 pub use platform_kind::PlatformKind;
-pub use registry::*;
-pub use scale::*;
 pub use scrollbar_mode::*;
+pub use syntax::{HighlightKind, SyntaxPalette};
 pub use theme::*;
+pub use typography::{
+    DEFAULT_BASE_TEXT_SIZE, Metrics, TextStyle, Typeset, base_text_size, set_base_text_size,
+};
+
+/// Which appearance the app is painting. Bezel names this enum `Appearance`;
+/// coop's `ThemeMode` predates the port and carries the same two variants.
+pub type Appearance = ThemeMode;
 
 /// Defines window border radius for platforms that use client side decorations.
 pub const CLIENT_SIDE_DECORATION_ROUNDING: Pixels = px(10.0);
@@ -40,25 +66,57 @@ pub const TABBAR_HEIGHT: Pixels = px(36.0);
 pub const SIDEBAR_WIDTH: Pixels = px(240.);
 
 pub fn init(cx: &mut App) {
-    registry::init(cx);
-
-    Theme::sync_system_appearance(None, cx);
+    appearance::init(AppearanceMode::default(), cx);
     Theme::sync_scrollbar_appearance(cx);
 }
 
+/// An alternative palette source.
+pub type PaletteBuilder = fn(ThemeMode) -> ThemeColors;
+
+struct GlobalPaletteBuilder(Option<PaletteBuilder>);
+
+impl Global for GlobalPaletteBuilder {}
+
+/// Install a brand or an alternative palette on the app.
+pub trait AppExt {
+    fn set_brand(&mut self, brand: Brand);
+    fn set_palette(&mut self, build: PaletteBuilder);
+    fn set_appearance_mode(&mut self, mode: AppearanceMode);
+    fn set_base_text_size(&mut self, points: f32);
+}
+
+impl AppExt for App {
+    fn set_brand(&mut self, brand: Brand) {
+        self.set_global(brand);
+        reinstall(self);
+    }
+
+    fn set_palette(&mut self, build: PaletteBuilder) {
+        self.set_global(GlobalPaletteBuilder(Some(build)));
+        reinstall(self);
+    }
+
+    fn set_appearance_mode(&mut self, mode: AppearanceMode) {
+        appearance::set_mode(mode, self);
+    }
+
+    fn set_base_text_size(&mut self, points: f32) {
+        typography::set_base_text_size(points);
+        self.refresh_windows();
+    }
+}
+
+/// Re-install the palette for the current appearance.
+fn reinstall(cx: &mut App) {
+    let mode = cx
+        .try_global::<Theme>()
+        .map(|theme| theme.mode)
+        .unwrap_or_default();
+    Theme::change(mode, None, cx);
+    cx.refresh_windows();
+}
+
 /// Mirror the active coop theme into the `gpui-base` global theme.
-///
-/// Base paints a few things from its own tokens -- the focus ring, the wash
-/// behind selected text, scrollbars, and overlay backdrops -- so the two
-/// globals have to agree or those details drift away from the palette.
-///
-/// Only roles base can act on are projected. Radius, spacing, typography sizes,
-/// shadows, and scrollbar geometry keep their base defaults: coop has a single
-/// `radius`/`radius_lg`/`font_size` where base has six-point scales, so any
-/// mapping would be invented rather than derived.
-///
-/// This is a no-op before the coop theme global exists; [`Theme::change`] is the
-/// authoritative hook that keeps the projection current.
 pub fn sync_base(cx: &mut App) {
     let Some(theme) = cx.try_global::<Theme>() else {
         return;
@@ -75,28 +133,28 @@ pub fn sync_base(cx: &mut App) {
         ScrollbarMode::Always => gpui_base::ScrollbarMode::Always,
     };
     let colors = theme.colors;
-    let font_family = theme.font_family.clone();
+    let font_sans = theme.font_sans.clone();
 
     let base = gpui_base::Theme::global_mut(cx);
     base.appearance = appearance;
     base.scrollbar = base.scrollbar.clone().with_mode(scrollbar_mode);
-    base.tokens.typography.sans = font_family;
+    base.tokens.typography.sans = font_sans;
 
     let tokens = &mut base.tokens.colors;
-    tokens.background = colors.background;
+    tokens.background = colors.bg;
     tokens.foreground = colors.text;
-    tokens.surface = colors.surface_background;
+    tokens.surface = colors.surface;
     tokens.surface_foreground = colors.text;
-    tokens.primary = colors.element_background;
-    tokens.primary_foreground = colors.element_foreground;
-    tokens.secondary = colors.secondary_background;
-    tokens.secondary_foreground = colors.secondary_foreground;
-    tokens.muted = colors.ghost_element_background_alt;
+    tokens.primary = colors.solid;
+    tokens.primary_foreground = colors.on_solid;
+    tokens.secondary = colors.surface_raised;
+    tokens.secondary_foreground = colors.text;
+    tokens.muted = colors.surface_card;
     tokens.muted_foreground = colors.text_muted;
-    tokens.accent = colors.ghost_element_hover;
+    tokens.accent = colors.element_hover;
     tokens.accent_foreground = colors.text;
-    tokens.destructive = colors.danger_background;
-    tokens.destructive_foreground = colors.danger_foreground;
+    tokens.destructive = colors.danger_strong;
+    tokens.destructive_foreground = gpui::white();
     tokens.border = colors.border;
     tokens.input = colors.border;
     tokens.ring = colors.ring;
@@ -116,34 +174,12 @@ impl ActiveTheme for App {
 
 #[derive(Debug, Clone)]
 pub struct Theme {
-    /// Theme colors
     pub colors: ThemeColors,
-
-    /// Theme family
-    pub theme: Rc<ThemeFamily>,
-
-    /// The appearance of the theme (light or dark).
     pub mode: ThemeMode,
-
-    /// The font family for the application.
-    pub font_family: SharedString,
-
-    /// The root font size for the application, default is 15px.
-    pub font_size: Pixels,
-
-    /// Radius for the general elements.
-    pub radius: Pixels,
-
-    /// Radius for the large elements, e.g.: dialog, notification.
-    pub radius_lg: Pixels,
-
-    /// Enable shadow for the general elements. default is true
+    pub font_sans: SharedString,
+    pub font_mono: SharedString,
     pub shadow: bool,
-
-    /// Show the scrollbar mode, default: scrolling
     pub scrollbar_mode: ScrollbarMode,
-
-    /// Notification settings
     pub notification: NotificationSettings,
 }
 
@@ -181,12 +217,7 @@ impl Theme {
 
     /// Sync the theme with the system appearance
     pub fn sync_system_appearance(window: Option<&mut Window>, cx: &mut App) {
-        let appearance = window
-            .as_ref()
-            .map(|window| window.appearance())
-            .unwrap_or_else(|| cx.window_appearance());
-
-        Self::change(appearance, window, cx);
+        appearance::record_system_appearance(window.as_deref(), cx);
     }
 
     /// Sync the Scrollbar showing behavior with the system
@@ -198,79 +229,84 @@ impl Theme {
         };
     }
 
-    /// Apply a new theme to the application.
-    pub fn apply_theme(new_theme: Rc<ThemeFamily>, window: Option<&mut Window>, cx: &mut App) {
-        let theme = cx.global_mut::<Theme>();
-        let mode = theme.mode;
-        // Update the theme
-        theme.theme = new_theme;
-        // Emit a theme change event
-        Self::change(mode, window, cx);
-    }
-
     /// Change the app's appearance
     pub fn change<M>(mode: M, window: Option<&mut Window>, cx: &mut App)
     where
         M: Into<ThemeMode>,
     {
         if !cx.has_global::<Theme>() {
-            let default_theme = ThemeFamily::default();
-            let theme = Theme::from(default_theme);
-
-            cx.set_global(theme);
+            cx.set_global(Theme::default());
         }
 
         let mode = mode.into();
-        let theme = cx.global_mut::<Theme>();
+        let builder = cx
+            .try_global::<GlobalPaletteBuilder>()
+            .and_then(|builder| builder.0);
+        let mut colors = match builder {
+            Some(build) => build(mode),
+            None => ThemeColors::for_appearance(mode),
+        };
+
+        // A default brand changes nothing; anything else rotates the tokens.
+        let installed_brand = brand::installed(cx);
+        if !installed_brand.is_default() {
+            installed_brand.apply(mode, &mut colors);
+        }
+
+        let theme = Theme::global_mut(cx);
 
         // Set the theme mode
         theme.mode = mode;
 
         // Set the theme colors
-        if mode.is_dark() {
-            theme.colors = *theme.theme.dark();
-        } else {
-            theme.colors = *theme.theme.light();
-        }
+        theme.colors = colors;
 
         // Refresh the window if available
         if let Some(window) = window {
             window.refresh();
         }
 
+        // Keep the context-free paint helpers and the radius accessors in step
+        paint::set_current_appearance(mode);
+        layout::set_base_radius(installed_brand.radius);
+
         // Keep the base-layer projection in step with the coop palette
         sync_base(cx);
     }
 }
 
-impl From<ThemeFamily> for Theme {
-    fn from(family: ThemeFamily) -> Self {
+impl Default for Theme {
+    fn default() -> Self {
         let platform = PlatformKind::platform();
         let mode = ThemeMode::default();
 
-        // Define the font family based on the platform.
-        let font_family = match platform {
+        // The system UI font, by platform.
+        let font_sans = match platform {
             PlatformKind::Linux => "Inter",
             _ => ".SystemUIFont",
         };
 
-        // Define the theme colors based on the appearance
-        let colors = match mode {
-            ThemeMode::Light => family.light(),
-            ThemeMode::Dark => family.dark(),
-        };
-
-        Theme {
-            font_size: px(15.),
-            font_family: font_family.into(),
-            radius: px(6.),
-            radius_lg: px(10.),
+        Self {
+            font_sans: font_sans.into(),
+            font_mono: system_mono().into(),
             shadow: true,
             scrollbar_mode: ScrollbarMode::default(),
             notification: NotificationSettings::default(),
             mode,
-            colors: *colors,
-            theme: Rc::new(family),
+            colors: ThemeColors::for_appearance(mode),
         }
+    }
+}
+
+/// The mono face has no alias of its own, so each backend is named here.
+fn system_mono() -> &'static str {
+    if cfg!(target_family = "wasm") {
+        ".ZedMono"
+    } else if cfg!(target_os = "macos") {
+        ".AppleSystemUIFontMonospaced"
+    } else if cfg!(target_os = "windows") {
+        "Cascadia Mono"
+    } else {
+        "DejaVu Sans Mono"
     }
 }

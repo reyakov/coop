@@ -11,5 +11,5 @@ pub(crate) fn clear_button(cx: &App) -> Button {
         .ghost()
         .xsmall()
         .tab_stop(false)
-        .text_color(cx.theme().icon_muted)
+        .text_color(cx.theme().text_faint)
 }

@@ -5,19 +5,19 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, Animation, AnimationExt, AnyElement, App, AppContext, ClickEvent, Context,
-    DismissEvent, ElementId, Entity, EventEmitter, InteractiveElement as _, IntoElement,
-    ParentElement as _, Render, SharedString, StatefulInteractiveElement, StyleRefinement, Styled,
-    Subscription, Window, div, px, relative,
+    Anchor, AnimationExt, AnyElement, App, AppContext, ClickEvent, Context, DismissEvent,
+    ElementId, Entity, EventEmitter, InteractiveElement as _, IntoElement, ParentElement as _,
+    Render, SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription,
+    Window, div, px, relative,
 };
 use gpui_base::{
     Toast as BaseToast, ToastManager, ToastMotion, ToastOptions, ToastStack, ToastStackState,
     ToastTransitionStatus,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 
-use crate::animation::cubic_bezier;
 use crate::button::{Button, ButtonVariants as _};
+use crate::motion::NOTIFICATION_IN;
 use crate::{Icon, IconName, Sizable as _, Size, StyledExt, h_flex, v_flex};
 
 /// How often the notification lifecycle clock is sampled.
@@ -40,20 +40,13 @@ pub enum NotificationKind {
 
 impl NotificationKind {
     fn icon(&self, cx: &App) -> Icon {
-        match self {
-            Self::Info => Icon::new(IconName::Info)
-                .with_size(Size::Medium)
-                .text_color(cx.theme().icon),
-            Self::Success => Icon::new(IconName::CheckCircle)
-                .with_size(Size::Medium)
-                .text_color(cx.theme().icon_accent),
-            Self::Warning => Icon::new(IconName::Warning)
-                .with_size(Size::Medium)
-                .text_color(cx.theme().text_warning),
-            Self::Error => Icon::new(IconName::CloseCircle)
-                .with_size(Size::Medium)
-                .text_color(cx.theme().danger_foreground),
-        }
+        let (name, color) = match self {
+            Self::Info => (IconName::Info, cx.theme().text_muted),
+            Self::Success => (IconName::CheckCircle, cx.theme().success),
+            Self::Warning => (IconName::Warning, cx.theme().warning),
+            Self::Error => (IconName::CloseCircle, gpui::white()),
+        };
+        Icon::new(name).with_size(Size::Medium).text_color(color)
     }
 }
 
@@ -78,10 +71,7 @@ impl From<(TypeId, ElementId)> for NotificationId {
 #[allow(clippy::type_complexity)]
 /// A notification element.
 pub struct Notification {
-    /// The id is used make the notification unique.
-    /// Then you push a notification with the same id, the previous notification will be replaced.
-    ///
-    /// None means the notification will be added to the end of the list.
+    /// Pushing a notification with the same id replaces the previous one.
     id: NotificationId,
     style: StyleRefinement,
     kind: Option<NotificationKind>,
@@ -128,9 +118,7 @@ impl From<(NotificationKind, SharedString)> for Notification {
 struct DefaultIdType;
 
 impl Notification {
-    /// Create a new notification.
-    ///
-    /// The default id is a random UUID.
+    /// Creates a notification with a random UUID id.
     pub fn new() -> Self {
         let id: SharedString = uuid::Uuid::new_v4().to_string().into();
         let id = (TypeId::of::<DefaultIdType>(), id.into());
@@ -177,12 +165,7 @@ impl Notification {
             .with_kind(NotificationKind::Error)
     }
 
-    /// Set the type for unique identification of the notification.
-    ///
-    /// ```rs
-    /// struct MyNotificationKind;
-    /// let notification = Notification::new("Hello").id::<MyNotificationKind>();
-    /// ```
+    /// Sets the type used to uniquely identify the notification.
     pub fn id<T: Sized + 'static>(mut self) -> Self {
         self.id = TypeId::of::<T>().into();
         self
@@ -194,15 +177,13 @@ impl Notification {
         self
     }
 
-    /// Set the title of the notification, default is None.
-    ///
-    /// If title is None, the notification will not have a title.
+    /// Sets the title of the notification, default is None.
     pub fn title(mut self, title: impl Into<SharedString>) -> Self {
         self.title = Some(title.into());
         self
     }
 
-    /// Set the type of the notification, default is NotificationType::Info.
+    /// Sets the kind of the notification, default is `NotificationKind::Info`.
     pub fn with_kind(mut self, kind: NotificationKind) -> Self {
         self.kind = Some(kind);
         self
@@ -214,9 +195,7 @@ impl Notification {
         self
     }
 
-    /// Set the action button of the notification.
-    ///
-    /// When an action is set, the notification will not autohide.
+    /// Sets an action button; the notification will not autohide when set.
     pub fn action<F>(mut self, action: F) -> Self
     where
         F: Fn(&mut Self, &mut Window, &mut Context<Self>) -> Button + 'static,
@@ -226,8 +205,8 @@ impl Notification {
         self
     }
 
-    /// Dismiss the notification.
-    pub fn dismiss(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    /// Emits a request for the notification list to dismiss this notification.
+    pub(crate) fn dismiss(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         cx.emit(DismissRequest);
     }
 
@@ -300,12 +279,14 @@ impl Render for Notification {
         };
 
         let background = match self.kind {
-            Some(NotificationKind::Error) => cx.theme().danger_background,
-            _ => cx.theme().surface_background,
+            Some(NotificationKind::Error) => cx.theme().danger_strong,
+            _ => cx.theme().surface_overlay,
         };
 
         let text_color = match self.kind {
-            Some(NotificationKind::Error) => cx.theme().danger_foreground,
+            // White on the danger plate in both appearances, per bezel's
+            // destructive pairing.
+            Some(NotificationKind::Error) => gpui::white(),
             _ => cx.theme().text,
         };
 
@@ -326,10 +307,12 @@ impl Render for Notification {
             .border_color(cx.theme().border)
             .bg(background)
             .text_color(text_color)
-            .rounded(cx.theme().radius_lg)
-            .when(cx.theme().shadow, |this| this.shadow_md())
+            .rounded(px(theme::surface_radius()))
+            .when(cx.theme().shadow, |this| {
+                this.shadow(theme::surface_shadows())
+            })
             .p_2()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .justify_start()
             .items_start()
             .when(only_message, |this| this.items_center())
@@ -343,12 +326,12 @@ impl Render for Notification {
                     .gap_1()
                     .overflow_hidden()
                     .when_some(self.title.clone(), |this, title| {
-                        this.child(h_flex().h_5().text_sm().font_semibold().child(title))
+                        this.child(h_flex().h_5().text_style(TextStyle::Headline).child(title))
                     })
                     .when_some(self.message.clone(), |this, message| {
                         this.child(
                             div()
-                                .text_sm()
+                                .text_style(TextStyle::Callout)
                                 .when(has_title, |this| this.text_color(cx.theme().text_muted))
                                 .line_height(relative(1.3))
                                 .child(message),
@@ -356,7 +339,7 @@ impl Render for Notification {
                     })
                     .when_some(content, |this, content| this.child(content))
                     .when_some(action, |this, action| {
-                        this.gap_2().child(
+                        this.gap(px(theme::SPACE)).child(
                             h_flex()
                                 .mt_2()
                                 .w_full()
@@ -396,15 +379,11 @@ impl Render for Notification {
             }))
             .with_animation(
                 ElementId::NamedInteger("slide-down".into(), closing as u64),
-                Animation::new(Duration::from_secs_f64(0.25))
-                    .with_easing(cubic_bezier(0.4, 0., 0.2, 1.)),
+                NOTIFICATION_IN.animation(),
                 move |this, delta| {
                     if closing {
                         let opacity = 1. - delta;
-                        let that = this
-                            .shadow_none()
-                            .opacity(opacity)
-                            .when(opacity < 0.85, |this| this.shadow_none());
+                        let that = this.shadow_none().opacity(opacity);
                         match placement {
                             Anchor::TopRight | Anchor::BottomRight => {
                                 let x_offset = px(0.) + delta * px(45.);
@@ -446,8 +425,7 @@ impl Render for Notification {
 
 /// A list of notifications.
 pub(crate) struct NotificationList {
-    /// Notifications that will be auto hidden.
-    pub(crate) notifications: ToastManager<NotificationId, Entity<Notification>>,
+    notifications: ToastManager<NotificationId, Entity<Notification>>,
 
     /// Measured geometry and interaction state of the visible stack.
     stack_state: ToastStackState,
@@ -455,12 +433,11 @@ pub(crate) struct NotificationList {
     /// Whether the lifecycle clock is running. The loop clears it as it exits.
     is_advancing: bool,
 
-    /// Subscriptions
     _subscriptions: HashMap<NotificationId, Subscription>,
 }
 
 impl NotificationList {
-    pub fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(_window: &mut Window, _cx: &mut Context<Self>) -> Self {
         Self {
             notifications: ToastManager::new(ToastMotion::default()),
             stack_state: ToastStackState::default(),
@@ -469,10 +446,7 @@ impl NotificationList {
         }
     }
 
-    /// Tick the toast lifecycle until the last notification is unmounted.
-    ///
-    /// The stack expansion is sampled here because it reaches the list through
-    /// no event, and an idle window should arm no timer.
+    /// Ticks the toast lifecycle, including stack expansion which arrives through no event.
     fn start_advancing(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_advancing {
             return;
@@ -520,7 +494,7 @@ impl NotificationList {
         }
     }
 
-    pub fn push(
+    pub(crate) fn push(
         &mut self,
         notification: impl Into<Notification>,
         window: &mut Window,
@@ -572,18 +546,6 @@ impl NotificationList {
             && let Some(note) = self.notifications.get(&id)
         {
             note.update(cx, |note, cx| note.begin_close(cx));
-        }
-        cx.notify();
-    }
-
-    pub fn clear(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        for id in self
-            .notifications
-            .dismiss_all(cx.background_executor().now())
-        {
-            if let Some(note) = self.notifications.get(&id) {
-                note.update(cx, |note, cx| note.begin_close(cx));
-            }
         }
         cx.notify();
     }

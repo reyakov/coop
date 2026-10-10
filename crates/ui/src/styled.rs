@@ -1,7 +1,6 @@
 use gpui::{App, Div, Pixels, Refineable, StyleRefinement, Styled, div, px};
 pub use gpui_base::component_traits::{Disableable, Selectable};
-use serde::{Deserialize, Serialize};
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _, surface_radius, surface_shadows};
 
 /// Returns a `Div` as horizontal flex layout.
 pub fn h_flex() -> Div {
@@ -15,7 +14,7 @@ pub fn v_flex() -> Div {
 
 /// Returns a `Div` as divider.
 pub fn divider(cx: &App) -> Div {
-    div().my_1().w_full().h_px().bg(cx.theme().border_variant)
+    div().my_1().w_full().h_px().bg(cx.theme().border_faint)
 }
 
 macro_rules! font_weight {
@@ -54,18 +53,20 @@ pub trait StyledExt: Styled + Sized {
     /// Set as Popover style
     #[inline]
     fn popover_style(self, cx: &mut App) -> Self {
-        self.bg(cx.theme().background)
+        let shadows = cx.theme().shadow.then(surface_shadows).unwrap_or_default();
+
+        self.bg(cx.theme().surface_overlay)
             .border_1()
             .border_color(cx.theme().border)
-            .shadow_md()
-            .rounded(cx.theme().radius_lg)
+            .shadow(shadows)
+            .rounded(px(surface_radius()))
     }
 }
 
 impl<E: Styled> StyledExt for E {}
 
 /// A size for elements.
-#[derive(Clone, Default, Copy, PartialEq, Eq, Debug, Deserialize, Serialize)]
+#[derive(Clone, Default, Copy, PartialEq, Eq, Debug)]
 pub enum Size {
     Size(Pixels),
     XSmall,
@@ -83,10 +84,7 @@ impl From<Pixels> for Size {
 
 /// A trait for setting the size of an element.
 pub trait Sizable: Sized {
-    /// Set the ui::Size of this element.
-    ///
-    /// Also can receive a `ButtonSize` to convert to `IconSize`,
-    /// Or a `Pixels` to set a custom size: `px(30.)`
+    /// Set the element's [`Size`], or a custom pixel size (`px(30.)`).
     fn with_size(self, size: impl Into<Size>) -> Self;
 
     /// Set to Size::XSmall
@@ -130,18 +128,18 @@ impl<T: Styled> StyleSized<T> for T {
         match size {
             Size::XSmall => self.py_0p5(),
             Size::Medium => self.py_2(),
-            Size::Large => self.py_5(),
+            Size::Large => self.py_1p5(),
             _ => self.py_1(),
         }
     }
 
     fn input_h(self, size: Size) -> Self {
         match size {
-            Size::XSmall => self.h_6().text_xs(),
-            Size::Small => self.h_8().text_sm(),
-            Size::Medium => self.h_9().text_base(),
-            Size::Large => self.h_12().text_lg(),
-            Size::Size(size) => self.h(px(24.)).text_size(size),
+            Size::XSmall => self.h_6().text_style(TextStyle::Caption),
+            Size::Small => self.h_7().text_style(TextStyle::Callout),
+            Size::Medium => self.h_8().text_style(TextStyle::Body),
+            Size::Large => self.h_10().text_style(TextStyle::Title3),
+            Size::Size(size) => self.h(size).text_size(size * 0.5),
         }
     }
 }

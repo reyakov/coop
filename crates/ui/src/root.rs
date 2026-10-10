@@ -4,14 +4,14 @@ use std::rc::Rc;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyView, App, AppContext, Bounds, Context, CursorStyle, Decorations, ElementId, Entity,
-    FocusHandle, HitboxBehavior, Hsla, InteractiveElement, IntoElement, MouseButton,
-    ParentElement as _, Pixels, Point, Render, ResizeEdge, Size, Styled, Tiling, WeakFocusHandle,
-    Window, canvas, div, point, px, size,
+    FocusHandle, HitboxBehavior, InteractiveElement, IntoElement, MouseButton, ParentElement as _,
+    Pixels, Point, Render, ResizeEdge, Size, Styled, Tiling, WeakFocusHandle, Window, canvas, div,
+    point, px, size,
 };
 use gpui_base::TextSelectionLayer;
 use theme::{
     ActiveTheme, CLIENT_SIDE_DECORATION_BORDER, CLIENT_SIDE_DECORATION_ROUNDING,
-    CLIENT_SIDE_DECORATION_SHADOW,
+    CLIENT_SIDE_DECORATION_SHADOW, base_text_size, surface_shadows,
 };
 
 use crate::dialog::Dialog;
@@ -230,19 +230,12 @@ impl Root {
         });
         cx.notify();
     }
-
-    /// Clear all notifications from the notification layer.
-    pub fn clear_notifications(&mut self, window: &mut Window, cx: &mut Context<'_, Root>) {
-        self.notification
-            .update(cx, |view, cx| view.clear(window, cx));
-        cx.notify();
-    }
 }
 
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let rem_size = cx.theme().font_size;
-        let font_family = cx.theme().font_family.clone();
+        let rem_size = px(base_text_size());
+        let font_family = cx.theme().font_sans.clone();
         let decorations = window.window_decorations();
 
         // Set the base font size
@@ -361,19 +354,8 @@ impl Render for Root {
                             .when(!tiling.right, |div| {
                                 div.border_r(CLIENT_SIDE_DECORATION_BORDER)
                             })
-                            .when(!tiling.is_tiled(), |div| {
-                                div.shadow(vec![gpui::BoxShadow {
-                                    color: Hsla {
-                                        h: 0.,
-                                        s: 0.,
-                                        l: 0.,
-                                        a: 0.4,
-                                    },
-                                    blur_radius: CLIENT_SIDE_DECORATION_SHADOW / 2.,
-                                    spread_radius: px(0.),
-                                    offset: point(px(0.0), px(0.0)),
-                                    inset: false,
-                                }])
+                            .when(!tiling.is_tiled() && cx.theme().shadow, |div| {
+                                div.shadow(surface_shadows())
                             }),
                     })
                     .on_mouse_move(|_e, _, cx| {
@@ -381,7 +363,7 @@ impl Render for Root {
                     })
                     .size_full()
                     .font_family(font_family)
-                    .bg(cx.theme().surface_background)
+                    .bg(cx.theme().bg)
                     .text_color(cx.theme().text)
                     .child(TextSelectionLayer)
                     .child(self.view.clone()),

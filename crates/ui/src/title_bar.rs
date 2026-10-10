@@ -1,31 +1,23 @@
-use std::rc::Rc;
-
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, ClickEvent, Context, Div, Hsla, InteractiveElement as _, IntoElement, MouseButton,
-    ParentElement as _, Pixels, Render, RenderOnce, Stateful, StatefulInteractiveElement as _,
-    Styled, Window, WindowControlArea, div, px,
+    App, Div, Hsla, InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Pixels,
+    RenderOnce, Stateful, StatefulInteractiveElement as _, Styled, Window, WindowControlArea, div,
+    px,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, plate_active};
 
 use crate::{Icon, IconName, Sizable as _, h_flex};
 
-pub const TITLE_BAR_HEIGHT: Pixels = px(34.);
+const TITLE_BAR_HEIGHT: Pixels = px(34.);
 pub const TRAFFIC_LIGHT_PADDING: f32 = 80.;
 
-// The Windows control buttons have a fixed width of 35px.
-//
-// We don't need implementation the click event for the control buttons.
-// If user clicked in the bounds, the window event will be triggered.
+// Windows control buttons rely on the native window event, so no click handlers are needed.
 #[derive(IntoElement, Clone)]
-#[allow(clippy::type_complexity)]
 enum ControlIcon {
     Minimize,
     Restore,
     Maximize,
-    Close {
-        on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
-    },
+    Close,
 }
 
 impl ControlIcon {
@@ -41,9 +33,8 @@ impl ControlIcon {
         Self::Maximize
     }
 
-    #[allow(clippy::type_complexity)]
-    fn close(on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>) -> Self {
-        Self::Close { on_close_window }
+    fn close() -> Self {
+        Self::Close
     }
 
     fn id(&self) -> &'static str {
@@ -51,7 +42,7 @@ impl ControlIcon {
             Self::Minimize => "minimize",
             Self::Restore => "restore",
             Self::Maximize => "maximize",
-            Self::Close { .. } => "close",
+            Self::Close => "close",
         }
     }
 
@@ -60,7 +51,7 @@ impl ControlIcon {
             Self::Minimize => IconName::WindowMinimize,
             Self::Restore => IconName::WindowRestore,
             Self::Maximize => IconName::WindowMaximize,
-            Self::Close { .. } => IconName::WindowClose,
+            Self::Close => IconName::WindowClose,
         }
     }
 
@@ -68,18 +59,20 @@ impl ControlIcon {
         match self {
             Self::Minimize => WindowControlArea::Min,
             Self::Restore | Self::Maximize => WindowControlArea::Max,
-            Self::Close { .. } => WindowControlArea::Close,
+            Self::Close => WindowControlArea::Close,
         }
     }
 
     fn is_close(&self) -> bool {
-        matches!(self, Self::Close { .. })
+        matches!(self, Self::Close)
     }
 
     #[inline]
     fn hover_fg(&self, cx: &App) -> Hsla {
         if self.is_close() {
-            cx.theme().danger_foreground
+            // White on the danger plate in both appearances, per bezel's
+            // destructive pairing.
+            gpui::white()
         } else {
             cx.theme().text
         }
@@ -88,18 +81,18 @@ impl ControlIcon {
     #[inline]
     fn hover_bg(&self, cx: &App) -> Hsla {
         if self.is_close() {
-            cx.theme().danger_background
+            cx.theme().danger_strong
         } else {
-            cx.theme().ghost_element_hover
+            cx.theme().element_hover
         }
     }
 
     #[inline]
     fn active_bg(&self, cx: &mut App) -> Hsla {
         if self.is_close() {
-            cx.theme().danger_active
+            plate_active(cx.theme().danger_strong)
         } else {
-            cx.theme().ghost_element_active
+            cx.theme().element_active
         }
     }
 }
@@ -113,11 +106,6 @@ impl RenderOnce for ControlIcon {
         let hover_fg = self.hover_fg(cx);
         let hover_bg = self.hover_bg(cx);
         let active_bg = self.active_bg(cx);
-
-        let on_close_window = match &self {
-            ControlIcon::Close { on_close_window } => on_close_window.clone(),
-            _ => None,
-        };
 
         div()
             .id(self.id())
@@ -144,13 +132,7 @@ impl RenderOnce for ControlIcon {
                     match icon {
                         Self::Minimize => window.minimize_window(),
                         Self::Restore | Self::Maximize => window.zoom_window(),
-                        Self::Close { .. } => {
-                            if let Some(f) = on_close_window.clone() {
-                                f(&ClickEvent::default(), window, cx);
-                            } else {
-                                window.remove_window();
-                            }
-                        }
+                        Self::Close => window.remove_window(),
                     }
                 })
             })
@@ -159,15 +141,10 @@ impl RenderOnce for ControlIcon {
 }
 
 #[derive(IntoElement)]
-#[allow(clippy::type_complexity)]
-pub(crate) struct WindowControls {
-    on_close_window: Option<Rc<Box<dyn Fn(&ClickEvent, &mut Window, &mut App)>>>,
-}
+pub(crate) struct WindowControls;
 
 pub(crate) fn window_controls() -> WindowControls {
-    WindowControls {
-        on_close_window: None,
-    }
+    WindowControls
 }
 
 pub fn title_bar_drag_handlers(
@@ -232,16 +209,10 @@ impl RenderOnce for WindowControls {
             } else {
                 ControlIcon::maximize()
             })
-            .child(ControlIcon::close(self.on_close_window))
+            .child(ControlIcon::close())
     }
 }
 
 struct TitleBarState {
     should_move: bool,
-}
-
-impl Render for TitleBarState {
-    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        div()
-    }
 }

@@ -1,7 +1,8 @@
 use std::ops::Range;
 
 use gpui::{
-    AnyElement, App, ElementId, IntoElement, SharedString, StyleRefinement, Styled as _, Window,
+    AnyElement, App, ElementId, HighlightStyle, IntoElement, SharedString, StyleRefinement,
+    Styled as _, Window,
 };
 use gpui_base::{TextView, TextViewStyle};
 use theme::ActiveTheme as _;
@@ -62,15 +63,28 @@ impl RenderedText {
     /// Render the message as a GPUI Kit text view.
     pub fn element(&self, id: ElementId, _window: &Window, cx: &App) -> AnyElement {
         let theme = cx.theme();
-        let code_block = StyleRefinement::default().font_family(code_font_family());
+        let code_block = StyleRefinement::default().font_family(theme.font_mono.clone());
+        let muted_heading = theme.text_muted;
 
         TextView::markdown(id, self.text.clone())
             .style(
                 TextViewStyle::default()
                     .with_foreground(theme.text)
                     .with_muted_foreground(theme.text_muted)
-                    .with_link(theme.text_accent)
-                    .with_code_background(theme.elevated_surface_background)
+                    // Deeply nested headings read as secondary text.
+                    .with_heading(move |level| {
+                        if level >= 4 {
+                            StyleRefinement::default().text_color(muted_heading)
+                        } else {
+                            StyleRefinement::default()
+                        }
+                    })
+                    .with_link(theme.accent)
+                    .with_code_background(theme.code_wash)
+                    .with_inline_code(HighlightStyle {
+                        color: Some(theme.code_text),
+                        ..Default::default()
+                    })
                     .with_border(theme.border)
                     .with_code_block(code_block)
                     .with_dark(theme.is_dark()),
@@ -100,14 +114,4 @@ fn escape_link_text(text: &str) -> String {
 fn is_web_url(url: &str) -> bool {
     let url = url.to_ascii_lowercase();
     url.starts_with("http://") || url.starts_with("https://")
-}
-
-fn code_font_family() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "Menlo"
-    } else if cfg!(target_os = "windows") {
-        "Consolas"
-    } else {
-        "monospace"
-    }
 }

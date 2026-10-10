@@ -4,12 +4,10 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, ElementId, IntoElement, ParentElement as _, RenderOnce, SharedString, Styled as _, Window,
-    div, px, white,
+    div, px, transparent_black,
 };
 use gpui_base::{Spring, Switch as BaseSwitch, SwitchThumb, SwitchTrack, spring};
-use theme::{ActiveTheme, Side};
-
-use crate::{Disableable, Sizable, Size};
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 
 type OnClick = Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>;
 
@@ -17,12 +15,9 @@ type OnClick = Option<Rc<dyn Fn(&bool, &mut Window, &mut App)>>;
 pub struct Switch {
     id: ElementId,
     checked: bool,
-    disabled: bool,
     label: Option<SharedString>,
     description: Option<SharedString>,
-    label_side: Side,
     on_click: OnClick,
-    size: Size,
 }
 
 impl Switch {
@@ -32,12 +27,9 @@ impl Switch {
         Self {
             id: id.clone(),
             checked: false,
-            disabled: false,
             label: None,
             description: None,
             on_click: None,
-            label_side: Side::Left,
-            size: Size::Medium,
         }
     }
 
@@ -65,45 +57,27 @@ impl Switch {
     }
 }
 
-impl Sizable for Switch {
-    fn with_size(mut self, size: impl Into<Size>) -> Self {
-        self.size = size.into();
-        self
-    }
-}
-
-impl Disableable for Switch {
-    fn disabled(mut self, disabled: bool) -> Self {
-        self.disabled = disabled;
-        self
-    }
-}
-
 impl RenderOnce for Switch {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let checked = self.checked;
         let on_click = self.on_click.clone();
 
-        let (bg, toggle_bg) = match checked {
-            true => (cx.theme().element_background, white()),
-            false => (cx.theme().elevated_surface_background, white()),
+        let bg = if checked {
+            cx.theme().accent_strong
+        } else {
+            cx.theme().input_bg
+        };
+        let toggle_bg = cx.theme().on_solid;
+        // The border is structural (it insets the thumb); it only paints when off.
+        let track_border = if checked {
+            transparent_black()
+        } else {
+            cx.theme().border
         };
 
-        let (bg, toggle_bg) = match self.disabled {
-            true => (bg.opacity(0.3), toggle_bg.opacity(0.8)),
-            false => (bg, toggle_bg),
-        };
-
-        let (bg_width, bg_height) = match self.size {
-            Size::XSmall | Size::Small => (px(28.), px(16.)),
-            _ => (px(36.), px(20.)),
-        };
-
-        let bar_width = match self.size {
-            Size::XSmall | Size::Small => px(12.),
-            _ => px(16.),
-        };
-
+        let bg_width = px(36.);
+        let bg_height = px(20.);
+        let bar_width = px(16.);
         let inset = px(2.);
 
         let thumb_left = spring(
@@ -124,14 +98,13 @@ impl RenderOnce for Switch {
         div().child(
             BaseSwitch::new(self.id.clone())
                 .checked(checked)
-                .disabled(self.disabled)
                 .when_some(accessibility_label, |this, label| {
                     this.accessibility_label(label)
                 })
                 .when_some(on_click, |this, on_click| {
                     this.on_change(move |next, _event, window, cx| on_click(&next, window, cx))
                 })
-                .when(self.label_side.is_left(), |this| this.flex_row_reverse())
+                .flex_row_reverse()
                 .child(
                     div()
                         .w_full()
@@ -140,14 +113,16 @@ impl RenderOnce for Switch {
                         .items_center()
                         .gap_4()
                         .when_some(label, |this, label| {
-                            // Label
-                            this.child(div().text_sm().text_color(cx.theme().text).child(label))
+                            this.child(
+                                div()
+                                    .text_style(TextStyle::Callout)
+                                    .text_color(cx.theme().text)
+                                    .child(label),
+                            )
                         })
                         .child(
-                            // Switch Bar
                             SwitchTrack::new((self.id.clone(), "track"))
                                 .checked(checked)
-                                .disabled(self.disabled)
                                 .flex_shrink_0()
                                 .w(bg_width)
                                 .h(bg_height)
@@ -155,11 +130,10 @@ impl RenderOnce for Switch {
                                 .flex()
                                 .items_center()
                                 .border(inset)
-                                .border_color(cx.theme().border_transparent)
+                                .border_color(track_border)
                                 .bg(bg)
-                                .when(!self.disabled, |this| this.cursor_pointer())
+                                .cursor_pointer()
                                 .child(
-                                    // Switch Toggle
                                     SwitchThumb::new(checked)
                                         .rounded_full()
                                         .when(cx.theme().shadow, |this| this.shadow_sm())
@@ -173,7 +147,7 @@ impl RenderOnce for Switch {
                     this.child(
                         div()
                             .pr_3()
-                            .text_xs()
+                            .text_style(TextStyle::Caption)
                             .text_color(cx.theme().text_muted)
                             .child(description),
                     )

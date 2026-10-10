@@ -11,7 +11,7 @@ use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use settings::AppSettings;
 use state::NostrRegistry;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 use ui::avatar::Avatar;
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::nav::Nav;
@@ -131,7 +131,7 @@ impl Sidebar {
             .flex_1()
             .min_h_0()
             .w_full()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .child(
                 h_flex()
                     .px_2()
@@ -149,7 +149,7 @@ impl Sidebar {
                                     .min_w_0()
                                     .child(
                                         div()
-                                            .text_xs()
+                                            .text_style(TextStyle::Caption)
                                             .truncate()
                                             .line_height(relative(1.2))
                                             .font_semibold()
@@ -157,7 +157,7 @@ impl Sidebar {
                                     )
                                     .child(
                                         div()
-                                            .text_size(px(10.))
+                                            .text_style(TextStyle::Caption2)
                                             .text_color(cx.theme().text_muted)
                                             .child(total_members),
                                     ),
@@ -230,10 +230,10 @@ impl Sidebar {
 
         Nav::new(label)
             .label(label)
-            .suffix(Icon::new(icon).small().text_color(cx.theme().icon_muted))
-            .text_xs()
+            .suffix(Icon::new(icon).small().text_color(cx.theme().text_faint))
+            .text_style(TextStyle::Caption)
             .font_semibold()
-            .text_color(cx.theme().text_placeholder)
+            .text_color(cx.theme().text_faint)
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 match section {
                     GroupSection::Admins => this.admins_open = !this.admins_open,
@@ -262,7 +262,7 @@ impl Sidebar {
 
         Nav::new(public_key.to_hex())
             .label(person.name())
-            .text_sm()
+            .text_style(TextStyle::Callout)
             .font_medium()
             .clickable(true)
             .when(!hide_avatar, |this| {
@@ -277,8 +277,8 @@ impl Sidebar {
                 this.suffix(
                     div()
                         .truncate()
-                        .text_xs()
-                        .text_color(cx.theme().text_placeholder)
+                        .text_style(TextStyle::Caption)
+                        .text_color(cx.theme().text_faint)
                         .child(SharedString::from(roles.join(", "))),
                 )
             })

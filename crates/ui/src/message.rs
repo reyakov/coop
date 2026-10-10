@@ -5,7 +5,7 @@ use gpui::{
     div, px,
 };
 use smallvec::SmallVec;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 
 use crate::{InteractiveElementExt as _, StyledExt as _, h_flex, v_flex};
 
@@ -190,9 +190,9 @@ impl RenderOnce for MessageRow {
                             .when(show_author, |this| {
                                 this.child(
                                     h_flex()
-                                        .gap_2()
-                                        .text_sm()
-                                        .text_color(cx.theme().text_placeholder)
+                                        .gap(px(theme::SPACE))
+                                        .text_style(TextStyle::Callout)
+                                        .text_color(cx.theme().text_dim)
                                         .when_some(author, |this, author| {
                                             this.child(div().font_semibold().child(author))
                                         })
@@ -212,7 +212,7 @@ impl RenderOnce for MessageRow {
             .when_some(on_double_click, |this, listener| {
                 this.on_double_click(listener)
             })
-            .hover(|this| this.bg(cx.theme().surface_background))
+            .hover(|this| this.bg(cx.theme().element_hover))
             .into_any_element()
     }
 }
@@ -225,7 +225,6 @@ pub struct WelcomeMessage {
     icon: Option<AnyElement>,
     title: Option<SharedString>,
     message: Option<SharedString>,
-    children: SmallVec<[AnyElement; 2]>,
 }
 
 impl WelcomeMessage {
@@ -237,7 +236,6 @@ impl WelcomeMessage {
             icon: None,
             title: None,
             message: None,
-            children: SmallVec::new(),
         }
     }
 
@@ -261,13 +259,6 @@ impl WelcomeMessage {
         self.message = Some(message.into());
         self
     }
-
-    /// Append an element below the body text.
-    #[must_use]
-    pub fn child(mut self, child: impl IntoElement) -> Self {
-        self.children.push(child.into_any_element());
-        self
-    }
 }
 
 impl Styled for WelcomeMessage {
@@ -284,13 +275,12 @@ impl RenderOnce for WelcomeMessage {
             icon,
             title,
             message,
-            children,
         } = self;
 
         v_flex()
             .id(id)
             .w_full()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .p_3()
             .items_center()
             .justify_center()
@@ -305,8 +295,7 @@ impl RenderOnce for WelcomeMessage {
                     .when_some(title, |this, title| {
                         this.child(
                             div()
-                                .text_sm()
-                                .font_semibold()
+                                .text_style(TextStyle::Headline)
                                 .text_color(cx.theme().text)
                                 .child(title),
                         )
@@ -314,12 +303,11 @@ impl RenderOnce for WelcomeMessage {
                     .when_some(message, |this, message| {
                         this.child(
                             div()
-                                .text_xs()
-                                .text_color(cx.theme().text_placeholder)
+                                .text_style(TextStyle::Caption)
+                                .text_color(cx.theme().text_faint)
                                 .child(message),
                         )
                     }),
             )
-            .children(children)
     }
 }

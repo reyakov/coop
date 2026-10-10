@@ -33,7 +33,7 @@ impl Sidebar {
             .h(TABBAR_HEIGHT)
             .flex_shrink_0()
             .items_center()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .px_2()
             .when(cfg!(target_os = "macos"), |this| {
                 this.pl(px(TRAFFIC_LIGHT_PADDING))
@@ -57,7 +57,6 @@ impl Sidebar {
                         )
                         .menu_with_icon("Relays", IconName::Relay, Box::new(Command::ShowRelayList))
                         .separator()
-                        .menu_with_icon("Themes", IconName::Sun, Box::new(Command::ToggleTheme))
                         .menu_with_icon(
                             "Settings",
                             IconName::Settings,
@@ -121,7 +120,7 @@ impl Sidebar {
         let staged = updater.read(cx).staged();
 
         h_flex()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .when(!up_to_date, |this| {
                 this.child(
                     Button::new("update")

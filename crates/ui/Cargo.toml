@@ -10,8 +10,8 @@ theme = { path = "../theme" }
 gpui.workspace = true
 gpui-base.workspace = true
 instant.workspace = true
-serde.workspace = true
 smallvec.workspace = true
+log.workspace = true
 
 uuid = "1.10"
 

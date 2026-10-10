@@ -6,7 +6,7 @@ use gpui::{
 };
 use nostr_sdk::prelude::*;
 use state::NostrRegistry;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{DockPlacement, PanelHandle};
 use ui::notification::Notification;
@@ -192,7 +192,7 @@ impl Sidebar {
             .px_4()
             .border_t_1()
             .border_color(cx.theme().border)
-            .bg(cx.theme().background)
+            .bg(cx.theme().bg)
             .child(
                 Button::new("create-chat")
                     .label(if self.selected_contacts.len() > 1 {
@@ -208,7 +208,7 @@ impl Sidebar {
             .child(
                 h_flex()
                     .gap_1()
-                    .text_xs()
+                    .text_style(TextStyle::Caption)
                     .text_color(cx.theme().text_muted)
                     .child("Selected")
                     .child(

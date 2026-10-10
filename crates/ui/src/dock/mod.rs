@@ -17,7 +17,7 @@ use gpui_base::dock::{
     PaneRef, PanelId, TabGroupContext, TabGroupRenderer,
 };
 use gpui_base::{HandleEdge, Placement, ResizeHandleContext};
-use theme::{ActiveTheme, TABBAR_HEIGHT};
+use theme::{ActiveTheme, TABBAR_HEIGHT, TextStyle, Typeset as _, button_radius, panel_radius};
 
 use crate::button::{Button, ButtonVariants as _};
 use crate::resizable::{resize_handle, resize_handle_appearance};
@@ -83,9 +83,11 @@ pub fn add_panel_to(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let _ = dock.update(cx, |area, cx| {
+    if let Err(error) = dock.update(cx, |area, cx| {
         add_panel(area, panel, placement, window, cx);
-    });
+    }) {
+        log::warn!("Failed to add panel to dock: {error}");
+    }
 }
 
 /// The panel in any region of `area` whose logical id is `key`.
@@ -346,12 +348,12 @@ impl Render for DragPreview {
             .justify_center()
             .overflow_hidden()
             .whitespace_nowrap()
-            .rounded(cx.theme().radius)
-            .text_sm()
+            .rounded(px(button_radius()))
+            .text_style(TextStyle::Callout)
             .text_color(cx.theme().text)
             .text_ellipsis()
             .when(cx.theme().shadow, |this| this.shadow_xs())
-            .bg(cx.theme().background)
+            .bg(cx.theme().bg)
             .child(panel_title(&self.panel, cx))
     }
 }
@@ -446,7 +448,7 @@ impl TabGroupSkin {
             .flex_grow_1()
             .min_w_16()
             .when(droppable, |this| {
-                this.drag_over::<DragPanel>(|this, _, _, cx| this.bg(cx.theme().surface_background))
+                this.drag_over::<DragPanel>(|this, _, _, cx| this.bg(cx.theme().drop_target))
                     .on_drop({
                         let group = TabGroupContext::clone(group);
                         move |drag: &DragPanel, window, cx| {
@@ -465,7 +467,7 @@ impl TabGroupSkin {
         let bar = TabBar::new("tab-bar")
             .track_scroll(&self.scroll_handle)
             .h(TABBAR_HEIGHT)
-            .bg(cx.theme().panel_background)
+            .bg(cx.theme().bg)
             .when(needs_traffic_light_padding, |this| {
                 this.pl(px(TRAFFIC_LIGHT_PADDING))
             })
@@ -537,7 +539,7 @@ impl TabGroupSkin {
                                 this.rounded_l_none()
                                     .border_l_2()
                                     .border_r_0()
-                                    .border_color(cx.theme().border)
+                                    .border_color(cx.theme().drop_line)
                             })
                             .on_drop({
                                 let group = TabGroupContext::clone(group);
@@ -567,7 +569,7 @@ impl TabGroupSkin {
             h_flex()
                 .h(TABBAR_HEIGHT)
                 .w_full()
-                .bg(cx.theme().panel_background)
+                .bg(cx.theme().bg)
                 .child(bar.flex_1())
                 .child(window_controls())
                 .into_any_element()
@@ -670,8 +672,7 @@ impl TabGroupRenderer for TabGroupSkin {
         window: &mut Window,
         cx: &mut App,
     ) -> AnyElement {
-        // The left dock's only panel draws bare, so its content can own the
-        // window's top-left corner instead of a tab bar doing so.
+        // The plain left group draws bare so its content can own the window's top-left corner.
         if self.is_plain_left_group(group, cx) {
             return Empty.into_any_element();
         }
@@ -717,7 +718,7 @@ impl TabGroupRenderer for TabGroupSkin {
             .child(
                 div()
                     .size_full()
-                    .bg(cx.theme().panel_background)
+                    .bg(cx.theme().bg)
                     .overflow_hidden()
                     .child(panel.cached(StyleRefinement::default().v_flex().size_full())),
             )
@@ -758,10 +759,10 @@ impl TabGroupRenderer for TabGroupSkin {
                 .top(top)
                 .w(width)
                 .h(height)
-                .rounded(cx.theme().radius_lg)
+                .rounded(px(panel_radius()))
                 .border_1()
-                .border_color(cx.theme().element_disabled)
-                .bg(cx.theme().drop_target_background)
+                .border_color(cx.theme().drop_line)
+                .bg(cx.theme().drop_target)
                 .into_any_element(),
         )
     }

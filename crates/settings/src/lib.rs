@@ -1,12 +1,10 @@
-use std::rc::Rc;
-
 use anyhow::{Error, anyhow};
 use common::config_dir;
-use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task, Window};
+use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use smallvec::{SmallVec, smallvec};
-use theme::{Theme, ThemeFamily, ThemeMode};
+use theme::{AppExt as _, AppearanceMode};
 
 pub fn init(cx: &mut App) {
     AppSettings::set_global(cx.new(AppSettings::new), cx)
@@ -53,7 +51,7 @@ macro_rules! setting_getters {
 }
 
 setting_accessors! {
-    pub theme_mode: ThemeMode,
+    pub appearance_mode: AppearanceMode,
     pub hide_avatar: bool,
     pub screening: bool,
     pub nip4e: bool,
@@ -119,11 +117,11 @@ impl RoomConfig {
 /// Settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    /// Theme
-    pub theme: Option<String>,
-
-    /// Theme mode
-    pub theme_mode: ThemeMode,
+    /// Which appearance to paint: follow the OS, or pin light or dark.
+    /// `alias` reads the pre-bezel `theme_mode` key so old config files keep
+    /// their pinned choice.
+    #[serde(default, alias = "theme_mode")]
+    pub appearance_mode: AppearanceMode,
 
     /// Hide user avatars
     pub hide_avatar: bool,
@@ -152,8 +150,7 @@ pub struct Settings {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            theme: None,
-            theme_mode: ThemeMode::default(),
+            appearance_mode: AppearanceMode::default(),
             hide_avatar: false,
             screening: true,
             nip4e: false,
@@ -243,7 +240,7 @@ impl AppSettings {
             // Update settings
             this.update(cx, |this, cx| {
                 this.set_settings(settings, cx);
-                this.apply_theme(None, cx);
+                this.apply_theme(cx);
                 cx.refresh_windows();
             })
             .ok();
@@ -264,44 +261,10 @@ impl AppSettings {
         }
     }
 
-    /// Set theme
-    pub fn set_theme<T>(&mut self, theme: T, window: &mut Window, cx: &mut Context<Self>)
-    where
-        T: Into<String>,
-    {
-        // Update settings
-        self.inner.update(cx, |this, cx| {
-            this.theme = Some(theme.into());
-            cx.notify();
-        });
-
-        // Apply the new theme
-        self.apply_theme(Some(window), cx);
-    }
-
-    /// Reset theme
-    pub fn reset_theme(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.inner.update(cx, |this, cx| {
-            this.theme = None;
-            cx.notify();
-        });
-        self.apply_theme(Some(window), cx);
-    }
-
-    /// Apply theme
-    pub fn apply_theme(&mut self, mut window: Option<&mut Window>, cx: &mut Context<Self>) {
-        if let Some(name) = self.inner.read(cx).theme.as_ref() {
-            let mode = self.inner.read(cx).theme_mode;
-
-            if let Ok(new_theme) = ThemeFamily::from_assets(name) {
-                Theme::apply_theme(Rc::new(new_theme), window.as_deref_mut(), cx);
-                Theme::change(mode, window, cx);
-            } else {
-                log::info!("Failed to load theme: {name}");
-            }
-        } else {
-            Theme::apply_theme(Rc::new(ThemeFamily::default()), window, cx);
-        }
+    /// Apply the persisted appearance mode to the app
+    pub fn apply_theme(&mut self, cx: &mut Context<Self>) {
+        let mode = self.inner.read(cx).appearance_mode;
+        cx.set_appearance_mode(mode);
     }
 
     /// Check if decoupling encryption key is enabled
@@ -345,5 +308,32 @@ impl AppSettings {
             }
             cx.notify();
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn json_with(partial: &str) -> Result<Settings, serde_json::Error> {
+        // Every field the persisted format has always required; `partial`
+        // contributes the fields under test.
+        serde_json::from_str(&format!(
+            r#"{{ {} "hide_avatar": false, "screening": true, "nip4e": false,
+                 "trusted_relays": [], "file_server": "https://nostr.download/" }}"#,
+            partial
+        ))
+    }
+
+    #[test]
+    fn old_theme_mode_key_keeps_its_pinned_choice() {
+        let settings = json_with(r#""theme_mode": "Dark", "#).unwrap();
+        assert_eq!(settings.appearance_mode, AppearanceMode::Dark);
+    }
+
+    #[test]
+    fn missing_appearance_mode_falls_back_to_dark() {
+        let settings = json_with("").unwrap();
+        assert_eq!(settings.appearance_mode, AppearanceMode::Dark);
     }
 }

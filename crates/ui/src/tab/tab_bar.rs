@@ -52,25 +52,25 @@ impl TabBar {
     }
 
     /// Track the scroll of the TabBar.
-    pub fn track_scroll(mut self, scroll_handle: &ScrollHandle) -> Self {
+    pub(crate) fn track_scroll(mut self, scroll_handle: &ScrollHandle) -> Self {
         self.scroll_handle = Some(scroll_handle.clone());
         self
     }
 
     /// Set the prefix element of the TabBar
-    pub fn prefix(mut self, prefix: impl IntoElement) -> Self {
+    pub(crate) fn prefix(mut self, prefix: impl IntoElement) -> Self {
         self.prefix = Some(prefix.into_any_element());
         self
     }
 
     /// Set the suffix element of the TabBar
-    pub fn suffix(mut self, suffix: impl IntoElement) -> Self {
+    pub(crate) fn suffix(mut self, suffix: impl IntoElement) -> Self {
         self.suffix = Some(suffix.into_any_element());
         self
     }
 
     /// Add children of the TabBar.
-    pub fn children(mut self, children: impl IntoIterator<Item = impl Into<Tab>>) -> Self {
+    pub(crate) fn children(mut self, children: impl IntoIterator<Item = impl Into<Tab>>) -> Self {
         self.children.extend(children.into_iter().map(Into::into));
         self
     }
@@ -88,14 +88,12 @@ impl TabBar {
     }
 
     /// Set the last empty space element of the TabBar.
-    pub fn last_empty_space(mut self, last_empty_space: impl IntoElement) -> Self {
+    pub(crate) fn last_empty_space(mut self, last_empty_space: impl IntoElement) -> Self {
         self.last_empty_space = last_empty_space.into_any_element();
         self
     }
 
-    /// Set the on_click callback of the TabBar, the first parameter is the index of the clicked tab.
-    ///
-    /// When this is set, the children's on_click will be ignored.
+    /// Set the on_click callback of the TabBar; when set, the children's on_click is ignored.
     pub fn on_click<F>(mut self, on_click: F) -> Self
     where
         F: Fn(&usize, &mut Window, &mut App) + 'static,
@@ -124,9 +122,9 @@ impl RenderOnce for TabBar {
             .min_w_0()
             .refine_style(&self.style)
             .when(segmented, |this| {
-                this.bg(cx.theme().tab_background)
+                this.bg(cx.theme().surface)
                     .p_0p5()
-                    .rounded(cx.theme().radius)
+                    .rounded(px(theme::button_radius()))
             })
             .when_some(self.prefix, |this, prefix| this.child(prefix))
             .child(

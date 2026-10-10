@@ -7,7 +7,7 @@ use gpui::{
 use instant::Duration;
 use nostr_connect::prelude::*;
 use state::{CoopAuthUrlHandler, NostrRegistry, USER_KEYRING};
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _, surface_radius};
 use ui::button::{Button, ButtonVariants};
 use ui::input::{Input, InputEvent, InputState};
 use ui::{Disableable, StyledExt, WindowExtension, v_flex};
@@ -223,8 +223,8 @@ impl Render for ImportIdentity {
 
         v_flex()
             .size_full()
-            .gap_2()
-            .text_sm()
+            .gap(px(theme::SPACE))
+            .text_style(TextStyle::Callout)
             .child(
                 v_flex()
                     .gap_1()
@@ -248,10 +248,10 @@ impl Render for ImportIdentity {
                         this.child(
                             div()
                                 .p_2()
-                                .rounded(cx.theme().radius)
-                                .bg(cx.theme().warning_background)
-                                .text_xs()
-                                .text_color(cx.theme().warning_foreground)
+                                .rounded(px(surface_radius()))
+                                .bg(cx.theme().warning_muted)
+                                .text_style(TextStyle::Caption)
+                                .text_color(cx.theme().warning)
                                 .line_height(relative(1.2))
                                 .child(div().child(BUNKER_WARN)),
                         )
@@ -260,10 +260,10 @@ impl Render for ImportIdentity {
                         this.child(
                             div()
                                 .p_2()
-                                .rounded(cx.theme().radius)
-                                .bg(cx.theme().warning_background)
-                                .text_xs()
-                                .text_color(cx.theme().warning_foreground)
+                                .rounded(px(surface_radius()))
+                                .bg(cx.theme().warning_muted)
+                                .text_style(TextStyle::Caption)
+                                .text_color(cx.theme().warning)
                                 .line_height(relative(1.2))
                                 .child(div().child(KEY_WARN)),
                         )
@@ -295,9 +295,9 @@ impl Render for ImportIdentity {
             .when_some(self.error.read(cx).as_ref(), |this, error| {
                 this.child(
                     div()
-                        .text_xs()
+                        .text_style(TextStyle::Caption)
                         .text_center()
-                        .text_color(cx.theme().text_danger)
+                        .text_color(cx.theme().danger)
                         .child(error.clone()),
                 )
             })

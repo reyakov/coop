@@ -50,7 +50,7 @@ pub fn run() -> Result<(), JsValue> {
         // Initialize components
         ui::init(cx);
 
-        // Initialize theme registry
+        // Initialize theme
         theme::init(cx);
 
         // Initialize settings

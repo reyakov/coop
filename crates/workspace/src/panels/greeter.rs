@@ -1,14 +1,13 @@
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, SharedString, Styled, Window, div, svg,
+    IntoElement, ParentElement, Render, SharedString, Styled, Window, div, px, svg,
 };
 use state::NostrRegistry;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
 use ui::{Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
 
-use crate::Command;
 use crate::dialogs::profile;
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<GreeterPanel> {
@@ -45,7 +44,7 @@ impl Panel for GreeterPanel {
     fn title(&self, cx: &App) -> AnyElement {
         h_flex()
             .gap_1()
-            .text_xs()
+            .text_style(TextStyle::Caption)
             .child(
                 svg()
                     .path("brand/coop.svg")
@@ -85,13 +84,13 @@ impl Render for GreeterPanel {
                     .child(
                         h_flex()
                             .mb_4()
-                            .gap_2()
+                            .gap(px(theme::SPACE))
                             .w_full()
                             .child(
                                 svg()
                                     .path("brand/coop.svg")
                                     .size_12()
-                                    .text_color(cx.theme().icon_muted),
+                                    .text_color(cx.theme().text_faint),
                             )
                             .child(
                                 v_flex()
@@ -103,7 +102,7 @@ impl Render for GreeterPanel {
                                     )
                                     .child(
                                         div()
-                                            .text_xs()
+                                            .text_style(TextStyle::Caption)
                                             .text_color(cx.theme().text_muted)
                                             .child(SharedString::from(DESCRIPTION)),
                                     ),
@@ -111,13 +110,13 @@ impl Render for GreeterPanel {
                     )
                     .child(
                         v_flex()
-                            .gap_2()
+                            .gap(px(theme::SPACE))
                             .w_full()
                             .child(
                                 h_flex()
-                                    .gap_2()
+                                    .gap(px(theme::SPACE))
                                     .w_full()
-                                    .text_xs()
+                                    .text_style(TextStyle::Caption)
                                     .font_semibold()
                                     .text_color(cx.theme().text_muted)
                                     .child(SharedString::from("Get Started"))
@@ -125,7 +124,7 @@ impl Render for GreeterPanel {
                             )
                             .child(
                                 v_flex()
-                                    .gap_2()
+                                    .gap(px(theme::SPACE))
                                     .w_full()
                                     .justify_start()
                                     .items_start()
@@ -137,19 +136,6 @@ impl Render for GreeterPanel {
                                             .small()
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.open_profile(window, cx)
-                                            })),
-                                    )
-                                    .child(
-                                        Button::new("theme")
-                                            .icon(Icon::new(IconName::Moon))
-                                            .label("Change theme")
-                                            .ghost()
-                                            .small()
-                                            .on_click(cx.listener(move |_, _, window, cx| {
-                                                window.dispatch_action(
-                                                    Box::new(Command::ToggleTheme),
-                                                    cx,
-                                                );
                                             })),
                                     ),
                             ),

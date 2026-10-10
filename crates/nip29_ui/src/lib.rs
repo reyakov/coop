@@ -16,7 +16,7 @@ use serde::Deserialize;
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, upload};
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _, control_radius};
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariant, ButtonVariants};
 use ui::dialog::DialogButtonProps;
@@ -168,7 +168,7 @@ pub fn confirm_leave(group: WeakEntity<Group>, window: &mut Window, cx: &mut App
             )
             .child(
                 div()
-                    .text_sm()
+                    .text_style(TextStyle::Callout)
                     .child("You will stop receiving messages from this group."),
             )
             .on_ok(move |_event, _window, cx| {
@@ -567,16 +567,16 @@ impl GroupPanel {
         h_flex()
             .flex_shrink_0()
             .w_full()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .px_3()
             .py_2()
-            .text_sm()
+            .text_style(TextStyle::Callout)
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
                 Icon::new(IconName::Info)
                     .small()
-                    .text_color(cx.theme().icon_muted),
+                    .text_color(cx.theme().text_faint),
             )
             .child(div().flex_1().min_w_0().truncate().child(message))
             .child(
@@ -615,9 +615,9 @@ impl GroupPanel {
                 div()
                     .px_1p5()
                     .py_0p5()
-                    .rounded(cx.theme().radius)
-                    .bg(cx.theme().element_background)
-                    .text_xs()
+                    .rounded(px(control_radius()))
+                    .bg(cx.theme().solid)
+                    .text_style(TextStyle::Caption)
                     .text_color(cx.theme().text_muted)
                     .child(pin_label(group, pin))
             }))
@@ -695,10 +695,10 @@ impl GroupPanel {
             .w_full()
             .justify_center()
             .items_center()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .px_3()
             .py_2()
-            .text_sm()
+            .text_style(TextStyle::Callout)
             .text_color(cx.theme().text_muted);
 
         match notice {
@@ -878,9 +878,9 @@ impl GroupPanel {
                     .h_8()
                     .px_2()
                     .border_1()
-                    .border_color(cx.theme().border_variant)
-                    .rounded(cx.theme().radius)
-                    .text_xs()
+                    .border_color(cx.theme().border_faint)
+                    .rounded(px(control_radius()))
+                    .text_style(TextStyle::Caption)
                     .text_color(cx.theme().text_muted)
                     .child(Icon::new(IconName::Link).xsmall())
                     .child(
@@ -922,12 +922,12 @@ impl Panel for GroupPanel {
 
                 h_flex()
                     .gap_1()
-                    .text_xs()
+                    .text_style(TextStyle::Caption)
                     .child(Avatar::from_source(picture).seed(seed).xsmall())
                     .child(display_name(group))
                     .into_any_element()
             })
-            .unwrap_or_else(|| div().text_xs().child("Unknown").into_any_element())
+            .unwrap_or_else(|| div().text_style(TextStyle::Caption).child("Unknown").into_any_element())
     }
 
     fn toolbar_buttons(&self, _window: &Window, _cx: &App) -> Vec<Button> {
@@ -987,8 +987,8 @@ impl Render for GroupPanel {
                                     None => h_flex()
                                         .size_full()
                                         .justify_center()
-                                        .text_sm()
-                                        .text_color(cx.theme().text_placeholder)
+                                        .text_style(TextStyle::Callout)
+                                        .text_color(cx.theme().text_faint)
                                         .child("No messages yet")
                                         .into_any_element(),
                                 }),

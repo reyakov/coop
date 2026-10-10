@@ -23,9 +23,9 @@ pub mod switch;
 pub mod tab;
 pub mod tooltip;
 
-mod animation;
 mod icon;
 mod kbd;
+pub mod motion;
 mod popover;
 mod resizable;
 mod root;

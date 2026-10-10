@@ -5,13 +5,13 @@ use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, Context, Entity, IntoElement, ParentElement, SharedString, Styled, WeakEntity,
-    Window, div,
+    Window, div, px,
 };
 use nip29::Group;
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use settings::AppSettings;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius};
 use ui::avatar::Avatar;
 use ui::dialog::DialogButtonProps;
 use ui::dock::{ClosePanel, DockArea, DockPlacement, PanelHandle};
@@ -89,10 +89,10 @@ impl Sidebar {
 
                         Nav::new(label)
                             .label(label)
-                            .suffix(Icon::new(icon).small().text_color(cx.theme().icon_muted))
-                            .text_xs()
+                            .suffix(Icon::new(icon).small().text_color(cx.theme().text_faint))
+                            .text_style(TextStyle::Caption)
                             .font_semibold()
-                            .text_color(cx.theme().text_placeholder)
+                            .text_color(cx.theme().text_faint)
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 match section {
                                     ListSection::Pins => this.pins_open = !this.pins_open,
@@ -112,9 +112,9 @@ impl Sidebar {
 
                         Nav::new(label)
                             .label(label)
-                            .text_xs()
+                            .text_style(TextStyle::Caption)
                             .font_semibold()
-                            .text_color(cx.theme().text_placeholder)
+                            .text_color(cx.theme().text_faint)
                             .into_any_element()
                     }
                     SidebarRow::Empty(text) => v_flex()
@@ -130,9 +130,9 @@ impl Sidebar {
                                 .border_1()
                                 .border_dashed()
                                 .border_color(cx.theme().border)
-                                .rounded(cx.theme().radius)
-                                .text_xs()
-                                .text_color(cx.theme().text_placeholder)
+                                .rounded(px(button_radius()))
+                                .text_style(TextStyle::Caption)
+                                .text_color(cx.theme().text_faint)
                                 .child(*text),
                         )
                         .into_any_element(),
@@ -149,7 +149,7 @@ impl Sidebar {
 
                         let nav = Nav::new(index)
                             .label(name)
-                            .text_sm()
+                            .text_style(TextStyle::Callout)
                             .when(!hide_avatar, |this| {
                                 this.prefix(
                                     Avatar::from_source(picture)
@@ -161,8 +161,8 @@ impl Sidebar {
                             .suffix(
                                 div()
                                     .font_normal()
-                                    .text_xs()
-                                    .text_color(cx.theme().text_placeholder)
+                                    .text_style(TextStyle::Caption)
+                                    .text_color(cx.theme().text_faint)
                                     .child(created_at),
                             )
                             .on_click(move |_event, window, cx| {
@@ -204,7 +204,7 @@ impl Sidebar {
 
                         Nav::new(index)
                             .label(person.name())
-                            .text_sm()
+                            .text_style(TextStyle::Callout)
                             .when(!hide_avatar, |this| {
                                 this.prefix(
                                     Avatar::from_source(person.avatar())
@@ -230,7 +230,7 @@ impl Sidebar {
 
                         Nav::new(index)
                             .label(person.name())
-                            .text_sm()
+                            .text_style(TextStyle::Callout)
                             .when(!hide_avatar, |this| {
                                 this.prefix(
                                     Avatar::from_source(person.avatar())
@@ -265,7 +265,7 @@ impl Sidebar {
 
                         let nav = Nav::new(index)
                             .label(name)
-                            .text_sm()
+                            .text_style(TextStyle::Callout)
                             .when(!hide_avatar, |this| {
                                 this.prefix(
                                     Avatar::from_source(picture)
@@ -278,8 +278,8 @@ impl Sidebar {
                                 this.suffix(
                                     div()
                                         .font_normal()
-                                        .text_xs()
-                                        .text_color(cx.theme().text_placeholder)
+                                        .text_style(TextStyle::Caption)
+                                        .text_color(cx.theme().text_faint)
                                         .child(suffix),
                                 )
                             })
@@ -339,7 +339,7 @@ impl Sidebar {
 
                         Nav::new(index)
                             .label(content)
-                            .text_sm()
+                            .text_style(TextStyle::Callout)
                             .font_medium()
                             .when(!hide_avatar, |this| {
                                 this.prefix(
@@ -352,8 +352,8 @@ impl Sidebar {
                             .suffix(
                                 div()
                                     .font_normal()
-                                    .text_xs()
-                                    .text_color(cx.theme().text_placeholder)
+                                    .text_style(TextStyle::Caption)
+                                    .text_color(cx.theme().text_faint)
                                     .child(detail),
                             )
                             .on_click(move |_event, window, cx| {

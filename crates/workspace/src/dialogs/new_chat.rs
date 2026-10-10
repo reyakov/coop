@@ -13,9 +13,9 @@ use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use settings::AppSettings;
 use state::NostrRegistry;
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 use ui::avatar::Avatar;
-use ui::button::{Button, ButtonVariants};
+use ui::button::{Button, ButtonVariants, IconPosition};
 use ui::dock::{DockArea, DockPlacement, PanelHandle};
 use ui::input::{Input, InputEvent, InputState};
 use ui::nav::Nav;
@@ -332,7 +332,7 @@ impl NewChat {
 
                 Nav::new(start + offset)
                     .label(profile.name())
-                    .text_sm()
+                    .text_style(TextStyle::Callout)
                     .when(!AppSettings::get_hide_avatar(cx), |this| {
                         this.prefix(
                             Avatar::from_source(profile.avatar())
@@ -365,9 +365,9 @@ impl NewChat {
                     .gap_1()
                     .p_0p5()
                     .rounded_full()
-                    .bg(cx.theme().ghost_element_background_alt)
-                    .text_size(px(10.))
-                    .hover(|this| this.bg(cx.theme().ghost_element_hover))
+                    .bg(cx.theme().surface_raised)
+                    .text_style(TextStyle::Caption2)
+                    .hover(|this| this.bg(cx.theme().element_hover))
                     .child(
                         Avatar::from_source(profile.avatar())
                             .seed(profile.avatar_seed())
@@ -394,7 +394,7 @@ impl Render for NewChat {
                 h_flex()
                     .gap_1()
                     .w_full()
-                    .child(Input::new(&self.input).flex_1().text_sm().cleanable(true))
+                    .child(Input::new(&self.input).flex_1().cleanable(true))
                     .child(
                         Button::new("add")
                             .icon(IconName::Plus)
@@ -414,15 +414,15 @@ impl Render for NewChat {
                 if let Some(error) = self.error.clone() {
                     this.child(
                         div()
-                            .text_xs()
-                            .text_color(cx.theme().text_danger)
+                            .text_style(TextStyle::Caption)
+                            .text_color(cx.theme().danger)
                             .child(error),
                     )
                 } else {
                     this.child(
                         div()
-                            .text_xs()
-                            .text_color(cx.theme().text_placeholder)
+                            .text_style(TextStyle::Caption)
+                            .text_color(cx.theme().text_faint)
                             .child(notice),
                     )
                 }
@@ -449,7 +449,8 @@ impl Render for NewChat {
                     )
                     .child(
                         Button::new("start")
-                            .icon(IconName::CheckCircle)
+                            .icon(IconName::ArrowRight)
+                            .icon_position(IconPosition::End)
                             .label("Start")
                             .primary()
                             .font_semibold()

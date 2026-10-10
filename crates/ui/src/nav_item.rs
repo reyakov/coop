@@ -4,9 +4,9 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement, Interactivity, IntoElement,
     ParentElement, RenderOnce, SharedString, StatefulInteractiveElement as _, StyleRefinement,
-    Styled, Window, div,
+    Styled, Window, div, px,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 
 use crate::{Selectable, StyledExt, h_flex};
 
@@ -21,7 +21,6 @@ pub struct NavItem {
     label: SharedString,
     suffix: Option<AnyElement>,
     selected: bool,
-    clickable: bool,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
 }
 
@@ -43,16 +42,8 @@ impl NavItem {
             label: label.into(),
             suffix: None,
             selected: false,
-            clickable: false,
             on_click: None,
         }
-    }
-
-    /// Marks the item as clickable even when it has no `on_click` handler, so it
-    /// still shows the hover affordance. Used by items whose click opens a menu.
-    pub fn clickable(mut self, clickable: bool) -> Self {
-        self.clickable = clickable;
-        self
     }
 
     pub fn suffix(mut self, suffix: impl IntoElement) -> Self {
@@ -94,7 +85,12 @@ impl Styled for NavItem {
 
 impl RenderOnce for NavItem {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let clickable = self.on_click.is_some() || self.clickable;
+        let clickable = self.on_click.is_some();
+        let text_color = if self.selected {
+            cx.theme().text
+        } else {
+            cx.theme().text_muted
+        };
 
         h_flex()
             .id(self.id)
@@ -102,16 +98,16 @@ impl RenderOnce for NavItem {
             .px_2()
             .py_1()
             .w_full()
-            .gap_2()
-            .rounded(cx.theme().radius)
-            .text_color(cx.theme().text)
+            .gap(px(theme::SPACE))
+            .rounded(px(theme::button_radius()))
+            .text_color(text_color)
             .child(self.icon)
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_sm()
+                    .text_style(TextStyle::Callout)
                     .child(self.label),
             )
             .when_some(self.suffix, |this, suffix| {
@@ -119,10 +115,8 @@ impl RenderOnce for NavItem {
             })
             .when(clickable, |this| {
                 this.cursor_pointer()
-                    .hover(|this| this.bg(cx.theme().ghost_element_hover))
-                    .when(self.selected, |this| {
-                        this.bg(cx.theme().ghost_element_active)
-                    })
+                    .hover(|this| this.bg(cx.theme().element_hover))
+                    .when(self.selected, |this| this.bg(cx.theme().element_active))
             })
             .when_some(self.on_click, |this, handler| {
                 this.on_click(move |event, window, cx| handler(event, window, cx))

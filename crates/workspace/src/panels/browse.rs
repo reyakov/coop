@@ -6,14 +6,14 @@ use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, ScrollStrategy, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, div, px, relative,
-    size,
+    size, transparent_black,
 };
 use gpui_base::{VirtualListScrollHandle, v_virtual_list};
 use nip29::{Discovery, GroupCandidate, GroupKey, GroupsEvent, GroupsRegistry, Membership};
 use nostr_sdk::prelude::{RelayUrl, Timestamp};
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius, panel_radius};
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelHandle};
@@ -268,7 +268,7 @@ impl BrowsePanel {
                     .min_w_0()
                     .child(
                         div()
-                            .text_sm()
+                            .text_style(TextStyle::Callout)
                             .font_semibold()
                             .line_height(relative(1.2))
                             .child("Public Groups"),
@@ -276,7 +276,7 @@ impl BrowsePanel {
                     .child(
                         div()
                             .truncate()
-                            .text_xs()
+                            .text_style(TextStyle::Caption)
                             .text_color(cx.theme().text_muted)
                             .map(|this| match &self.relay {
                                 Some(relay) => {
@@ -294,13 +294,12 @@ impl BrowsePanel {
                     .w_full()
                     .max_w_64()
                     .px_1()
-                    .rounded(cx.theme().radius)
-                    .bg(cx.theme().surface_background)
+                    .rounded(px(button_radius()))
+                    .bg(cx.theme().surface)
                     .child(
                         Input::new(&self.input)
                             .appearance(false)
                             .small()
-                            .text_sm()
                             .flex_1(),
                     )
                     .child(
@@ -375,26 +374,26 @@ impl BrowsePanel {
             .min_w_0()
             .h_full()
             .overflow_hidden()
-            .rounded(cx.theme().radius)
+            .rounded(px(panel_radius()))
             .cursor_pointer()
             .border_1()
-            .border_color(cx.theme().border_transparent)
-            .bg(cx.theme().surface_background)
+            .border_color(transparent_black())
+            .bg(cx.theme().surface)
             .hover(|this| {
-                this.bg(cx.theme().elevated_surface_background)
-                    .border_color(cx.theme().border_focused)
+                this.bg(cx.theme().surface_raised)
+                    .border_color(cx.theme().border_strong)
             })
             .child(
                 v_flex()
                     .flex_1()
                     .min_h_0()
                     .p_2()
-                    .gap_2()
+                    .gap(px(theme::SPACE))
                     .child(
                         h_flex()
                             .w_full()
                             .items_center()
-                            .gap_2()
+                            .gap(px(theme::SPACE))
                             .when(!hide_avatar, |this| {
                                 this.child(Avatar::from_source(picture).seed(seed).flex_shrink_0())
                             })
@@ -404,7 +403,7 @@ impl BrowsePanel {
                                     .min_w_0()
                                     .child(
                                         div()
-                                            .text_sm()
+                                            .text_style(TextStyle::Callout)
                                             .truncate()
                                             .font_semibold()
                                             .line_height(relative(1.2))
@@ -413,8 +412,8 @@ impl BrowsePanel {
                                     .child(
                                         div()
                                             .truncate()
-                                            .text_xs()
-                                            .text_color(cx.theme().text_placeholder)
+                                            .text_style(TextStyle::Caption)
+                                            .text_color(cx.theme().text_faint)
                                             .child(relay),
                                     ),
                             ),
@@ -422,7 +421,7 @@ impl BrowsePanel {
                     .child(
                         div()
                             .min_w_0()
-                            .text_sm()
+                            .text_style(TextStyle::Callout)
                             .text_color(cx.theme().text_muted)
                             .text_ellipsis()
                             .line_clamp(2)
@@ -443,7 +442,7 @@ impl BrowsePanel {
                             .child(Icon::new(IconName::Book))
                             .child(
                                 div()
-                                    .text_sm()
+                                    .text_style(TextStyle::Callout)
                                     .child(SharedString::from(format!("{members} members"))),
                             ),
                     ),
@@ -463,11 +462,11 @@ impl Panel for BrowsePanel {
     fn title(&self, cx: &App) -> AnyElement {
         h_flex()
             .gap_1()
-            .text_xs()
+            .text_style(TextStyle::Caption)
             .child(
                 Icon::new(IconName::Compass)
                     .small()
-                    .text_color(cx.theme().icon_muted),
+                    .text_color(cx.theme().text_faint),
             )
             .child(TITLE)
             .into_any_element()
@@ -543,7 +542,7 @@ fn notice(text: &'static str, cx: &App) -> AnyElement {
     h_flex()
         .size_full()
         .justify_center()
-        .text_sm()
+        .text_style(TextStyle::Callout)
         .text_color(cx.theme().text_muted)
         .child(text)
         .into_any_element()

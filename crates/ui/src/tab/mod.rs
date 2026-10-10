@@ -5,9 +5,9 @@ use gpui::{
     AnyElement, App, ClickEvent, Div, InteractiveElement, IntoElement, MouseButton, ParentElement,
     RenderOnce, SharedString, StatefulInteractiveElement, Styled, Window, div, px,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 
-use crate::{Icon, IconName, Selectable, h_flex};
+use crate::{Selectable, h_flex};
 
 pub mod tab_bar;
 
@@ -17,46 +17,14 @@ pub mod tab_bar;
 pub struct Tab {
     ix: usize,
     base: Div,
-    pub(super) label: Option<SharedString>,
-    icon: Option<Icon>,
-    prefix: Option<AnyElement>,
-    pub(super) tab_bar_prefix: Option<bool>,
-    suffix: Option<AnyElement>,
+    label: Option<SharedString>,
     children: Vec<AnyElement>,
-    pub(super) disabled: bool,
-    pub(super) selected: bool,
-    pub(super) segmented: bool,
+    tab_bar_prefix: Option<bool>,
+    suffix: Option<AnyElement>,
+    disabled: bool,
+    selected: bool,
+    segmented: bool,
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
-}
-
-impl From<&'static str> for Tab {
-    fn from(label: &'static str) -> Self {
-        Self::new().label(label)
-    }
-}
-
-impl From<String> for Tab {
-    fn from(label: String) -> Self {
-        Self::new().label(label)
-    }
-}
-
-impl From<SharedString> for Tab {
-    fn from(label: SharedString) -> Self {
-        Self::new().label(label)
-    }
-}
-
-impl From<Icon> for Tab {
-    fn from(icon: Icon) -> Self {
-        Self::default().icon(icon)
-    }
-}
-
-impl From<IconName> for Tab {
-    fn from(icon_name: IconName) -> Self {
-        Self::default().icon(Icon::new(icon_name))
-    }
 }
 
 impl Default for Tab {
@@ -65,13 +33,11 @@ impl Default for Tab {
             ix: 0,
             base: div(),
             label: None,
-            icon: None,
             tab_bar_prefix: None,
             children: Vec::new(),
             disabled: false,
             selected: false,
             segmented: false,
-            prefix: None,
             suffix: None,
             on_click: None,
         }
@@ -90,32 +56,20 @@ impl Tab {
         self
     }
 
-    /// Set icon for the tab.
-    pub fn icon(mut self, icon: impl Into<Icon>) -> Self {
-        self.icon = Some(icon.into());
-        self
-    }
-
-    /// Set the left side of the tab
-    pub fn prefix(mut self, prefix: impl IntoElement) -> Self {
-        self.prefix = Some(prefix.into_any_element());
-        self
-    }
-
     /// Set the right side of the tab
-    pub fn suffix(mut self, suffix: impl IntoElement) -> Self {
+    pub(crate) fn suffix(mut self, suffix: impl IntoElement) -> Self {
         self.suffix = Some(suffix.into_any_element());
         self
     }
 
     /// Set disabled state to the tab, default false.
-    pub fn disabled(mut self, disabled: bool) -> Self {
+    pub(crate) fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
     }
 
     /// Set the click handler for the tab.
-    pub fn on_click(
+    pub(crate) fn on_click(
         mut self,
         on_click: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
@@ -179,8 +133,6 @@ impl RenderOnce for Tab {
             ix,
             base,
             label,
-            icon,
-            prefix,
             suffix,
             children,
             disabled,
@@ -193,9 +145,9 @@ impl RenderOnce for Tab {
         let foreground = if disabled {
             cx.theme().text_muted
         } else if selected {
-            cx.theme().tab_active_foreground
+            cx.theme().text
         } else {
-            cx.theme().tab_foreground
+            cx.theme().text_muted
         };
 
         let content = h_flex()
@@ -206,15 +158,11 @@ impl RenderOnce for Tab {
             .overflow_hidden()
             .when(segmented, |this| this.justify_center().px_1())
             .when(!segmented, |this| this.justify_start())
-            .map(|this| match icon {
-                Some(icon) => this.w(px(38.)).child(icon.size_4()),
-                None => this
-                    .map(|this| match label {
-                        Some(label) => this.child(label),
-                        None => this,
-                    })
-                    .children(children),
-            });
+            .map(|this| match label {
+                Some(label) => this.child(label),
+                None => this,
+            })
+            .children(children);
 
         base.id(ix)
             .group("tab")
@@ -222,16 +170,16 @@ impl RenderOnce for Tab {
             .items_center()
             .text_color(foreground)
             .when(segmented, |this| {
-                this.text_xs()
+                this.text_style(TextStyle::Caption)
                     .flex_1()
                     .h_6()
-                    .rounded(cx.theme().radius)
+                    .rounded(px(theme::button_radius()))
                     .when(selected && !disabled, |this| {
-                        this.bg(cx.theme().tab_active_background)
+                        this.bg(cx.theme().bg)
                             .when(cx.theme().shadow, |this| this.shadow_sm())
                     })
                     .when(!selected && !disabled, |this| {
-                        this.hover(|this| this.bg(cx.theme().tab_hover_background))
+                        this.hover(|this| this.bg(cx.theme().element_hover))
                     })
             })
             .when(!segmented, |this| {
@@ -240,20 +188,19 @@ impl RenderOnce for Tab {
                     .h_7()
                     .gap_1()
                     .px_1p5()
-                    .text_sm()
-                    .rounded(cx.theme().radius)
+                    .text_style(TextStyle::Callout)
+                    .rounded(px(theme::button_radius()))
                     .overflow_hidden()
                     .when(selected && !disabled, |this| {
-                        this.bg(cx.theme().tab_background)
+                        this.bg(cx.theme().element_active)
                     })
                     .when(!selected && !disabled, |this| {
                         this.hover(|this| {
-                            this.bg(cx.theme().tab_hover_background)
-                                .text_color(cx.theme().tab_active_foreground)
+                            this.bg(cx.theme().element_hover)
+                                .text_color(cx.theme().text)
                         })
                     })
             })
-            .when_some(prefix, |this, prefix| this.child(prefix))
             .child(content)
             .when_some(suffix, |this, suffix| {
                 this.child(

@@ -6,13 +6,13 @@ use gpui::{
     MouseButton, ParentElement, RenderOnce, Stateful, StyleRefinement, Styled, Window,
 };
 use gpui_base::Popover as BasePopover;
-pub use gpui_base::PopoverState;
+pub(crate) use gpui_base::PopoverState;
 
 use crate::{Selectable, StyledExt as _, v_flex};
 
 /// A popover element that can be triggered by a button or any other element.
 #[derive(IntoElement)]
-pub struct Popover {
+pub(crate) struct Popover {
     id: ElementId,
     style: StyleRefinement,
     anchor: Anchor,
@@ -26,8 +26,7 @@ pub struct Popover {
         >,
     >,
     children: Vec<AnyElement>,
-    /// Style for trigger element.
-    /// This is used for hotfix the trigger element style to support w_full.
+    /// Style refinement applied to the trigger element.
     trigger_style: Option<StyleRefinement>,
     mouse_button: MouseButton,
     appearance: bool,
@@ -35,8 +34,8 @@ pub struct Popover {
 }
 
 impl Popover {
-    /// Create a new Popover with `view` mode.
-    pub fn new(id: impl Into<ElementId>) -> Self {
+    /// Creates a new Popover with the given id.
+    pub(crate) fn new(id: impl Into<ElementId>) -> Self {
         Self {
             id: id.into(),
             style: StyleRefinement::default(),
@@ -51,23 +50,20 @@ impl Popover {
         }
     }
 
-    /// Set the anchor corner of the popover, default is `Corner::TopLeft`.
-    ///
-    /// This method is kept for backward compatibility with `Corner` type.
-    /// Internally, it converts `Corner` to `Anchor`.
-    pub fn anchor(mut self, anchor: impl Into<Anchor>) -> Self {
+    /// Sets the anchor corner of the popover, default is `Anchor::TopLeft`.
+    pub(crate) fn anchor(mut self, anchor: impl Into<Anchor>) -> Self {
         self.anchor = anchor.into();
         self
     }
 
-    /// Set the mouse button to trigger the popover, default is `MouseButton::Left`.
-    pub fn mouse_button(mut self, mouse_button: MouseButton) -> Self {
+    /// Sets the mouse button that triggers the popover, default is `MouseButton::Left`.
+    pub(crate) fn mouse_button(mut self, mouse_button: MouseButton) -> Self {
         self.mouse_button = mouse_button;
         self
     }
 
-    /// Set the trigger element of the popover.
-    pub fn trigger<T>(mut self, trigger: T) -> Self
+    /// Sets the trigger element, marked as selected while the popover is open.
+    pub(crate) fn trigger<T>(mut self, trigger: T) -> Self
     where
         T: Selectable + IntoElement + 'static,
     {
@@ -78,12 +74,8 @@ impl Popover {
         self
     }
 
-    /// Set the trigger from a builder, for elements that have no selected state.
-    ///
-    /// [`Self::trigger`] marks the trigger as selected while the popover is
-    /// open, so it cannot be used with elements whose selection carries a
-    /// different meaning, such as a row that indicates the current room.
-    pub fn trigger_with<F>(mut self, trigger: F) -> Self
+    /// Sets the trigger from a builder, for elements that have no selected state.
+    pub(crate) fn trigger_with<F>(mut self, trigger: F) -> Self
     where
         F: FnOnce(bool, &Window, &App) -> AnyElement + 'static,
     {
@@ -91,23 +83,20 @@ impl Popover {
         self
     }
 
-    /// Set the style for the trigger element.
-    pub fn trigger_style(mut self, style: StyleRefinement) -> Self {
+    /// Sets the style for the trigger element.
+    pub(crate) fn trigger_style(mut self, style: StyleRefinement) -> Self {
         self.trigger_style = Some(style);
         self
     }
 
-    /// Set whether clicking outside the popover will dismiss it, default is `true`.
-    pub fn overlay_closable(mut self, closable: bool) -> Self {
+    /// Sets whether clicking outside the popover dismisses it, default is `true`.
+    pub(crate) fn overlay_closable(mut self, closable: bool) -> Self {
         self.overlay_closable = closable;
         self
     }
 
-    /// Set the content builder for content of the Popover.
-    ///
-    /// This callback will called every time on render the popover.
-    /// So, you should avoid creating new elements or entities in the content closure.
-    pub fn content<F, E>(mut self, content: F) -> Self
+    /// Sets the content builder, called on every render of the popover.
+    pub(crate) fn content<F, E>(mut self, content: F) -> Self
     where
         E: IntoElement,
         F: Fn(&mut PopoverState, &mut Window, &mut Context<PopoverState>) -> E + 'static,
@@ -118,32 +107,13 @@ impl Popover {
         self
     }
 
-    /// Set whether the popover no style, default is `false`.
-    ///
-    /// If no style:
-    ///
-    /// - The popover will not have a bg, border, shadow, or padding.
-    /// - The click out of the popover will not dismiss it.
-    pub fn appearance(mut self, appearance: bool) -> Self {
+    /// Sets whether the popover renders with default styling, default is `true`.
+    pub(crate) fn appearance(mut self, appearance: bool) -> Self {
         self.appearance = appearance;
         self
     }
-}
 
-impl ParentElement for Popover {
-    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
-        self.children.extend(elements);
-    }
-}
-
-impl Styled for Popover {
-    fn style(&mut self) -> &mut StyleRefinement {
-        &mut self.style
-    }
-}
-
-impl Popover {
-    pub(crate) fn render_popover_content(
+    fn render_popover_content(
         anchor: Anchor,
         appearance: bool,
         _: &mut Window,
@@ -159,6 +129,18 @@ impl Popover {
                 Anchor::BottomLeft | Anchor::BottomCenter | Anchor::BottomRight => this.bottom_1(),
                 Anchor::LeftCenter | Anchor::RightCenter => this.top_1(), // Fallback for centered
             })
+    }
+}
+
+impl ParentElement for Popover {
+    fn extend(&mut self, elements: impl IntoIterator<Item = AnyElement>) {
+        self.children.extend(elements);
+    }
+}
+
+impl Styled for Popover {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
     }
 }
 

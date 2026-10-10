@@ -24,7 +24,7 @@ use smallvec::{SmallVec, smallvec};
 use state::{
     FileAttachment, NostrRegistry, download_and_decrypt_to_file, upload, upload_encrypted,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
@@ -903,9 +903,9 @@ impl ChatPanel {
                             h_flex()
                                 .h_10()
                                 .justify_center()
-                                .text_sm()
-                                .bg(cx.theme().elevated_surface_background)
-                                .rounded(cx.theme().radius)
+                                .text_style(TextStyle::Callout)
+                                .bg(cx.theme().surface_raised)
+                                .rounded(px(theme::panel_radius()))
                                 .child("Message isn't traced yet"),
                         )
                     })
@@ -918,10 +918,10 @@ impl ChatPanel {
                                     h_flex()
                                         .h_7()
                                         .px_2()
-                                        .gap_2()
-                                        .bg(cx.theme().elevated_surface_background)
-                                        .rounded(cx.theme().radius)
-                                        .text_sm()
+                                        .gap(px(theme::SPACE))
+                                        .bg(cx.theme().surface_raised)
+                                        .rounded(px(theme::control_radius()))
+                                        .text_style(TextStyle::Callout)
                                         .child(div().size_1p5().rounded_full().bg(gpui::green()))
                                         .child(SharedString::from(url.to_string())),
                                 );
@@ -950,10 +950,10 @@ impl ChatPanel {
                             h_flex()
                                 .h_7()
                                 .px_2()
-                                .gap_2()
-                                .bg(cx.theme().elevated_surface_background)
-                                .rounded(cx.theme().radius)
-                                .text_sm()
+                                .gap(px(theme::SPACE))
+                                .bg(cx.theme().surface_raised)
+                                .rounded(px(theme::control_radius()))
+                                .text_style(TextStyle::Callout)
                                 .child(div().size_1p5().rounded_full().bg(gpui::green()))
                                 .child(SharedString::from(url.to_string())),
                         );
@@ -975,7 +975,7 @@ impl ChatPanel {
                 svg()
                     .path("brand/coop.svg")
                     .size_12()
-                    .text_color(cx.theme().ghost_element_background_alt),
+                    .text_color(cx.theme().surface_raised),
             )
             .message(PRIVATE_NOTICE)
             .into_any_element()
@@ -990,14 +990,14 @@ impl ChatPanel {
             .items_center()
             .justify_center()
             .text_center()
-            .text_xs()
-            .text_color(cx.theme().text_placeholder)
+            .text_style(TextStyle::Caption)
+            .text_color(cx.theme().text_faint)
             .line_height(relative(1.3))
             .child(
                 svg()
                     .path("brand/coop.svg")
                     .size_12()
-                    .text_color(cx.theme().ghost_element_active),
+                    .text_color(cx.theme().element_active),
             )
             .child(PRIVATE_NOTICE)
             .into_any_element()
@@ -1013,15 +1013,15 @@ impl ChatPanel {
                 h_flex()
                     .w_full()
                     .gap_3()
-                    .text_sm()
+                    .text_style(TextStyle::Callout)
                     .child(
                         h_flex()
                             .flex_shrink_0()
                             .size_8()
                             .justify_center()
                             .rounded_full()
-                            .bg(cx.theme().warning_background)
-                            .text_color(cx.theme().warning_foreground)
+                            .bg(cx.theme().warning_muted)
+                            .text_color(cx.theme().warning)
                             .child(Icon::new(IconName::Warning).small()),
                     )
                     .child(
@@ -1161,7 +1161,7 @@ impl ChatPanel {
                     .top_0()
                     .w(px(2.))
                     .h_full()
-                    .bg(cx.theme().border_transparent),
+                    .bg(gpui::transparent_black()),
             )
             .overlay(self.render_actions(&id, &pk, cx))
             .on_mouse_down(
@@ -1187,10 +1187,10 @@ impl ChatPanel {
             return div().child(
                 img(media[0].clone())
                     .border_1()
-                    .border_color(cx.theme().border_variant)
+                    .border_color(cx.theme().border_faint)
                     .h(px(250.))
                     .object_fit(ObjectFit::Cover)
-                    .rounded(cx.theme().radius),
+                    .rounded(px(theme::bubble_radius())),
             );
         }
 
@@ -1201,7 +1201,7 @@ impl ChatPanel {
             .flex()
             .flex_row()
             .flex_wrap()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .children({
                 let mut items = vec![];
 
@@ -1215,8 +1215,8 @@ impl ChatPanel {
                                 img(item.clone())
                                     .h_32()
                                     .border_1()
-                                    .border_color(cx.theme().border_variant)
-                                    .rounded(cx.theme().radius),
+                                    .border_color(cx.theme().border_faint)
+                                    .rounded(px(theme::bubble_radius())),
                             ),
                     );
                 }
@@ -1245,7 +1245,7 @@ impl ChatPanel {
                     .px_2()
                     .border_l_2()
                     .border_color(cx.theme().element_active)
-                    .text_sm()
+                    .text_style(TextStyle::Callout)
                     .child(div().font_semibold().child(author.name()))
                     .child(
                         div()
@@ -1254,7 +1254,7 @@ impl ChatPanel {
                             .line_clamp(1)
                             .child(message.preview()),
                     )
-                    .hover(|this| this.bg(cx.theme().elevated_surface_background))
+                    .hover(|this| this.bg(cx.theme().surface_raised))
                     .on_click({
                         let id = *id;
                         cx.listener(move |this, _event, _window, _cx| {
@@ -1287,16 +1287,16 @@ impl ChatPanel {
                     .unwrap_or(false);
 
                 h_flex()
-                    .gap_2()
+                    .gap(px(theme::SPACE))
                     .py_0p5()
                     .px_1()
-                    .rounded(cx.theme().radius)
-                    .text_xs()
+                    .rounded(px(theme::control_radius()))
+                    .text_style(TextStyle::Caption)
                     .border_1()
                     .when(has_reacted, |this| {
-                        this.text_color(cx.theme().secondary_foreground)
-                            .bg(cx.theme().secondary_background)
-                            .border_color(cx.theme().secondary_active)
+                        this.text_color(cx.theme().text)
+                            .bg(cx.theme().surface_raised)
+                            .border_color(cx.theme().element_active)
                     })
                     .when(!has_reacted, |this| this.border_color(cx.theme().border))
                     .child(emoji)
@@ -1330,7 +1330,7 @@ impl ChatPanel {
         div()
             .id(SharedString::from(id.to_hex()))
             .child(label)
-            .when(failed, |this| this.text_color(cx.theme().text_danger))
+            .when(failed, |this| this.text_color(cx.theme().danger_muted))
             .when_some(reports, |this, reports| {
                 this.when(!pending, |this| {
                     this.on_click(move |_e, window, cx| {
@@ -1361,12 +1361,12 @@ impl ChatPanel {
         let avatar = profile.avatar();
 
         v_flex()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .w_full()
             .child(
                 h_flex()
-                    .gap_2()
-                    .text_sm()
+                    .gap(px(theme::SPACE))
+                    .text_style(TextStyle::Callout)
                     .child(SharedString::from("Sent to:"))
                     .child(
                         h_flex()
@@ -1384,17 +1384,17 @@ impl ChatPanel {
                         .p_1()
                         .h_16()
                         .w_full()
-                        .text_sm()
-                        .rounded(cx.theme().radius)
-                        .bg(cx.theme().warning_background)
-                        .text_color(cx.theme().warning_foreground)
+                        .text_style(TextStyle::Callout)
+                        .rounded(px(theme::surface_radius()))
+                        .bg(cx.theme().warning_muted)
+                        .text_color(cx.theme().warning)
                         .child(div().flex_1().w_full().text_center().child(error)),
                 )
             })
             .when_some(report.output().cloned(), |this, output| {
                 this.child(
                     v_flex()
-                        .gap_2()
+                        .gap(px(theme::SPACE))
                         .w_full()
                         .children({
                             let mut items = Vec::with_capacity(output.failed.len());
@@ -1405,19 +1405,19 @@ impl ChatPanel {
                                         .gap_0p5()
                                         .p_1()
                                         .w_full()
-                                        .rounded(cx.theme().radius)
-                                        .bg(cx.theme().danger_background)
+                                        .rounded(px(theme::surface_radius()))
+                                        .bg(cx.theme().danger.opacity(0.06))
                                         .child(
                                             div()
-                                                .text_xs()
+                                                .text_style(TextStyle::Caption)
                                                 .font_semibold()
                                                 .line_height(relative(1.25))
                                                 .child(SharedString::from(url.to_string())),
                                         )
                                         .child(
                                             div()
-                                                .text_xs()
-                                                .text_color(cx.theme().danger_foreground)
+                                                .text_style(TextStyle::Caption)
+                                                .text_color(cx.theme().danger_muted.opacity(0.9))
                                                 .line_height(relative(1.25))
                                                 .child(SharedString::from(msg.to_string())),
                                         ),
@@ -1435,18 +1435,18 @@ impl ChatPanel {
                                         .gap_0p5()
                                         .p_1()
                                         .w_full()
-                                        .rounded(cx.theme().radius)
-                                        .bg(cx.theme().elevated_surface_background)
+                                        .rounded(px(theme::surface_radius()))
+                                        .bg(cx.theme().surface_card)
                                         .child(
                                             div()
-                                                .text_xs()
+                                                .text_style(TextStyle::Caption)
                                                 .font_semibold()
                                                 .line_height(relative(1.25))
                                                 .child(SharedString::from(url.0.to_string())),
                                         )
                                         .child(
                                             div()
-                                                .text_xs()
+                                                .text_style(TextStyle::Caption)
                                                 .line_height(relative(1.25))
                                                 .child(SharedString::from("Successfully")),
                                         ),
@@ -1473,10 +1473,10 @@ impl ChatPanel {
             .right_4()
             .top_neg_2()
             .when(cx.theme().shadow, |this| this.shadow_sm())
-            .rounded(cx.theme().radius)
+            .rounded(px(theme::surface_radius()))
             .border_1()
             .border_color(cx.theme().border)
-            .bg(cx.theme().background)
+            .bg(cx.theme().bg)
             .children({
                 let mut items = vec![];
 
@@ -1553,7 +1553,7 @@ impl ChatPanel {
                 img(url.as_str())
                     .size_16()
                     .when(cx.theme().shadow, |this| this.shadow_lg())
-                    .rounded(cx.theme().radius)
+                    .rounded(px(theme::control_radius()))
                     .object_fit(ObjectFit::Cover),
             )
             .child(
@@ -1611,10 +1611,10 @@ impl ChatPanel {
                 .child(
                     img(path.clone())
                         .border_1()
-                        .border_color(cx.theme().border_variant)
+                        .border_color(cx.theme().border_faint)
                         .h(px(250.))
                         .object_fit(ObjectFit::Cover)
-                        .rounded(cx.theme().radius),
+                        .rounded(px(theme::bubble_radius())),
                 )
                 .into_any_element();
         }
@@ -1642,22 +1642,22 @@ impl ChatPanel {
             .self_start()
             .items_start()
             .min_w_0()
-            .gap_2()
+            .gap(px(theme::SPACE))
             .p_2()
             .border_1()
-            .border_color(cx.theme().border_variant)
-            .rounded(cx.theme().radius)
-            .child(Icon::new(IconName::Lock).text_color(cx.theme().icon_accent))
+            .border_color(cx.theme().border_faint)
+            .rounded(px(theme::control_radius()))
+            .child(Icon::new(IconName::Lock).text_color(cx.theme().accent))
             .child(
                 v_flex()
                     .min_w_0()
                     .overflow_hidden()
-                    .text_sm()
+                    .text_style(TextStyle::Callout)
                     .child(div().line_height(relative(1.2)).child(file.display_name()))
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(cx.theme().text_placeholder)
+                            .text_style(TextStyle::Caption)
+                            .text_color(cx.theme().text_faint)
                             .child(label),
                     ),
             )
@@ -1688,7 +1688,7 @@ impl ChatPanel {
                         img(pending.path.clone())
                             .size_16()
                             .when(cx.theme().shadow, |this| this.shadow_sm())
-                            .rounded(cx.theme().radius)
+                            .rounded(px(theme::control_radius()))
                             .object_fit(ObjectFit::Cover),
                     )
                 } else {
@@ -1698,11 +1698,11 @@ impl ChatPanel {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(cx.theme().radius)
+                            .rounded(px(theme::control_radius()))
                             .border_1()
-                            .border_color(cx.theme().border_variant)
-                            .bg(cx.theme().surface_background)
-                            .text_xs()
+                            .border_color(cx.theme().border_faint)
+                            .bg(cx.theme().surface)
+                            .text_style(TextStyle::Caption)
                             .text_center()
                             .child("Preview not available"),
                     )
@@ -1718,7 +1718,7 @@ impl ChatPanel {
                     .justify_center()
                     .rounded_full()
                     .border_1()
-                    .border_color(cx.theme().border_variant)
+                    .border_color(cx.theme().border_faint)
                     .bg(gpui::green())
                     .child(Icon::new(IconName::Lock).size_2().text_color(gpui::white())),
             )
@@ -1764,14 +1764,10 @@ impl ChatPanel {
                                 .flex()
                                 .items_baseline()
                                 .gap_1()
-                                .text_xs()
+                                .text_style(TextStyle::Caption)
                                 .text_color(cx.theme().text_muted)
                                 .child("Replying to:")
-                                .child(
-                                    div()
-                                        .text_color(cx.theme().text_accent)
-                                        .child(profile.name()),
-                                ),
+                                .child(div().text_color(cx.theme().accent).child(profile.name())),
                         )
                         .child(
                             Button::new("remove-reply")
@@ -1789,7 +1785,7 @@ impl ChatPanel {
                 .child(
                     div()
                         .w_full()
-                        .text_sm()
+                        .text_style(TextStyle::Callout)
                         .text_ellipsis()
                         .line_clamp(1)
                         .child(text.preview()),
@@ -1885,12 +1881,17 @@ impl Panel for ChatPanel {
 
                 h_flex()
                     .gap_1()
-                    .text_xs()
+                    .text_style(TextStyle::Caption)
                     .child(Avatar::new(picture).seed(seed).xsmall())
                     .child(label)
                     .into_any_element()
             })
-            .unwrap_or(div().text_xs().child("Unknown").into_any_element())
+            .unwrap_or(
+                div()
+                    .text_style(TextStyle::Caption)
+                    .child("Unknown")
+                    .into_any_element(),
+            )
     }
 
     fn toolbar_buttons(&self, _window: &Window, _cx: &App) -> Vec<Button> {
@@ -1937,10 +1938,10 @@ impl Render for ChatPanel {
                         .h_12()
                         .w_full()
                         .px_2()
-                        .gap_2()
+                        .gap(px(theme::SPACE))
                         .border_b_1()
                         .border_color(cx.theme().border)
-                        .child(Input::new(&self.subject_input).text_sm().small())
+                        .child(Input::new(&self.subject_input).small())
                         .child(
                             Button::new("change")
                                 .icon(IconName::CheckCircle)
@@ -1993,8 +1994,8 @@ impl Render for ChatPanel {
                         this.child(
                             div()
                                 .px_1()
-                                .text_xs()
-                                .text_color(cx.theme().text_warning)
+                                .text_style(TextStyle::Caption)
+                                .text_color(cx.theme().warning)
                                 .child(WARNING),
                         )
                     })

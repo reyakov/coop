@@ -12,15 +12,15 @@ pub(crate) fn resize_handle_appearance() -> ResizeHandleRenderer {
     Rc::new(
         |context: &ResizeHandleContext, _: &mut Window, cx: &mut App| {
             let color = if context.is_active() {
-                cx.theme().border_selected
+                cx.theme().border_strong
             } else {
-                cx.theme().border
+                cx.theme().element_hover
             };
             let axis = context.axis();
 
             Some(
                 div()
-                    .bg(cx.theme().border_variant)
+                    .bg(cx.theme().border_faint)
                     .group_hover("handle", move |this| this.bg(color))
                     .when(axis.is_horizontal(), |this| this.h_full().w(HANDLE_SIZE))
                     .when(axis.is_vertical(), |this| this.w_full().h(HANDLE_SIZE))

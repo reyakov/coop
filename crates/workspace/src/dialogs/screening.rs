@@ -12,7 +12,7 @@ use nostr_sdk::prelude::*;
 use person::{Person, PersonRegistry, shorten_pubkey};
 use smallvec::{SmallVec, smallvec};
 use state::{BOOTSTRAP_RELAYS, NostrAddress, NostrRegistry, TIMEOUT};
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius};
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::indicator::Indicator;
@@ -283,9 +283,9 @@ impl Screening {
                                     .w_full()
                                     .px_2()
                                     .gap_1p5()
-                                    .rounded(cx.theme().radius)
-                                    .text_sm()
-                                    .hover(|this| this.bg(cx.theme().elevated_surface_background))
+                                    .rounded(px(button_radius()))
+                                    .text_style(TextStyle::Callout)
+                                    .hover(|this| this.bg(cx.theme().element_hover))
                                     .child(Avatar::new(profile.avatar()).small())
                                     .child(profile.name()),
                             );
@@ -344,8 +344,8 @@ impl Render for Screening {
                             .h_7()
                             .justify_center()
                             .rounded_full()
-                            .bg(cx.theme().elevated_surface_background)
-                            .text_sm()
+                            .bg(cx.theme().surface_raised)
+                            .text_style(TextStyle::Callout)
                             .truncate()
                             .text_ellipsis()
                             .text_center()
@@ -385,33 +385,36 @@ impl Render for Screening {
                     .child(
                         h_flex()
                             .items_start()
-                            .gap_2()
-                            .text_sm()
+                            .gap(px(theme::SPACE))
+                            .text_style(TextStyle::Callout)
                             .child(status_badge(Some(self.followed), cx))
                             .child(
-                                v_flex().text_sm().child("Contact").child(
-                                    div()
-                                        .line_clamp(1)
-                                        .text_color(cx.theme().text_muted)
-                                        .child({
-                                            if self.followed {
-                                                SharedString::from(CONTACT)
-                                            } else {
-                                                SharedString::from(NOT_CONTACT)
-                                            }
-                                        }),
-                                ),
+                                v_flex()
+                                    .text_style(TextStyle::Callout)
+                                    .child("Contact")
+                                    .child(
+                                        div()
+                                            .line_clamp(1)
+                                            .text_color(cx.theme().text_muted)
+                                            .child({
+                                                if self.followed {
+                                                    SharedString::from(CONTACT)
+                                                } else {
+                                                    SharedString::from(NOT_CONTACT)
+                                                }
+                                            }),
+                                    ),
                             ),
                     )
                     .child(
                         h_flex()
                             .items_start()
-                            .gap_2()
-                            .text_sm()
+                            .gap(px(theme::SPACE))
+                            .text_style(TextStyle::Callout)
                             .child(status_badge(last_active, cx))
                             .child(
                                 v_flex()
-                                    .text_sm()
+                                    .text_style(TextStyle::Callout)
                                     .child(
                                         h_flex()
                                             .gap_0p5()
@@ -446,11 +449,11 @@ impl Render for Screening {
                     .child(
                         h_flex()
                             .items_start()
-                            .gap_2()
+                            .gap(px(theme::SPACE))
                             .child(status_badge(Some(self.verified), cx))
                             .child(
                                 v_flex()
-                                    .text_sm()
+                                    .text_style(TextStyle::Callout)
                                     .child({
                                         if let Some(addr) = self.address(cx) {
                                             SharedString::from(format!("{} validation", addr))
@@ -481,11 +484,11 @@ impl Render for Screening {
                     .child(
                         h_flex()
                             .items_start()
-                            .gap_2()
+                            .gap(px(theme::SPACE))
                             .child(status_badge(Some(mutuals > 0), cx))
                             .child(
                                 h_flex()
-                                    .text_sm()
+                                    .text_style(TextStyle::Callout)
                                     .child(
                                         div()
                                             .line_clamp(1)
@@ -524,9 +527,9 @@ fn status_badge(status: Option<bool>, cx: &App) -> Div {
             if let Some(status) = status {
                 this.child(Icon::new(IconName::CheckCircle).small().text_color({
                     if status {
-                        cx.theme().icon_accent
+                        cx.theme().accent
                     } else {
-                        cx.theme().icon_muted
+                        cx.theme().text_faint
                     }
                 }))
             } else {

@@ -3,7 +3,7 @@ use gpui::{
     relative,
 };
 use nip29::{Group, GroupMetadata};
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _, control_radius};
 use ui::avatar::Avatar;
 use ui::{Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
@@ -22,7 +22,7 @@ fn body(group: &WeakEntity<Group>, cx: &App) -> AnyElement {
     };
 
     let group = entity.read(cx);
-    let mut body = v_flex().gap_3().text_sm().child(header(group, cx));
+    let mut body = v_flex().gap_3().text_style(TextStyle::Callout).child(header(group, cx));
 
     if let Some(metadata) = group.metadata() {
         if let Some(about) = metadata.about.as_ref() {
@@ -76,7 +76,7 @@ fn body(group: &WeakEntity<Group>, cx: &App) -> AnyElement {
                 "Supported kinds",
                 if items.is_empty() {
                     div()
-                        .text_color(cx.theme().text_placeholder)
+                        .text_color(cx.theme().text_faint)
                         .child("None")
                         .into_any_element()
                 } else {
@@ -137,15 +137,15 @@ fn header(group: &Group, cx: &App) -> AnyElement {
                 .min_w_0()
                 .child(
                     div()
-                        .text_base()
+                        .text_style(TextStyle::Body)
                         .font_semibold()
                         .truncate()
                         .child(group.display_name()),
                 )
                 .child(
                     div()
-                        .text_xs()
-                        .text_color(cx.theme().text_placeholder)
+                        .text_style(TextStyle::Caption)
+                        .text_color(cx.theme().text_faint)
                         .truncate()
                         .child(SharedString::from(format!(
                             "{} · {}",
@@ -162,7 +162,7 @@ fn section(label: &'static str, content: AnyElement, cx: &App) -> AnyElement {
         .gap_1()
         .child(
             div()
-                .text_xs()
+                .text_style(TextStyle::Caption)
                 .font_medium()
                 .text_color(cx.theme().text_muted)
                 .child(label),
@@ -183,10 +183,10 @@ fn chip(label: impl Into<SharedString>, cx: &App) -> AnyElement {
     div()
         .px_2()
         .py_1()
-        .rounded(cx.theme().radius)
-        .bg(cx.theme().secondary_background)
-        .text_color(cx.theme().secondary_foreground)
-        .text_xs()
+        .rounded(px(control_radius()))
+        .bg(cx.theme().surface_raised)
+        .text_color(cx.theme().text)
+        .text_style(TextStyle::Caption)
         .line_height(relative(1.))
         .child(label.into())
         .into_any_element()

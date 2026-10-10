@@ -8,14 +8,9 @@ use gpui::{
 use gpui_base::dock::{PanelId, PanelState};
 
 use crate::button::Button;
-use crate::menu::PopupMenu;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PanelEvent {
-    ZoomIn,
-    ZoomOut,
-    LayoutChanged,
-}
+pub enum PanelEvent {}
 
 pub trait Panel: EventEmitter<PanelEvent> + Render + Focusable {
     /// The name of the panel used to serialize, deserialize and identify the panel.
@@ -31,44 +26,29 @@ pub trait Panel: EventEmitter<PanelEvent> + Render + Focusable {
         true
     }
 
-    /// Return true if the panel is zoomable, default is `false`.
+    /// Whether the panel is zoomable, default is `true`.
     fn zoomable(&self, _cx: &App) -> bool {
         true
     }
 
     /// Return false to hide panel, true to show panel, default is `true`.
-    ///
-    /// This method called in Panel render, we should make sure it is fast.
     fn visible(&self, _cx: &App) -> bool {
         true
     }
 
     /// Set active state of the panel.
-    ///
-    /// This method will be called when the panel is active or inactive.
-    ///
-    /// The last_active_panel and current_active_panel will be touched when the panel is active.
     fn set_active(&self, _active: bool, _window: &mut Window, _cx: &mut App) {}
 
     /// Set zoomed state of the panel.
-    ///
-    /// This method will be called when the panel is zoomed or unzoomed.
-    ///
-    /// Only current Panel will touch this method.
     fn set_zoomed(&self, _zoomed: bool, _cx: &mut App) {}
 
-    /// The addition popup menu of the panel, default is `None`.
-    fn popup_menu(&self, this: PopupMenu, _cx: &App) -> PopupMenu {
-        this
-    }
-
-    /// The addition toolbar buttons of the panel used to show in the right of the title bar, default is `None`.
+    /// Toolbar buttons shown at the right of the title bar.
     fn toolbar_buttons(&self, _window: &Window, _cx: &App) -> Vec<Button> {
         vec![]
     }
 }
 
-pub trait PanelView: 'static + Send + Sync {
+pub(crate) trait PanelView: 'static + Send + Sync {
     fn panel_id(&self, cx: &App) -> SharedString;
     fn title(&self, cx: &App) -> AnyElement;
     fn closable(&self, cx: &App) -> bool;
@@ -76,8 +56,6 @@ pub trait PanelView: 'static + Send + Sync {
     fn visible(&self, cx: &App) -> bool;
     fn set_active(&self, active: bool, window: &mut Window, cx: &mut App);
     fn set_zoomed(&self, zoomed: bool, cx: &mut App);
-    fn popup_menu(&self, menu: PopupMenu, cx: &App) -> PopupMenu;
-    fn toolbar_buttons(&self, window: &Window, cx: &App) -> Vec<Button>;
     fn view(&self) -> AnyView;
     fn focus_handle(&self, cx: &App) -> FocusHandle;
 }
@@ -115,38 +93,12 @@ impl<T: Panel> PanelView for Entity<T> {
         })
     }
 
-    fn popup_menu(&self, menu: PopupMenu, cx: &App) -> PopupMenu {
-        self.read(cx).popup_menu(menu, cx)
-    }
-
-    fn toolbar_buttons(&self, window: &Window, cx: &App) -> Vec<Button> {
-        self.read(cx).toolbar_buttons(window, cx)
-    }
-
     fn view(&self) -> AnyView {
         self.clone().into()
     }
 
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.read(cx).focus_handle(cx)
-    }
-}
-
-impl From<&dyn PanelView> for AnyView {
-    fn from(handle: &dyn PanelView) -> Self {
-        handle.view()
-    }
-}
-
-impl<T: Panel> From<&dyn PanelView> for Entity<T> {
-    fn from(value: &dyn PanelView) -> Self {
-        value.view().downcast::<T>().unwrap()
-    }
-}
-
-impl PartialEq for dyn PanelView {
-    fn eq(&self, other: &Self) -> bool {
-        self.view() == other.view()
     }
 }
 
@@ -164,13 +116,12 @@ impl PanelHandle {
         }
     }
 
-    /// Recover the coop handle behind one of base's.
-    pub fn of(panel: &Arc<dyn gpui_base::dock::PanelView>) -> Option<&Self> {
+    /// Downcast a base handle back to the coop handle.
+    pub(crate) fn of(panel: &Arc<dyn gpui_base::dock::PanelView>) -> Option<&Self> {
         panel.as_any().downcast_ref::<Self>()
     }
 
-    /// The coop panel behind this handle.
-    pub fn panel(&self) -> &Arc<dyn PanelView> {
+    pub(crate) fn panel(&self) -> &Arc<dyn PanelView> {
         &self.panel
     }
 }

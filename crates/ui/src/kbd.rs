@@ -1,29 +1,20 @@
 use gpui::{
-    Action, AsKeystroke, FocusHandle, IntoElement, KeyContext, Keystroke, ParentElement as _,
-    RenderOnce, StyleRefinement, Styled, Window, div, relative,
+    Action, AsKeystroke, IntoElement, KeyContext, Keystroke, ParentElement as _, RenderOnce,
+    StyleRefinement, Styled, Window, div,
 };
-use theme::ActiveTheme;
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 
 use crate::StyledExt;
 
 /// A key binding tag
 #[derive(IntoElement, Clone, Debug)]
-pub struct Kbd {
+pub(crate) struct Kbd {
     style: StyleRefinement,
     stroke: Keystroke,
 }
 
-impl From<Keystroke> for Kbd {
-    fn from(stroke: Keystroke) -> Self {
-        Self {
-            style: StyleRefinement::default(),
-            stroke,
-        }
-    }
-}
-
 impl Kbd {
-    pub fn new(stroke: Keystroke) -> Self {
+    fn new(stroke: Keystroke) -> Self {
         Self {
             style: StyleRefinement::default(),
             stroke,
@@ -31,7 +22,7 @@ impl Kbd {
     }
 
     /// Return the first keybinding for the given action and context.
-    pub fn binding_for_action(
+    pub(crate) fn binding_for_action(
         action: &dyn Action,
         context: Option<&str>,
         window: &Window,
@@ -50,25 +41,8 @@ impl Kbd {
             .map(|key| Self::new(key.as_keystroke().clone()))
     }
 
-    /// Return the first keybinding for the given action and focus handle.
-    pub fn binding_for_action_in(
-        action: &dyn Action,
-        focus_handle: &FocusHandle,
-        window: &Window,
-    ) -> Option<Self> {
-        let binding = window.highest_precedence_binding_for_action_in(action, focus_handle)?;
-
-        binding
-            .keystrokes()
-            .first()
-            .map(|key| Self::new(key.as_keystroke().clone()))
-    }
-
-    /// Return the Platform specific keybinding string by KeyStroke
-    ///
-    /// - macOS: https://support.apple.com/en-us/HT201236
-    /// - Windows: https://support.microsoft.com/en-us/windows/keyboard-shortcuts-in-windows-dcc61a57-8ff0-cffe-9796-cb9706c75eec
-    pub fn format(key: &Keystroke) -> String {
+    /// Return the platform specific keybinding string for a keystroke.
+    fn format(key: &Keystroke) -> String {
         #[cfg(target_os = "macos")]
         const DIVIDER: &str = "";
         #[cfg(not(target_os = "macos"))]
@@ -197,16 +171,15 @@ impl RenderOnce for Kbd {
     fn render(self, _: &mut gpui::Window, cx: &mut gpui::App) -> impl gpui::IntoElement {
         div()
             .border_1()
-            .border_color(cx.theme().border)
+            .border_color(cx.theme().border_faint)
             .text_color(cx.theme().text_muted)
-            .bg(cx.theme().surface_background)
+            .bg(cx.theme().surface_raised)
             .py_0p5()
             .px_1()
             .min_w_5()
             .text_center()
             .rounded_sm()
-            .line_height(relative(1.))
-            .text_xs()
+            .text_style(TextStyle::Caption)
             .whitespace_normal()
             .flex_shrink_0()
             .refine_style(&self.style)
