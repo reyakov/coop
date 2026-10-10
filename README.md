@@ -1,13 +1,5 @@
 Coop is a simple, fast, and reliable nostr client for secure messaging across all platforms.
 
-### Pasting into text fields
-
-Click a field and use Ctrl+V (Cmd+V on macOS), or right-click and choose Paste.
-Shift+Insert also pastes from the clipboard on Linux and Windows. On Linux,
-middle-click inserts the primary selection at the clicked position: select text
-in another application first, then middle-click the field. This also works in
-the identity import dialog.
-
 ### License
 
 Copyright (C) 2025 Ren Amamiya & other Coop contributors

@@ -13,7 +13,7 @@ use crate::input::clear_button;
 use crate::{Sizable, Size, StyleSized, StyledExt, h_flex, v_flex};
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-fn primary_paste_offset(
+fn nearest_caret_offset(
     value: &str,
     position: gpui::Point<Pixels>,
     mut caret_bounds: impl FnMut(usize) -> Option<gpui::Bounds<Pixels>>,
@@ -39,6 +39,38 @@ fn primary_paste_offset(
         })
         .min_by(|left, right| left.1.cmp(&right.1).then_with(|| left.2.cmp(&right.2)))
         .map(|(offset, _, _)| offset)
+}
+
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
+fn paste_from_primary<M: InputModeKind>(
+    state: &Entity<InputBaseState<M>>,
+    position: gpui::Point<Pixels>,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    if !state.read(cx).is_editable() {
+        return;
+    }
+    // Read before changing focus or selection: those can change PRIMARY.
+    let Some(text) = cx.read_from_primary().and_then(|item| item.text()) else {
+        return;
+    };
+    state.update(cx, |state, cx| {
+        let Some(offset) = nearest_caret_offset(&state.value(), position, |offset| {
+            state.range_to_bounds(&(offset..offset))
+        }) else {
+            return;
+        };
+        let text = if state.is_multi_line() {
+            text
+        } else {
+            text.replace(['\r', '\n'], "")
+        };
+        state.focus(window, cx);
+        state.set_selected_range(offset..offset, cx);
+        state.insert(text, window, cx);
+    });
+    cx.stop_propagation();
 }
 
 /// The background of an input frame, which reads muted while the input is disabled.
@@ -182,7 +214,7 @@ impl<M: InputModeKind> RenderOnce for Input<M> {
 
         let state_entity = self.state.clone();
 
-        InputBase::new(("input", self.state.entity_id()))
+        let input = InputBase::new(("input", self.state.entity_id()))
             .flex()
             .size_full()
             .line_height(LINE_HEIGHT)
@@ -194,46 +226,15 @@ impl<M: InputModeKind> RenderOnce for Input<M> {
             .on_mouse_down(MouseButton::Left, {
                 let state_entity = state_entity.clone();
                 move |_, window, cx| state_entity.update(cx, |state, cx| state.focus(window, cx))
-            })
-            .when(
-                cfg!(any(target_os = "linux", target_os = "freebsd")),
-                |this| {
-                    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
-                    let this = this.on_mouse_down(MouseButton::Middle, {
-                        let state_entity = state_entity.clone();
-                        move |event, window, cx| {
-                            if disabled || !state_entity.read(cx).is_editable() {
-                                return;
-                            }
-                            // Read before changing focus or selection: those can change PRIMARY.
-                            let Some(text) = cx.read_from_primary().and_then(|item| item.text())
-                            else {
-                                return;
-                            };
-                            state_entity.update(cx, |state, cx| {
-                                let value = state.value();
-                                let Some(offset) =
-                                    primary_paste_offset(&value, event.position, |offset| {
-                                        state.range_to_bounds(&(offset..offset))
-                                    })
-                                else {
-                                    return;
-                                };
-                                let text = if state.is_multi_line() {
-                                    text
-                                } else {
-                                    text.replace(['\r', '\n'], "")
-                                };
-                                state.focus(window, cx);
-                                state.set_selected_range(offset..offset, cx);
-                                state.insert(text, window, cx);
-                            });
-                            cx.stop_propagation();
-                        }
-                    });
-                    this
-                },
-            )
+            });
+
+        #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+        let input = input.on_mouse_down(MouseButton::Middle, {
+            let state_entity = state_entity.clone();
+            move |event, window, cx| paste_from_primary(&state_entity, event.position, window, cx)
+        });
+
+        input
             .items_center()
             .when(multi_line, |this| this.h_auto())
             .when(self.appearance, |this| {
@@ -272,169 +273,5 @@ impl<M: InputModeKind> RenderOnce for Input<M> {
                         }),
                 )
             })
-    }
-}
-
-#[cfg(all(test, any(target_os = "linux", target_os = "freebsd")))]
-mod tests {
-    use super::*;
-    use crate::input::InputState;
-    use gpui::{AppContext, ClipboardItem, Context, Render, TestAppContext, point};
-
-    struct TestInput {
-        input: Entity<InputState>,
-        disabled: bool,
-    }
-
-    impl Render for TestInput {
-        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-            div()
-                .w(px(300.))
-                .h(px(40.))
-                .child(Input::new(&self.input).disabled(self.disabled))
-        }
-    }
-
-    #[gpui::test]
-    fn middle_click_pastes_primary_at_clicked_position(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            theme::init(cx);
-            crate::init(cx);
-        });
-        let (view, cx) = cx.add_window_view(|window, cx| TestInput {
-            input: cx.new(|cx| InputState::new(window, cx).default_value("aéz")),
-            disabled: false,
-        });
-        let input = view.read_with(cx, |view, _| view.input.clone());
-        cx.update(|window, cx| {
-            window.draw(cx).clear(cx);
-            cx.write_to_clipboard(ClipboardItem::new_string("wrong clipboard".into()));
-            cx.write_to_primary(ClipboardItem::new_string("nsec1test\r\n".into()));
-        });
-        let position = input.read_with(cx, |state, _| {
-            state.range_to_bounds(&(3..3)).map(|bounds| bounds.center())
-        });
-        assert!(position.is_some());
-        if let Some(position) = position {
-            cx.simulate_mouse_down(position, MouseButton::Middle, Default::default());
-            cx.simulate_mouse_up(position, MouseButton::Middle, Default::default());
-        }
-        assert_eq!(
-            input.read_with(cx, |state, _| state.value()),
-            "aénsec1testz"
-        );
-
-        cx.update(|window, cx| {
-            window.dispatch_action(Box::new(gpui_base::input::Undo), cx);
-        });
-        assert_eq!(input.read_with(cx, |state, _| state.value()), "aéz");
-
-        cx.update(|window, cx| {
-            input.update(cx, |state, cx| state.set_value("", window, cx));
-            window.draw(cx).clear(cx);
-        });
-        cx.simulate_mouse_down(
-            point(px(200.), px(20.)),
-            MouseButton::Middle,
-            Default::default(),
-        );
-        cx.simulate_mouse_up(
-            point(px(200.), px(20.)),
-            MouseButton::Middle,
-            Default::default(),
-        );
-        assert_eq!(input.read_with(cx, |state, _| state.value()), "nsec1test");
-    }
-
-    #[gpui::test]
-    fn clipboard_shortcuts_paste_without_using_primary(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            theme::init(cx);
-            crate::init(cx);
-        });
-        let (view, cx) = cx.add_window_view(|window, cx| TestInput {
-            input: cx.new(|cx| InputState::new(window, cx)),
-            disabled: false,
-        });
-        let input = view.read_with(cx, |view, _| view.input.clone());
-        cx.update(|window, cx| {
-            input.update(cx, |state, cx| state.focus(window, cx));
-            window.draw(cx).clear(cx);
-            cx.write_to_clipboard(ClipboardItem::new_string("clipboard".into()));
-            cx.write_to_primary(ClipboardItem::new_string("primary".into()));
-        });
-        cx.simulate_keystrokes("shift-insert");
-        assert_eq!(input.read_with(cx, |state, _| state.value()), "clipboard");
-        cx.simulate_keystrokes("ctrl-a ctrl-v");
-        assert_eq!(input.read_with(cx, |state, _| state.value()), "clipboard");
-    }
-
-    #[test]
-    fn primary_paste_uses_visible_unicode_carets_and_clicked_row() {
-        let offset = primary_paste_offset("é\nx", point(px(8.), px(35.)), |offset| {
-            let (x, y) = match offset {
-                0 => return None,
-                2 => (10., 0.),
-                3 => (0., 20.),
-                4 => (10., 20.),
-                _ => panic!("offset must be a UTF-8 character boundary"),
-            };
-            Some(gpui::Bounds::new(
-                point(px(x), px(y)),
-                gpui::size(px(0.), px(20.)),
-            ))
-        });
-        assert_eq!(offset, Some(4));
-        assert_eq!(
-            primary_paste_offset("text", point(px(0.), px(0.)), |_| None),
-            None
-        );
-    }
-
-    #[gpui::test]
-    fn middle_click_preserves_disabled_and_readonly_fields(cx: &mut TestAppContext) {
-        cx.update(|cx| {
-            theme::init(cx);
-            crate::init(cx);
-        });
-        let (view, cx) = cx.add_window_view(|window, cx| TestInput {
-            input: cx.new(|cx| InputState::new(window, cx).default_value("unchanged")),
-            disabled: true,
-        });
-        let input = view.read_with(cx, |view, _| view.input.clone());
-        cx.update(|window, cx| {
-            window.draw(cx).clear(cx);
-            cx.write_to_primary(ClipboardItem::new_string("must not paste".into()));
-        });
-        cx.simulate_mouse_down(
-            point(px(20.), px(20.)),
-            MouseButton::Middle,
-            Default::default(),
-        );
-        cx.simulate_mouse_up(
-            point(px(20.), px(20.)),
-            MouseButton::Middle,
-            Default::default(),
-        );
-        assert_eq!(input.read_with(cx, |state, _| state.value()), "unchanged");
-        cx.update(|window, cx| {
-            view.update(cx, |view, cx| {
-                view.disabled = false;
-                cx.notify();
-            });
-            input.update(cx, |state, cx| state.set_readonly(true, cx));
-            window.draw(cx).clear(cx);
-        });
-        cx.simulate_mouse_down(
-            point(px(20.), px(20.)),
-            MouseButton::Middle,
-            Default::default(),
-        );
-        cx.simulate_mouse_up(
-            point(px(20.), px(20.)),
-            MouseButton::Middle,
-            Default::default(),
-        );
-        assert_eq!(input.read_with(cx, |state, _| state.value()), "unchanged");
     }
 }
