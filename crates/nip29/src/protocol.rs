@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::collections::hash_map::DefaultHasher;
 use std::fmt;
 use std::hash::{Hash, Hasher};
@@ -665,9 +666,10 @@ pub(crate) struct GroupList {
     entries: Vec<GroupListEntry>,
     /// The raw private section of the last seen list event.
     content: Option<String>,
-    /// Whether the content was decrypted in this session; an opaque section
-    /// (another client's encryption, or a refused decrypt) is carried verbatim.
+    /// Whether the content was decrypted in this session.
     readable: bool,
+    /// Tags written by other clients.
+    foreign: Vec<Tag>,
 }
 
 impl GroupList {
@@ -677,27 +679,35 @@ impl GroupList {
         }
 
         let mut entries = Vec::new();
+        let mut foreign = Vec::new();
 
-        for tag in event.tags.iter().filter(|tag| tag.kind() == "group") {
-            let fields = tag.as_slice();
+        for tag in event.tags.iter() {
+            match tag.kind() {
+                "group" => {
+                    let fields = tag.as_slice();
 
-            let (Some(id), Some(relay)) = (fields.get(1), fields.get(2)) else {
-                continue;
-            };
+                    let (Some(id), Some(relay)) = (fields.get(1), fields.get(2)) else {
+                        continue;
+                    };
 
-            let Ok(id) = GroupId::new(id.as_str()) else {
-                continue;
-            };
-            let Ok(relay) = RelayUrl::parse(relay.as_str()) else {
-                continue;
-            };
+                    let Ok(id) = GroupId::new(id.as_str()) else {
+                        continue;
+                    };
+                    let Ok(relay) = RelayUrl::parse(relay.as_str()) else {
+                        continue;
+                    };
 
-            entries.push(GroupListEntry {
-                id,
-                relay,
-                name: fields.get(3).cloned(),
-                private: false,
-            });
+                    entries.push(GroupListEntry {
+                        id,
+                        relay,
+                        name: fields.get(3).cloned(),
+                        private: false,
+                    });
+                }
+                // Rebuilt from the entries on publish.
+                "r" => {}
+                _ => foreign.push(tag.clone()),
+            }
         }
 
         let content = if event.content.is_empty() {
@@ -710,6 +720,7 @@ impl GroupList {
             entries,
             readable: content.is_none(),
             content,
+            foreign,
         })
     }
 
@@ -777,7 +788,8 @@ impl GroupList {
 
     /// The tags of the public section of the list event.
     pub(crate) fn public_tags(&self) -> Vec<Tag> {
-        let mut tags = Vec::with_capacity(self.entries.len() * 2);
+        let mut tags = self.foreign.clone();
+        tags.reserve(self.entries.len() * 2);
 
         for entry in &self.entries {
             if entry.private {
@@ -967,28 +979,41 @@ impl Activity {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct TimelineWindow(Vec<Event>);
+pub(crate) struct TimelineWindow {
+    events: Vec<Event>,
+    /// First 4 bytes of every event seen from this relay,
+    /// for `previous` reference checks.
+    seen: HashSet<u32>,
+}
 
 impl TimelineWindow {
     pub fn new() -> Self {
-        Self(Vec::new())
+        Self::default()
     }
 
     pub fn push(&mut self, event: Event) {
-        self.0.retain(|existing| existing.id != event.id);
-        let position = self.0.partition_point(|e| e.created_at > event.created_at);
+        self.seen.insert(prefix(event.id));
+        self.events.retain(|existing| existing.id != event.id);
+        let position = self
+            .events
+            .partition_point(|e| e.created_at > event.created_at);
 
-        self.0.insert(position, event);
-        self.0.truncate(TIMELINE_WINDOW);
+        self.events.insert(position, event);
+        self.events.truncate(TIMELINE_WINDOW);
+    }
+
+    /// Note an event as seen without keeping it in the window.
+    pub fn note(&mut self, event: &Event) {
+        self.seen.insert(prefix(event.id));
     }
 
     pub fn remove(&mut self, id: EventId) {
-        self.0.retain(|event| event.id != id);
+        self.events.retain(|event| event.id != id);
     }
 
     pub fn previous_tag(&self, me: PublicKey) -> Option<Tag> {
         let references: Vec<String> = self
-            .0
+            .events
             .iter()
             .filter(|event| event.pubkey != me)
             .take(PREVIOUS_REFS)
@@ -1000,5 +1025,122 @@ impl TimelineWindow {
         } else {
             Some(Tag::custom("previous", references))
         }
+    }
+
+    /// Whether every `previous` reference points at an event seen from this
+    /// relay. `None` when the event carries no `previous` tag. Mirrors the
+    /// relay-side rejection the spec expects, so a relay handing out
+    /// out-of-context events can be called out.
+    pub fn references_seen(&self, tag: Option<&Tag>) -> Option<bool> {
+        let values = tag?.as_slice().iter().skip(1);
+
+        for value in values {
+            let Ok(prefix) = u32::from_str_radix(value, 16) else {
+                return Some(false);
+            };
+
+            if !self.seen.contains(&prefix) {
+                return Some(false);
+            }
+        }
+
+        Some(true)
+    }
+}
+
+/// The first 8 hex characters of an event id, as a `previous` reference.
+fn prefix(id: EventId) -> u32 {
+    let bytes = id.as_bytes();
+    u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::LOCAL_KEYS;
+
+    fn event(kind: Kind, tags: Vec<Tag>) -> Event {
+        futures::executor::block_on(
+            EventBuilder::new(kind, "")
+                .tags(tags)
+                .finalize_async(&*LOCAL_KEYS),
+        )
+        .unwrap()
+    }
+
+    fn relay(url: &str) -> RelayUrl {
+        RelayUrl::parse(url).unwrap()
+    }
+
+    #[test]
+    fn public_tags_preserve_foreign_tags() {
+        let event = event(
+            Kind::SimpleGroups,
+            vec![
+                Tag::custom("group", ["pizza", "wss://relay.example", "Pizza Lovers"]),
+                Tag::custom("d", ["favorite-groups"]),
+                Tag::custom("client", ["nostord"]),
+                Tag::custom("r", ["wss://other.example"]),
+            ],
+        );
+
+        let mut list = GroupList::parse(&event).unwrap();
+        assert_eq!(list.entries().len(), 1);
+
+        list.upsert(GroupListEntry {
+            id: GroupId::new("sushi").unwrap(),
+            relay: relay("wss://relay2.example"),
+            name: None,
+            private: false,
+        });
+
+        let tags = list.public_tags();
+
+        // Foreign tags survive a republish...
+        assert!(tags.iter().any(|tag| tag.kind() == "d"
+            && tag.as_slice().get(1).map(String::as_str) == Some("favorite-groups")));
+        assert!(tags.iter().any(|tag| tag.kind() == "client"));
+
+        // ...while `group` and `r` tags are rebuilt from the entries.
+        assert_eq!(tags.iter().filter(|tag| tag.kind() == "group").count(), 2);
+        assert_eq!(tags.iter().filter(|tag| tag.kind() == "r").count(), 2);
+    }
+
+    #[test]
+    fn previous_references_validate_against_seen_events() {
+        let mut window = TimelineWindow::new();
+        let seen = event(Kind::ChatMessage, vec![Tag::custom("t", ["one"])]);
+        let other = event(Kind::ChatMessage, vec![Tag::custom("t", ["two"])]);
+
+        window.push(seen.clone());
+
+        let reference = |id: &EventId| {
+            let bytes = id.as_bytes();
+            Tag::custom(
+                "previous",
+                [format!(
+                    "{0:02x}{1:02x}{2:02x}{3:02x}",
+                    bytes[0], bytes[1], bytes[2], bytes[3]
+                )],
+            )
+        };
+
+        assert_eq!(
+            window.references_seen(Some(&reference(&seen.id))),
+            Some(true)
+        );
+        assert_eq!(
+            window.references_seen(Some(&reference(&other.id))),
+            Some(false)
+        );
+        assert_eq!(window.references_seen(None), None);
+
+        // Any number of references is allowed, including zero.
+        let empty = Tag::custom("previous", Vec::<String>::new());
+        assert_eq!(window.references_seen(Some(&empty)), Some(true));
+
+        // A malformed reference can't be verified.
+        let malformed = Tag::custom("previous", ["nothex"]);
+        assert_eq!(window.references_seen(Some(&malformed)), Some(false));
     }
 }

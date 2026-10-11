@@ -254,11 +254,17 @@ impl Sidebar {
     ) -> AnyElement {
         let hide_avatar = AppSettings::get_hide_avatar(cx);
         let persons = PersonRegistry::global(cx);
+
         let person = persons.read(cx).get(public_key, cx);
+        let group = group.clone();
+
         let public_key = *public_key;
         let member_is_admin = !roles.is_empty();
 
-        let group = group.clone();
+        let is_self = NostrRegistry::global(cx)
+            .read(cx)
+            .current_user()
+            .is_some_and(|me| me == public_key);
 
         Nav::new(public_key.to_hex())
             .label(person.name())
@@ -294,7 +300,7 @@ impl Sidebar {
                         cx.write_to_clipboard(ClipboardItem::new_string(npub));
                     }));
 
-                if !admin {
+                if !admin || is_self {
                     return menu;
                 }
 

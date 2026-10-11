@@ -580,11 +580,24 @@ impl Group {
 
     fn absorb(&mut self, event: &Event, me: PublicKey) -> Absorbed {
         if STATE_KINDS.contains(&event.kind) {
+            self.window.note(event);
+
             return if self.absorb_state(event, me) {
                 Absorbed::Updated
             } else {
                 Absorbed::Ignored
             };
+        }
+
+        // NIP-29: relays must reject events whose
+        // `previous` references are absent from their database.
+        let previous = event.tags.iter().find(|tag| tag.kind() == "previous");
+        if self.window.references_seen(previous) == Some(false) {
+            log::warn!(
+                "nip29: event {} carries previous references not seen on {}",
+                event.id,
+                self.key.relay()
+            );
         }
 
         self.track(event);
