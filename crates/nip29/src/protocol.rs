@@ -212,6 +212,12 @@ impl GroupId {
             .tag_maybe(previous)
     }
 
+    pub fn delete_group(&self, previous: Option<Tag>) -> EventBuilder {
+        EventBuilder::new(Kind::GroupDeleteGroup, "")
+            .tag(self.h_tag())
+            .tag_maybe(previous)
+    }
+
     pub fn create_invite(&self, code: &str, previous: Option<Tag>) -> EventBuilder {
         EventBuilder::new(Kind::GroupCreateInvite, "")
             .tag(self.h_tag())

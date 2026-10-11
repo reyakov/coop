@@ -105,6 +105,7 @@ pub fn actions(group: WeakEntity<Group>, cx: &App) -> AnyElement {
     let edit = group.clone();
     let invite = group.clone();
     let channel = group.clone();
+    let delete = group.clone();
     let leave = group;
 
     h_flex()
@@ -161,6 +162,16 @@ pub fn actions(group: WeakEntity<Group>, cx: &App) -> AnyElement {
                         );
                     }),
             )
+            .child(
+                Button::new("group-delete")
+                    .icon(IconName::CloseCircle)
+                    .tooltip("Delete group")
+                    .ghost()
+                    .small()
+                    .on_click(move |_event, window, cx| {
+                        confirm_delete(delete.clone(), window, cx);
+                    }),
+            )
         })
         .child(
             Button::new("leave")
@@ -206,6 +217,42 @@ pub fn confirm_leave(group: WeakEntity<Group>, window: &mut Window, cx: &mut App
                 registry.update(cx, |registry, cx| {
                     registry.leave(&key, cx);
                 });
+                true
+            })
+    });
+}
+
+pub fn confirm_delete(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) {
+    let Some(name) = group.read_with(cx, |group, _cx| group.display_name()).ok() else {
+        return;
+    };
+
+    let Some(key) = group.read_with(cx, |group, _cx| group.key().clone()).ok() else {
+        return;
+    };
+
+    window.open_dialog(cx, move |this, _window, _cx| {
+        let key = key.clone();
+
+        this.confirm()
+            .width(px(360.))
+            .title(format!("Delete {name}?"))
+            .button_props(
+                DialogButtonProps::default()
+                    .cancel_text("Cancel")
+                    .ok_text("Delete")
+                    .ok_variant(ButtonVariant::Danger),
+            )
+            .child(
+                div()
+                    .text_style(TextStyle::Callout)
+                    .child("The relay will remove this group for everyone."),
+            )
+            .on_ok(move |_event, window, cx| {
+                let registry = GroupsRegistry::global(cx);
+                let sent = registry.update(cx, |registry, cx| registry.delete_group(&key, cx));
+                report(window, cx, sent);
+
                 true
             })
     });
@@ -823,6 +870,7 @@ impl GroupPanel {
             message,
             content,
             show_author,
+            group.reactions(&message.id),
             message::Actions {
                 group: self.group.clone(),
                 panel: cx.weak_entity(),

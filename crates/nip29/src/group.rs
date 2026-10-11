@@ -28,6 +28,13 @@ enum Absorbed {
 }
 
 #[derive(Debug, Clone)]
+pub struct Reaction {
+    pub id: EventId,
+    pub emoji: String,
+    pub author: PublicKey,
+}
+
+#[derive(Debug, Clone)]
 pub enum Row {
     Message(Box<Message>),
     Activity(Activity),
@@ -78,6 +85,7 @@ pub struct Group {
     state_ids: HashMap<Kind, EventId>,
     rows: Vec<Row>,
     index: HashSet<EventId>,
+    reactions: HashMap<EventId, Vec<Reaction>>,
     leave_requests: HashMap<PublicKey, Timestamp>,
     window: TimelineWindow,
     oldest: Option<Timestamp>,
@@ -105,6 +113,7 @@ impl Group {
             state_ids: HashMap::new(),
             rows: Vec::new(),
             index: HashSet::new(),
+            reactions: HashMap::new(),
             leave_requests: HashMap::new(),
             window: TimelineWindow::new(),
             oldest: None,
@@ -180,6 +189,10 @@ impl Group {
         })
     }
 
+    pub fn reactions(&self, id: &EventId) -> &[Reaction] {
+        self.reactions.get(id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
     pub fn loading_more(&self) -> bool {
         self.loading_more
     }
@@ -247,6 +260,10 @@ impl Group {
         self.dispatch(move |gid, prev| gid.delete_event(id, prev), cx)
     }
 
+    pub fn delete_group(&mut self, cx: &mut Context<Self>) -> Task<Result<()>> {
+        self.dispatch(GroupId::delete_group, cx)
+    }
+
     pub fn create_invite(&mut self, code: &str, cx: &mut Context<Self>) -> Task<Result<()>> {
         self.dispatch(move |id, prev| id.create_invite(code, prev), cx)
     }
@@ -307,6 +324,15 @@ impl Group {
             cx.emit(GroupEvent::Updated);
             cx.notify();
         }
+    }
+
+    pub(crate) fn mark_member(&mut self, cx: &mut Context<Self>) {
+        if self.membership == Membership::Member {
+            return;
+        }
+        self.membership = Membership::Member;
+        cx.emit(GroupEvent::Updated);
+        cx.notify();
     }
 
     pub(crate) fn mark_refused(&mut self, reason: String, cx: &mut Context<Self>) {
@@ -504,6 +530,14 @@ impl Group {
         }
 
         self.rows.retain(|row| row.id() != id);
+        self.reactions.remove(&id);
+
+        for reactions in self.reactions.values_mut() {
+            reactions.retain(|reaction| reaction.id != id);
+        }
+
+        self.reactions.retain(|_, reactions| !reactions.is_empty());
+
         cx.emit(GroupEvent::Updated);
         cx.notify();
     }
@@ -538,6 +572,14 @@ impl Group {
             return Absorbed::Shown {
                 fresh: self.push_activity(event),
                 updated,
+            };
+        }
+
+        if event.kind == Kind::Reaction {
+            return if self.push_reaction(event) {
+                Absorbed::Updated
+            } else {
+                Absorbed::Ignored
             };
         }
 
@@ -622,6 +664,24 @@ impl Group {
             .partition_point(|row| row.created_at() <= message.created_at);
 
         self.rows.insert(position, Row::Message(Box::new(message)));
+
+        true
+    }
+
+    fn push_reaction(&mut self, event: &Event) -> bool {
+        let Some(target) = event.tags.event_ids().next() else {
+            return false;
+        };
+
+        if !self.index.insert(event.id) {
+            return false;
+        }
+
+        self.reactions.entry(target).or_default().push(Reaction {
+            id: event.id,
+            emoji: event.content.clone(),
+            author: event.pubkey,
+        });
 
         true
     }

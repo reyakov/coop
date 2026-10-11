@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use chat::Message;
 use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
@@ -5,11 +7,12 @@ use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ObjectFit, ParentElement, SharedString,
     SharedUri, Styled, StyledImage, WeakEntity, div, img, px,
 };
-use nip29::{Activity, Group};
-use nostr_sdk::prelude::{EventId, Kind};
+use nip29::{Activity, Group, Reaction};
+use nostr_sdk::prelude::{EventId, Kind, PublicKey};
 use person::PersonRegistry;
 use settings::AppSettings;
-use theme::{ActiveTheme, TextStyle, Typeset as _, bubble_radius};
+use state::NostrRegistry;
+use theme::{ActiveTheme, TextStyle, Typeset as _, bubble_radius, control_radius};
 use ui::avatar::Avatar;
 use ui::menu::{ContextMenu, PopupMenu, PopupMenuItem};
 use ui::message::MessageRow;
@@ -31,6 +34,7 @@ pub(crate) fn render(
     message: &Message,
     content: AnyElement,
     show_author: bool,
+    reactions: &[Reaction],
     actions: Actions,
     cx: &App,
 ) -> AnyElement {
@@ -51,6 +55,9 @@ pub(crate) fn render(
         .child(content)
         .when(!message.media.is_empty(), |this| {
             this.child(media(&message.media, cx))
+        })
+        .when(!reactions.is_empty(), |this| {
+            this.child(reaction_bar(reactions, cx))
         })
         .into_any_element();
 
@@ -203,6 +210,43 @@ fn action(activity: &Activity) -> String {
         Kind::GroupPutUser => format!("is now {}", activity.roles.join(", ")),
         _ => String::new(),
     }
+}
+
+fn reaction_bar(reactions: &[Reaction], cx: &App) -> AnyElement {
+    let me = NostrRegistry::global(cx).read(cx).current_user();
+
+    let mut grouped: BTreeMap<String, Vec<PublicKey>> = BTreeMap::new();
+
+    for reaction in reactions {
+        grouped
+            .entry(reaction.emoji.clone())
+            .or_default()
+            .push(reaction.author);
+    }
+
+    h_flex()
+        .mt_1()
+        .gap_1()
+        .children(grouped.into_iter().map(|(emoji, authors)| {
+            let mine = me.is_some_and(|me| authors.contains(&me));
+
+            h_flex()
+                .gap(px(theme::SPACE))
+                .py_0p5()
+                .px_1()
+                .rounded(px(control_radius()))
+                .text_style(TextStyle::Caption)
+                .border_1()
+                .when(mine, |this| {
+                    this.text_color(cx.theme().text)
+                        .bg(cx.theme().surface_raised)
+                        .border_color(cx.theme().element_active)
+                })
+                .when(!mine, |this| this.border_color(cx.theme().border))
+                .child(SharedString::from(emoji))
+                .child(SharedString::from(authors.len().to_string()))
+        }))
+        .into_any_element()
 }
 
 fn media(media: &[SharedUri], cx: &App) -> AnyElement {

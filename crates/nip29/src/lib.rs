@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use anyhow::{Error, Result};
+use anyhow::{Error, Result, anyhow};
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
@@ -186,11 +186,16 @@ impl GroupsRegistry {
         self.tasks.push(cx.spawn(async move |this, cx| {
             if let Err(error) = sent.await {
                 let reason = error.to_string();
+                let duplicate = reason.starts_with("duplicate");
 
                 if let Err(error) = this.update(cx, |this, cx| {
                     if let Some(group) = this.group(&key, cx) {
                         group.update(cx, |group, cx| {
-                            group.mark_refused(reason, cx);
+                            if duplicate {
+                                group.mark_member(cx);
+                            } else {
+                                group.mark_refused(reason, cx);
+                            }
                         });
                     }
                 }) {
@@ -410,6 +415,30 @@ impl GroupsRegistry {
             })
             .ok();
         }));
+    }
+
+    /// Ask the relay to delete the group (kind 9008).
+    pub fn delete_group(&mut self, key: &GroupKey, cx: &mut Context<Self>) -> Task<Result<()>> {
+        let Some(group) = self.group(key, cx) else {
+            return Task::ready(Err(anyhow!("nip29: group not found")));
+        };
+
+        let sent = group.update(cx, |group, cx| group.delete_group(cx));
+        let key = key.clone();
+
+        cx.spawn(async move |this, cx| {
+            let result = sent.await;
+
+            if result.is_ok()
+                && let Err(error) = this.update(cx, |this, cx| {
+                    this.forget(key, cx);
+                })
+            {
+                log::warn!("forgetting the deleted group failed: {error}");
+            }
+
+            result
+        })
     }
 
     pub(crate) fn reset(&mut self, cx: &mut Context<Self>) {
