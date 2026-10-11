@@ -455,6 +455,19 @@ impl GroupPanel {
         });
     }
 
+    fn scroll_to(&self, id: &EventId, cx: &App) {
+        let Some(group) = self.group.upgrade() else {
+            return;
+        };
+
+        let rows = group.read(cx).rows();
+
+        if let Some(ix) = rows.iter().position(|row| row.id() == *id) {
+            // The welcome and load-older rows precede the messages.
+            self.list_state.scroll_to_reveal_item(ix + 2);
+        }
+    }
+
     fn start_reply(&mut self, id: EventId, window: &mut Window, cx: &mut Context<Self>) {
         self.reply_to = Some(id);
         self.input.update(cx, |input, cx| {

@@ -5,7 +5,7 @@ use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, InteractiveElement, IntoElement, ObjectFit, ParentElement, SharedString,
-    SharedUri, Styled, StyledImage, WeakEntity, div, img, px,
+    SharedUri, StatefulInteractiveElement, Styled, StyledImage, WeakEntity, div, img, px,
 };
 use nip29::{Activity, Group, Reaction};
 use nostr_sdk::prelude::{EventId, Kind, PublicKey};
@@ -52,8 +52,13 @@ pub(crate) fn render(
         )
         .author(author.name())
         .timestamp(message.created_at.to_human_time())
-        .when_some(message.replies_to.first().copied(), |this, target| {
-            this.child(reply_context(target, &actions.group, cx))
+        .when(!message.replies_to.is_empty(), |this| {
+            this.children(replies(
+                &message.replies_to,
+                &actions.group,
+                &actions.panel,
+                cx,
+            ))
         })
         .child(content)
         .when(!message.media.is_empty(), |this| {
@@ -258,56 +263,58 @@ fn reaction_bar(reactions: &[Reaction], cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-fn reply_context(target: EventId, group: &WeakEntity<Group>, cx: &App) -> AnyElement {
-    let context = group.upgrade().and_then(|entity| {
-        entity.read_with(cx, |group, cx| {
-            let message = group.message(target)?;
+fn replies(
+    targets: &[EventId],
+    group: &WeakEntity<Group>,
+    panel: &WeakEntity<GroupPanel>,
+    cx: &App,
+) -> Vec<AnyElement> {
+    let Some(entity) = group.upgrade() else {
+        return Vec::new();
+    };
+
+    let mut items = Vec::with_capacity(targets.len());
+
+    for (ix, id) in targets.iter().enumerate() {
+        let context = entity.read_with(cx, |group, cx| {
+            let message = group.message(*id)?;
             let persons = PersonRegistry::global(cx);
             let author = persons.read(cx).get(&message.author, cx);
-            let line = message.content.lines().next().unwrap_or_default().trim();
 
-            Some((
-                author.name(),
-                SharedString::from(line.chars().take(80).collect::<String>()),
-            ))
-        })
-    });
+            Some((author.name(), message.preview()))
+        });
 
-    let (author, snippet) = context.unwrap_or_else(|| {
-        (
-            SharedString::from("Message"),
-            SharedString::from("original not loaded"),
-        )
-    });
+        let (author, preview) = context.unwrap_or_else(|| {
+            (
+                SharedString::from("Message"),
+                SharedString::from("original not loaded"),
+            )
+        });
 
-    h_flex()
-        .min_w_0()
-        .gap_1()
-        .items_center()
-        .child(
-            Icon::new(IconName::Reply)
-                .small()
-                .text_color(cx.theme().text_faint),
-        )
-        .child(
+        let id = *id;
+        let panel = panel.clone();
+
+        items.push(
             div()
-                .flex_shrink_0()
-                .max_w(px(120.))
-                .truncate()
-                .font_semibold()
-                .text_style(TextStyle::Caption)
-                .text_color(cx.theme().text_muted)
-                .child(author),
-        )
-        .child(
-            div()
-                .min_w_0()
-                .truncate()
-                .text_style(TextStyle::Caption)
-                .text_color(cx.theme().text_faint)
-                .child(snippet),
-        )
-        .into_any_element()
+                .id(ix)
+                .w_full()
+                .px_2()
+                .border_l_2()
+                .border_color(cx.theme().element_active)
+                .text_style(TextStyle::Callout)
+                .child(div().font_semibold().child(author))
+                .child(div().w_full().text_ellipsis().line_clamp(1).child(preview))
+                .hover(|this| this.bg(cx.theme().surface_raised))
+                .on_click(move |_event, _window, cx| {
+                    let _ = panel.update(cx, |panel, cx| {
+                        panel.scroll_to(&id, cx);
+                    });
+                })
+                .into_any_element(),
+        );
+    }
+
+    items
 }
 
 fn media(media: &[SharedUri], cx: &App) -> AnyElement {

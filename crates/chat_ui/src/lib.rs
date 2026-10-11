@@ -1755,9 +1755,7 @@ impl ChatPanel {
                 .border_l_2()
                 .border_color(cx.theme().element_active)
                 .child(
-                    div()
-                        .flex()
-                        .items_center()
+                    h_flex()
                         .justify_between()
                         .child(
                             div()
