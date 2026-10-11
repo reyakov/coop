@@ -370,26 +370,36 @@ impl RenderOnce for MessageMedia {
 /// Reactions of one emoji with the count of authors and whether the current user reacted.
 pub struct ReactionGroup {
     pub emoji: SharedString,
+    /// Image of a custom emoji (NIP-30) reaction
+    pub image: Option<SharedUri>,
     pub count: usize,
     pub mine: bool,
 }
 
-/// Group (emoji, author) pairs by emoji, sorted by emoji, marking groups containing `me`.
+/// Group (emoji, image, author) triples by emoji, sorted by emoji.
 pub fn group_reactions<A: PartialEq>(
-    reactions: impl IntoIterator<Item = (SharedString, A)>,
+    reactions: impl IntoIterator<Item = (SharedString, Option<SharedUri>, A)>,
     me: Option<A>,
 ) -> Vec<ReactionGroup> {
-    let mut groups: BTreeMap<SharedString, (usize, bool)> = BTreeMap::new();
+    let mut groups: BTreeMap<SharedString, (usize, bool, Option<SharedUri>)> = BTreeMap::new();
 
-    for (emoji, author) in reactions {
+    for (emoji, image, author) in reactions {
         let group = groups.entry(emoji).or_default();
         group.0 += 1;
         group.1 |= me.as_ref() == Some(&author);
+        if group.2.is_none() {
+            group.2 = image;
+        }
     }
 
     groups
         .into_iter()
-        .map(|(emoji, (count, mine))| ReactionGroup { emoji, count, mine })
+        .map(|(emoji, (count, mine, image))| ReactionGroup {
+            emoji,
+            image,
+            count,
+            mine,
+        })
         .collect()
 }
 
@@ -438,7 +448,10 @@ impl RenderOnce for ReactionBar {
                             .border_color(cx.theme().element_active)
                     })
                     .when(!group.mine, |this| this.border_color(cx.theme().border))
-                    .child(group.emoji)
+                    .when(group.image.is_none(), |this| this.child(group.emoji))
+                    .when_some(group.image, |this, image| {
+                        this.child(img(image).size(px(16.)).flex_shrink_0())
+                    })
                     .child(SharedString::from(group.count.to_string()))
             }))
     }

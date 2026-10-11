@@ -110,18 +110,27 @@ impl GroupId {
         &self,
         content: &str,
         replies: &[EventId],
+        emojis: &[Tag],
         previous: Option<Tag>,
     ) -> EventBuilder {
         EventBuilder::new(Kind::ChatMessage, content)
             .tag(self.h_tag())
             .tags(replies.iter().copied().map(Tag::event))
+            .tags(emojis.iter().cloned())
             .tag_maybe(previous)
     }
 
-    pub fn reaction(&self, target: EventId, emoji: &str, previous: Option<Tag>) -> EventBuilder {
+    pub fn reaction(
+        &self,
+        target: EventId,
+        emoji: &str,
+        emojis: &[Tag],
+        previous: Option<Tag>,
+    ) -> EventBuilder {
         EventBuilder::new(Kind::Reaction, emoji)
             .tag(self.h_tag())
             .tag(Tag::event(target))
+            .tags(emojis.iter().cloned())
             .tag_maybe(previous)
     }
 

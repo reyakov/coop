@@ -886,7 +886,15 @@ impl GroupPanel {
         let content = self
             .rendered_texts_by_id
             .entry(message.id)
-            .or_insert_with(|| rendered_text(&message.content, &message.mentions, &persons, cx))
+            .or_insert_with(|| {
+                rendered_text(
+                    &message.content,
+                    &message.mentions,
+                    &message.emojis,
+                    &persons,
+                    cx,
+                )
+            })
             .element(ix.into(), window, cx);
 
         let admin = nostr

@@ -1,8 +1,8 @@
 use std::ops::Range;
 
 use gpui::{
-    AnyElement, App, ElementId, HighlightStyle, IntoElement, SharedString, StyleRefinement,
-    Styled as _, Window,
+    AnyElement, App, ElementId, HighlightStyle, IntoElement, SharedString, SharedUri,
+    StyleRefinement, Styled as _, Window,
 };
 use gpui_base::{TextView, TextViewStyle};
 use theme::ActiveTheme as _;
@@ -12,6 +12,8 @@ use theme::ActiveTheme as _;
 pub struct InlineReplacement {
     pub range: Range<usize>,
     pub text: SharedString,
+    /// When set, the span renders as this image (NIP-30 custom emoji)
+    pub image: Option<SharedUri>,
 }
 
 impl InlineReplacement {
@@ -19,6 +21,19 @@ impl InlineReplacement {
         Self {
             range,
             text: text.into(),
+            image: None,
+        }
+    }
+
+    pub fn image(
+        range: Range<usize>,
+        alt: impl Into<SharedString>,
+        url: impl Into<SharedUri>,
+    ) -> Self {
+        Self {
+            range,
+            text: alt.into(),
+            image: Some(url.into()),
         }
     }
 }
@@ -46,11 +61,17 @@ impl RenderedText {
             }
 
             text.push_str(&content[last..range.start]);
-            text.push_str(&format!(
-                "[{}](<{}>)",
-                escape_link_text(&replacement.text),
-                &content[range.start..range.end]
-            ));
+            match &replacement.image {
+                Some(url) => text.push_str(&format!(
+                    "![{}](<{url}>)",
+                    escape_link_text(&replacement.text)
+                )),
+                None => text.push_str(&format!(
+                    "[{}](<{}>)",
+                    escape_link_text(&replacement.text),
+                    &content[range.start..range.end]
+                )),
+            }
             last = range.end;
         }
         text.push_str(&content[last..]);

@@ -43,9 +43,13 @@ pub(crate) fn render(
     let author = persons.read(cx).get(&message.author, cx);
 
     let reaction_groups = group_reactions(
-        reactions
-            .iter()
-            .map(|reaction| (SharedString::from(reaction.emoji.as_str()), reaction.author)),
+        reactions.iter().map(|reaction| {
+            (
+                SharedString::from(reaction.emoji.as_str()),
+                reaction.image.clone(),
+                reaction.author,
+            )
+        }),
         nostr.read(cx).current_user(),
     );
 
@@ -100,7 +104,7 @@ pub(crate) fn render(
                     let group = group.clone();
                     let panel = panel.clone();
 
-                    move |menu, _window, _cx| react_menu(menu, group.clone(), panel.clone(), id)
+                    move |menu, _window, cx| react_menu(menu, group.clone(), panel.clone(), id, cx)
                 });
 
             if !admin {
@@ -140,8 +144,9 @@ fn react_menu(
     group: WeakEntity<Group>,
     panel: WeakEntity<GroupPanel>,
     id: EventId,
+    cx: &App,
 ) -> PopupMenu {
-    REACTIONS.iter().fold(menu, |menu, emoji| {
+    let menu = REACTIONS.iter().fold(menu, |menu, emoji| {
         let emoji = *emoji;
         let group = group.clone();
         let panel = panel.clone();
@@ -150,6 +155,28 @@ fn react_menu(
             PopupMenuItem::new(emoji).on_click(move |_event, _window, cx| {
                 if let Err(error) = panel.update_in(cx, |panel, window, cx| {
                     panel.react(group.clone(), id, emoji.to_owned(), window, cx);
+                }) {
+                    log::warn!("nip29: sending a reaction failed: {error}");
+                }
+            }),
+        )
+    });
+
+    let emojis = PersonRegistry::current_emojis(cx);
+    if emojis.is_empty() {
+        return menu;
+    }
+
+    let menu = menu.separator();
+    emojis.into_iter().fold(menu, |menu, (shortcode, _)| {
+        let emoji = format!(":{shortcode}:");
+        let group = group.clone();
+        let panel = panel.clone();
+
+        menu.item(
+            PopupMenuItem::new(emoji.clone()).on_click(move |_event, _window, cx| {
+                if let Err(error) = panel.update_in(cx, |panel, window, cx| {
+                    panel.react(group.clone(), id, emoji.clone(), window, cx);
                 }) {
                     log::warn!("nip29: sending a reaction failed: {error}");
                 }

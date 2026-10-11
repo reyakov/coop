@@ -1,7 +1,7 @@
 use std::hash::Hash;
 use std::ops::Range;
 
-use common::{EventExt, NostrParser, extract_and_remove_media_urls};
+use common::{EventExt, NostrParser, emojis_from_tags, extract_and_remove_media_urls};
 use gpui::{SharedString, SharedUri};
 use nostr_sdk::prelude::*;
 use state::FileAttachment;
@@ -22,6 +22,8 @@ pub struct Message {
     pub created_at: Timestamp,
     /// List of mentioned public keys in the message
     pub mentions: Vec<Mention>,
+    /// Custom emoji (NIP-30) declared by this message's `emoji` tags
+    pub emojis: Vec<(String, Url)>,
     /// List of event of the message this message is a reply to
     pub replies_to: Vec<EventId>,
     /// Encrypted file attachment
@@ -85,6 +87,7 @@ fn from_parts(
     let has_file = file.is_some();
 
     let replies_to = extract_reply_ids(tags);
+    let emojis = emojis_from_tags(tags);
 
     // For file messages `.content` is the encrypted blob URL, not text or media
     let mentions = if has_file {
@@ -106,6 +109,7 @@ fn from_parts(
         media,
         created_at,
         mentions,
+        emojis,
         replies_to,
         file,
     }
@@ -145,6 +149,13 @@ impl Message {
         }
 
         self.content.clone().into()
+    }
+
+    /// Image URL of a `:shortcode:` reaction, if the shortcode is declared
+    pub fn reaction_image(content: &str, emojis: &[(String, Url)]) -> Option<Url> {
+        let shortcode = content.strip_prefix(':')?.strip_suffix(':')?;
+        let (_, url) = emojis.iter().find(|(name, _)| name == shortcode)?;
+        Some(url.clone())
     }
 }
 
@@ -225,4 +236,51 @@ fn extract_reply_ids(inner: &Tags) -> Vec<EventId> {
     }
 
     replies_to
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rumor(kind: Kind, content: &str, tags: Tags) -> UnsignedEvent {
+        let sender = Keys::generate();
+
+        let mut rumor = EventBuilder::new(kind, content)
+            .tags(tags)
+            .finalize_unsigned(sender.public_key());
+        rumor.ensure_id();
+        rumor
+    }
+
+    fn emoji_tag(shortcode: &str, url: &str) -> Tag {
+        Tag::parse(vec!["emoji", shortcode, url]).expect("valid emoji tag")
+    }
+
+    #[test]
+    fn message_parses_emoji_tags() {
+        let tags = Tags::from_list(vec![emoji_tag(
+            "soapbox",
+            "https://example.com/soapbox.png",
+        )]);
+
+        let message = Message::from(&rumor(Kind::PrivateDirectMessage, "hi :soapbox:", tags));
+
+        assert_eq!(message.emojis.len(), 1);
+        assert_eq!(message.emojis[0].0, "soapbox");
+    }
+
+    #[test]
+    fn reaction_image_matches_declared_shortcode() {
+        let emojis = vec![(
+            String::from("soapbox"),
+            Url::parse("https://example.com/soapbox.png").unwrap(),
+        )];
+
+        assert_eq!(
+            Message::reaction_image(":soapbox:", &emojis),
+            Some(Url::parse("https://example.com/soapbox.png").unwrap())
+        );
+        assert_eq!(Message::reaction_image("😂", &emojis), None);
+        assert_eq!(Message::reaction_image(":unknown:", &emojis), None);
+    }
 }

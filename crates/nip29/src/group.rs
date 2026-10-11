@@ -3,8 +3,10 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use chat::Message;
-use gpui::{App, AppContext, Context, EventEmitter, SharedString, Task};
+use common::emojis_from_tags;
+use gpui::{App, AppContext, Context, EventEmitter, SharedString, SharedUri, Task};
 use nostr_sdk::prelude::*;
+use person::PersonRegistry;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
 
@@ -31,6 +33,7 @@ enum Absorbed {
 pub struct Reaction {
     pub id: EventId,
     pub emoji: String,
+    pub image: Option<SharedUri>,
     pub author: PublicKey,
 }
 
@@ -233,7 +236,11 @@ impl Group {
         replies: Vec<EventId>,
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
-        self.dispatch(move |id, prev| id.message(content, &replies, prev), cx)
+        let emojis = PersonRegistry::emoji_tags(content, cx);
+        self.dispatch(
+            move |id, prev| id.message(content, &replies, &emojis, prev),
+            cx,
+        )
     }
 
     pub fn send_reaction(
@@ -242,7 +249,11 @@ impl Group {
         emoji: String,
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
-        self.dispatch(move |id, prev| id.reaction(target, &emoji, prev), cx)
+        let emojis = PersonRegistry::emoji_tags(&emoji, cx);
+        self.dispatch(
+            move |id, prev| id.reaction(target, &emoji, &emojis, prev),
+            cx,
+        )
     }
 
     pub fn remove_user(
@@ -756,9 +767,14 @@ impl Group {
             return false;
         }
 
+        let emojis = emojis_from_tags(&event.tags);
+        let image = Message::reaction_image(&event.content, &emojis)
+            .map(|url| SharedUri::from(url.to_string()));
+
         self.reactions.entry(target).or_default().push(Reaction {
             id: event.id,
             emoji: event.content.clone(),
+            image,
             author: event.pubkey,
         });
 

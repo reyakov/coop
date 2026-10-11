@@ -10,13 +10,12 @@ use state::Announcement;
 pub struct Person {
     /// Public Key
     public_key: PublicKey,
-
     /// Metadata (profile)
     metadata: Metadata,
-
+    /// Custom emoji (NIP-30) from the person's emoji list
+    emojis: Vec<(String, Url)>,
     /// Dekey (NIP-4e) announcement
     announcement: Option<Announcement>,
-
     /// Messaging relays
     messaging_relays: Vec<RelayUrl>,
 }
@@ -52,6 +51,7 @@ impl Person {
         Self {
             public_key,
             metadata,
+            emojis: vec![],
             announcement: None,
             messaging_relays: vec![],
         }
@@ -80,6 +80,36 @@ impl Person {
     /// Get profile metadata
     pub fn metadata(&self) -> Metadata {
         self.metadata.clone()
+    }
+
+    /// Custom emoji (NIP-30) as (shortcode, image url) pairs
+    pub fn emojis(&self) -> &[(String, Url)] {
+        &self.emojis
+    }
+
+    /// Set custom emoji from the person's emoji list
+    pub(crate) fn set_emojis(&mut self, emojis: Vec<(String, Url)>) {
+        self.emojis = emojis;
+    }
+
+    /// Build custom emoji from the person's emoji list
+    pub(crate) fn with_emojis(mut self, emojis: Vec<(String, Url)>) -> Self {
+        self.emojis = emojis;
+        self
+    }
+
+    /// An `emoji` tag for every custom emoji referenced as `:shortcode:` in `content`
+    pub fn emoji_tags(&self, content: &str) -> Vec<Tag> {
+        let mut tags = Vec::new();
+
+        for (shortcode, url) in &self.emojis {
+            let pattern = format!(":{shortcode}:");
+            if content.contains(&pattern) {
+                tags.push(Tag::custom("emoji", [shortcode.clone(), url.to_string()]));
+            }
+        }
+
+        tags
     }
 
     /// Get profile encryption keys announcement

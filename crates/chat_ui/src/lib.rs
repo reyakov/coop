@@ -5,14 +5,15 @@ use std::sync::{Arc, LazyLock, RwLock};
 pub use actions::*;
 use anyhow::Error;
 use chat::{ChatRegistry, Message, Room, RoomEvent, SendReport};
-use common::TimestampExt;
+use common::{TimestampExt, emojis_from_tags};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, MouseButton,
-    ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, StatefulInteractiveElement,
-    Styled, StyledImage, Subscription, SystemNotification, SystemNotificationAction, Task,
-    WeakEntity, Window, div, img, list, px, red, relative, retain_all, svg, white,
+    ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, SharedUri,
+    StatefulInteractiveElement, Styled, StyledImage, Subscription, SystemNotification,
+    SystemNotificationAction, Task, WeakEntity, Window, div, img, list, px, red, relative,
+    retain_all, svg, white,
 };
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
@@ -52,6 +53,10 @@ const PRIVATE_NOTICE: &str =
 static EMOJI_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[\p{Emoji}\u{200D}\u{FE0F}\u{20E3}]+$").unwrap());
 
+/// Regex matching a single custom emoji reference, like `:soapbox:`
+static CUSTOM_EMOJI_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^:[A-Za-z0-9_-]+:$").unwrap());
+
 mod actions;
 mod file;
 pub mod text;
@@ -78,7 +83,7 @@ pub struct ChatPanel {
     message_index: HashMap<EventId, usize>,
 
     /// All reactions
-    reactions: BTreeMap<EventId, Vec<(SharedString, PublicKey)>>,
+    reactions: BTreeMap<EventId, Vec<(SharedString, Option<SharedUri>, PublicKey)>>,
 
     /// Mapping message ids to their rendered texts
     rendered_texts_by_id: BTreeMap<EventId, RenderedText>,
@@ -330,7 +335,7 @@ impl ChatPanel {
         // If replying to exactly one message with only a valid emoji,
         // send as a reaction instead of a text message
         if replies.len() == 1
-            && EMOJI_RE.is_match(&content)
+            && (EMOJI_RE.is_match(&content) || CUSTOM_EMOJI_RE.is_match(&content))
             && self.attachments.read(cx).is_empty()
             && files.is_empty()
         {
@@ -535,11 +540,16 @@ impl ChatPanel {
             return;
         }
 
+        let emojis = emojis_from_tags(&event.tags);
+        let image = Message::reaction_image(&event.content, &emojis)
+            .map(|url| SharedUri::from(url.to_string()));
+
         for id in event.tags.event_ids() {
-            self.reactions
-                .entry(id)
-                .or_default()
-                .push((SharedString::from(&event.content), event.pubkey));
+            self.reactions.entry(id).or_default().push((
+                SharedString::from(&event.content),
+                image.clone(),
+                event.pubkey,
+            ));
         }
 
         cx.notify();
@@ -563,7 +573,7 @@ impl ChatPanel {
     }
 
     /// Get a reaction by its target ID (returns reference, no allocation)
-    fn reaction(&self, id: &EventId) -> &[(SharedString, PublicKey)] {
+    fn reaction(&self, id: &EventId) -> &[(SharedString, Option<SharedUri>, PublicKey)] {
         self.reactions.get(id).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
@@ -1081,7 +1091,13 @@ impl ChatPanel {
                 .rendered_texts_by_id
                 .entry(message.id)
                 .or_insert_with(|| {
-                    text::rendered_text(&message.content, &message.mentions, &persons, cx)
+                    text::rendered_text(
+                        &message.content,
+                        &message.mentions,
+                        &message.emojis,
+                        &persons,
+                        cx,
+                    )
                 })
                 .element(ix.into(), window, cx);
 
@@ -1741,15 +1757,23 @@ impl ChatPanel {
             })
     }
 
-    fn render_emoji_menu(&self, _window: &Window, _cx: &Context<Self>) -> impl IntoElement {
+    fn render_emoji_menu(&self, _window: &Window, cx: &Context<Self>) -> impl IntoElement {
+        let emojis = PersonRegistry::current_emojis(cx);
+
         Button::new("emoji")
             .icon(IconName::Emoji)
             .ghost()
             .large()
             .dropdown_menu_with_anchor(gpui::Anchor::BottomLeft, move |this, _window, _cx| {
-                let menu = this.horizontal();
-                REACTION_EMOJIS.iter().fold(menu, |this, emoji| {
-                    this.menu(*emoji, Box::new(Command::Insert(emoji)))
+                let menu = REACTION_EMOJIS
+                    .iter()
+                    .fold(this.horizontal(), |this, emoji| {
+                        this.menu(*emoji, Box::new(Command::Insert(emoji.to_string())))
+                    });
+
+                emojis.iter().fold(menu, |this, (shortcode, _)| {
+                    let label = format!(":{shortcode}:");
+                    this.menu(label.clone(), Box::new(Command::Insert(label)))
                 })
             })
     }

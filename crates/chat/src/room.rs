@@ -405,8 +405,11 @@ impl Room {
 
         // Construct a direct message rumor event
         // WARNING: never sign and send this event to relays
+        let mut tags = self.conversation_tags(&replies, sender, cx);
+        tags.extend(PersonRegistry::emoji_tags(&content, cx));
+
         let mut event = EventBuilder::new(kind, content)
-            .tags(self.conversation_tags(&replies, sender, cx))
+            .tags(tags)
             .finalize_unsigned(sender);
 
         // Ensure that the ID is set

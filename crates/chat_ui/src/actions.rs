@@ -6,7 +6,7 @@ use settings::SignerKind;
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
 #[action(namespace = chat, no_json)]
 pub enum Command {
-    Insert(&'static str),
+    Insert(String),
     ChangeSubject(String),
     ChangeSigner(SignerKind),
     ToggleBackup,
