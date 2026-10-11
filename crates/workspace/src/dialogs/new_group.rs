@@ -1,24 +1,26 @@
 use anyhow::Error;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, AppContext, Context, Div, Entity, InteractiveElement as _, IntoElement,
+    App, AppContext, Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement,
     ParentElement, PathPromptOptions, Render, SharedString, StatefulInteractiveElement as _,
-    Styled, Subscription, Task, WeakEntity, Window, div, px,
+    Styled, Subscription, Task, WeakEntity, Window, div, px, rems,
 };
+use gpui_base::{Popup, Select};
 use nip29::{GroupCreateOptions, GroupKey, GroupsEvent, GroupsRegistry};
 use nostr_sdk::prelude::*;
 use settings::AppSettings;
-use state::{NostrRegistry, upload};
-use theme::{ActiveTheme, TextStyle, Typeset as _, control_radius};
+use state::upload;
+use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius, control_radius};
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
 use ui::dock::{DockArea, DockPlacement, PanelHandle};
 use ui::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::switch::Switch;
-use ui::{Disableable, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::{
+    Disableable, Icon, IconName, Sizable, StyledExt, WindowExtension, divider, h_flex, v_flex,
+};
 
-const SUGGESTED_RELAY: &str = "wss://relay.ditto.pub";
+const DEFAULT_RELAYS: [&str; 2] = ["wss://relay.ditto.net", "wss://chat.wisp.talk"];
 const PRIVATE_DESC: &str = "Only members can read group messages";
 const CLOSED_DESC: &str = "Join requests are ignored (invite-only)";
 const RESTRICTED_DESC: &str = "Only members can post messages";
@@ -57,7 +59,7 @@ fn open_with(
                 "Create a Group"
             };
 
-            this.width(px(440.)).title(title).child(view.clone())
+            this.width(px(460.)).title(title).child(view.clone())
         }
     });
 }
@@ -67,15 +69,15 @@ struct NewGroup {
     /// The parent group when creating a channel; the relay is locked to its own.
     parent: Option<GroupKey>,
     name_input: Entity<InputState>,
-    id_input: Entity<InputState>,
     about_input: Entity<TextareaState>,
     custom_relay_input: Entity<InputState>,
-    /// The relays offered in the dropdown.
+    /// The relays offered in the relay select.
     relays: Vec<RelayUrl>,
     /// The selected relay; `None` selects the custom relay field.
     selected_relay: Option<RelayUrl>,
-    /// Whether the optional custom group id input is shown.
-    show_custom_id: bool,
+    /// Whether the relay select popup is open.
+    relay_select_open: bool,
+    relay_options_focus: FocusHandle,
     /// Keep the group in the NIP-44 encrypted section of the user's group list.
     list_private: bool,
     /// The uploaded group picture, ready to be published with the metadata.
@@ -100,7 +102,6 @@ impl NewGroup {
         cx: &mut Context<Self>,
     ) -> Self {
         let name_input = cx.new(|cx| InputState::new(window, cx).placeholder("#example"));
-        let id_input = cx.new(|cx| InputState::new(window, cx).placeholder("my-group"));
 
         let custom_relay_input =
             cx.new(|cx| InputState::new(window, cx).placeholder("relay.example.com"));
@@ -111,13 +112,18 @@ impl NewGroup {
                 .placeholder("What is this group about?")
         });
 
-        let relays = match RelayUrl::parse(SUGGESTED_RELAY) {
-            Ok(relay) => vec![relay],
-            Err(error) => {
-                log::warn!("the suggested group relay is invalid: {error}");
-                Vec::new()
-            }
-        };
+        let relay_options_focus = cx.focus_handle();
+
+        let relays: Vec<RelayUrl> = DEFAULT_RELAYS
+            .iter()
+            .filter_map(|url| match RelayUrl::parse(url) {
+                Ok(relay) => Some(relay),
+                Err(error) => {
+                    log::warn!("the default group relay {url} is invalid: {error}");
+                    None
+                }
+            })
+            .collect();
         let selected_relay = relays.first().cloned();
 
         let registry = GroupsRegistry::global(cx);
@@ -152,24 +158,16 @@ impl NewGroup {
             ));
         }
 
-        // Load the user's relays once the view is mounted; a channel's relay
-        // is locked to its parent's, so there is nothing to pick.
-        if parent.is_none() {
-            cx.defer_in(window, |this, window, cx| {
-                this.load_relays(window, cx);
-            });
-        }
-
         Self {
             dock,
             parent,
             name_input,
-            id_input,
             about_input,
             custom_relay_input,
             relays,
             selected_relay,
-            show_custom_id: false,
+            relay_select_open: false,
+            relay_options_focus,
             list_private: false,
             picture: None,
             uploading: false,
@@ -182,51 +180,6 @@ impl NewGroup {
             tasks: vec![],
             _subscriptions: subscriptions,
         }
-    }
-
-    /// Load the signed-in user's relay list.
-    fn load_relays(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-
-        let Some(public_key) = nostr.read(cx).current_user() else {
-            return;
-        };
-
-        let task: Task<Result<Vec<RelayUrl>, Error>> = cx.background_spawn(async move {
-            let filter = Filter::new()
-                .kind(Kind::RelayList)
-                .author(public_key)
-                .limit(1);
-
-            if let Some(event) = client.database().query(filter).await?.into_iter().next() {
-                Ok(nip65::extract_relay_list(&event)
-                    .map(|(url, _)| url)
-                    .collect())
-            } else {
-                Ok(Vec::new())
-            }
-        });
-
-        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            let relays = task.await?;
-
-            this.update(cx, |this, cx| {
-                if !relays.is_empty() {
-                    this.relays = relays;
-                }
-
-                this.selected_relay = this
-                    .selected_relay
-                    .take()
-                    .filter(|selected| this.relays.contains(selected))
-                    .or_else(|| this.relays.first().cloned());
-
-                cx.notify();
-            })?;
-
-            Ok(())
-        }));
     }
 
     /// The relay the group will be created on.
@@ -276,19 +229,6 @@ impl NewGroup {
             },
         };
 
-        let custom_id = self.id_input.read(cx).value().trim().to_lowercase();
-        if !custom_id.is_empty()
-            && !custom_id
-                .chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-        {
-            self.set_error(
-                "The group id can only contain letters, numbers, '-' and '_'.",
-                cx,
-            );
-            return;
-        }
-
         let about = self.about_input.read(cx).value().trim().to_owned();
 
         let options = GroupCreateOptions {
@@ -300,7 +240,7 @@ impl NewGroup {
             restricted: self.restricted,
             hidden: self.hidden,
             list_private: self.list_private,
-            custom_id: (!custom_id.is_empty()).then_some(custom_id),
+            custom_id: None,
             parent: self.parent.as_ref().map(|parent| parent.id().clone()),
         };
 
@@ -332,6 +272,20 @@ impl NewGroup {
         self.selected_relay = relay;
         self.error = None;
         cx.notify();
+    }
+
+    fn set_relay_select_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        self.relay_select_open = open;
+        cx.notify();
+    }
+
+    fn activate_relay_option(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.relays.len() {
+            self.select_relay(Some(self.relays[index].clone()), cx);
+        } else {
+            self.select_relay(None, cx);
+        }
+        self.set_relay_select_open(false, cx);
     }
 
     fn set_uploading(&mut self, uploading: bool, cx: &mut Context<Self>) {
@@ -390,10 +344,8 @@ impl NewGroup {
     }
 
     fn render_relay(&self, selected: &str, cx: &mut Context<Self>) -> impl IntoElement {
-        // A channel must live on its parent's relay: the parent tag carries a
-        // relay-scoped group id the relay validates against its own state.
         if let Some(parent) = &self.parent {
-            return v_flex().gap_1().child(field_label("Relay", cx)).child(
+            return v_flex().gap_1p5().child(field_label("Relay", cx)).child(
                 div()
                     .text_style(TextStyle::Caption)
                     .text_color(cx.theme().text_muted)
@@ -405,43 +357,103 @@ impl NewGroup {
         }
 
         let this = cx.entity().downgrade();
-        let relays = self.relays.clone();
+        let open = self.relay_select_open;
+
+        let trigger = h_flex()
+            .id("relay-trigger")
+            .justify_between()
+            .w_full()
+            .h_8()
+            .px_3()
+            .rounded(px(button_radius()))
+            .text_style(TextStyle::Callout)
+            .cursor_default()
+            .bg(if open {
+                cx.theme().element_active
+            } else {
+                cx.theme().surface_raised
+            })
+            .when(!open, |this| {
+                this.hover(|this| this.bg(cx.theme().element_hover))
+                    .active(|this| this.bg(cx.theme().element_active))
+            })
+            .on_click(cx.listener(move |this, _, _window, cx| {
+                this.relay_select_open = !open;
+                cx.notify();
+            }))
+            .child(selected.to_owned())
+            .child(
+                Icon::new(IconName::ChevronDown)
+                    .small()
+                    .text_color(cx.theme().text_muted),
+            );
+
+        let select = Select::new("relay-select")
+            .open(open)
+            .on_open_change({
+                let this = this.clone();
+                move |open, _, cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        this.set_relay_select_open(open, cx);
+                    });
+                }
+            })
+            .content_focus_handle(&self.relay_options_focus)
+            .accessibility_label("Relay")
+            .accessibility_value(selected.to_owned())
+            .w_full()
+            .child(trigger);
+
+        let options = v_flex()
+            .id("relay-options")
+            .occlude()
+            .track_focus(&self.relay_options_focus)
+            .key_context("Select")
+            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
+                this.set_relay_select_open(false, cx);
+            }))
+            .popover_style(cx)
+            .p_1()
+            .gap_y_1()
+            .min_w(rems(8.))
+            .text_color(cx.theme().text)
+            .children(self.relays.iter().enumerate().map(|(index, relay)| {
+                h_flex()
+                    .id(SharedString::from(format!("option-{relay}")))
+                    .px_1p5()
+                    .py_1()
+                    .rounded(px(button_radius()))
+                    .text_style(TextStyle::Callout)
+                    .cursor_default()
+                    .hover(|this| this.bg(cx.theme().element_hover))
+                    .child(relay_label(relay))
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.activate_relay_option(index, cx);
+                    }))
+            }))
+            .child(divider(cx))
+            .child(
+                h_flex()
+                    .id("relay-add")
+                    .px_1p5()
+                    .py_1()
+                    .rounded(px(button_radius()))
+                    .text_style(TextStyle::Callout)
+                    .cursor_default()
+                    .child("Custom relay")
+                    .hover(|this| this.bg(cx.theme().element_hover))
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.activate_relay_option(this.relays.len(), cx);
+                    })),
+            );
 
         v_flex()
-            .gap_1()
+            .gap_1p5()
             .child(field_label("Relay", cx))
             .when(self.selected_relay.is_none(), |this| {
                 this.child(Input::new(&self.custom_relay_input))
             })
-            .child(
-                Button::new("relay")
-                    .label(selected.to_owned())
-                    .ghost_alt()
-                    .caret()
-                    .dropdown_menu_with_anchor(Anchor::BottomLeft, move |menu, _window, _cx| {
-                        let menu = relays.iter().fold(menu, |menu, relay| {
-                            let this = this.clone();
-                            let relay = relay.clone();
-
-                            menu.item(PopupMenuItem::new(relay_label(&relay)).on_click(
-                                move |_, _window, cx| {
-                                    this.update(cx, |this, cx| {
-                                        this.select_relay(Some(relay.clone()), cx);
-                                    })
-                                    .ok();
-                                },
-                            ))
-                        });
-
-                        let this = this.clone();
-
-                        menu.item(PopupMenuItem::new("Custom relay…").on_click(
-                            move |_, _window, cx| {
-                                this.update(cx, |this, cx| this.select_relay(None, cx)).ok();
-                            },
-                        ))
-                    }),
-            )
+            .child(Popup::new("relay-popup", select).when(open, |this| this.content(options)))
     }
 
     fn render_access(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -483,7 +495,7 @@ impl NewGroup {
 
         v_flex()
             .gap_2()
-            .child(field_label("ACCESS SETTINGS", cx))
+            .child(field_label("Access settings", cx))
             .child(switch_row(private, cx))
             .child(switch_row(closed, cx))
             .child(switch_row(restricted, cx))
@@ -502,7 +514,7 @@ impl NewGroup {
 
         v_flex()
             .gap_2()
-            .child(field_label("YOUR LIST", cx))
+            .child(field_label("List", cx))
             .child(switch_row(list_private, cx))
     }
 
@@ -531,7 +543,7 @@ impl NewGroup {
                         .underline()
                         .text_style(TextStyle::Caption)
                         .text_color(cx.theme().danger)
-                        .child("Open relay website →")
+                        .child("Open relay website")
                         .on_click({
                             let web_url = web_url.map(str::to_owned);
 
@@ -548,97 +560,63 @@ impl NewGroup {
 
 impl Render for NewGroup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let name = self.name_input.read(cx).value().trim().to_owned();
+
+        let seed: String = if name.is_empty() {
+            "group".to_owned()
+        } else {
+            name
+        };
+
         let selected = self
             .selected_relay
             .as_ref()
             .map(relay_label)
-            .unwrap_or_else(|| "Custom relay…".into());
+            .unwrap_or_else(|| "Add relay".into());
 
         let web_url = self
             .effective_relay(cx)
             .ok()
             .map(|relay| relay_web_url(&relay));
 
-        // The avatar fallback is seeded with the id, falling back to the name.
-        let id = self.id_input.read(cx).value().trim().to_lowercase();
-        let name = self.name_input.read(cx).value().trim().to_owned();
-        let seed: String = if !id.is_empty() {
-            id
-        } else if !name.is_empty() {
-            name
-        } else {
-            "group".to_owned()
-        };
-
         v_flex()
-            .gap_3()
+            .gap_4()
             .child(
-                div()
-                    .text_style(TextStyle::Caption)
-                    .text_color(cx.theme().text_muted)
-                    .child(
-                        "Give your new group a name and description. You can always change these later.",
-                    ),
-            )
-            .child(
-                h_flex()
-                    .items_center()
+                v_flex()
+                    .id("group-dialog-content")
+                    .h(px(500.))
                     .gap_3()
-                    .child(Avatar::new(self.picture.clone()).seed(seed).large())
+                    .when_some(self.error.clone(), |this, error| {
+                        this.child(self.render_error(&error, web_url.as_deref(), cx))
+                    })
                     .child(
-                        Button::new("upload-picture")
-                            .label(if self.picture.is_some() {
-                                "Change picture"
-                            } else {
-                                "Add a picture"
-                            })
-                            .xsmall()
-                            .ghost()
-                            .disabled(self.uploading)
-                            .loading(self.uploading)
-                            .on_click(cx.listener(|this, _event, window, cx| {
-                                this.upload(window, cx);
-                            })),
-                    ),
+                        h_flex()
+                            .items_center()
+                            .gap_3()
+                            .child(Avatar::new(self.picture.clone()).seed(seed).large())
+                            .child(
+                                Button::new("upload-picture")
+                                    .label(if self.picture.is_some() {
+                                        "Change picture"
+                                    } else {
+                                        "Add a picture"
+                                    })
+                                    .xsmall()
+                                    .ghost()
+                                    .disabled(self.uploading)
+                                    .loading(self.uploading)
+                                    .on_click(cx.listener(|this, _event, window, cx| {
+                                        this.upload(window, cx);
+                                    })),
+                            ),
+                    )
+                    .child(field("Name", Input::new(&self.name_input), cx))
+                    .child(self.render_relay(&selected, cx))
+                    .child(field("About", Textarea::new(&self.about_input), cx))
+                    .child(self.render_access(cx))
+                    .child(self.render_list_setting(cx))
+                    .overflow_y_scroll(),
             )
-            .child(field("Group Name", Input::new(&self.name_input), cx))
-            .when(self.show_custom_id, |this| {
-                this.child(
-                    v_flex()
-                        .gap_1()
-                        .child(field("Group ID (optional)", Input::new(&self.id_input), cx))
-                        .child(
-                            div()
-                                .text_style(TextStyle::Caption)
-                                .text_color(cx.theme().text_faint)
-                                .child(
-                                    "Leave empty for a random ID. The relay may override your choice.",
-                                ),
-                        ),
-                )
-            })
-            .when(!self.show_custom_id, |this| {
-                this.child(
-                    div()
-                        .id("show-custom-id")
-                        .cursor_pointer()
-                        .underline()
-                        .text_style(TextStyle::Caption)
-                        .text_color(cx.theme().accent)
-                        .child("Set a custom ID")
-                        .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.show_custom_id = true;
-                            cx.notify();
-                        })),
-                )
-            })
-            .child(self.render_relay(&selected, cx))
-            .child(field("Description", Textarea::new(&self.about_input), cx))
-            .child(self.render_access(cx))
-            .child(self.render_list_setting(cx))
-            .when_some(self.error.clone(), |this, error| {
-                this.child(self.render_error(&error, web_url.as_deref(), cx))
-            })
             .child(
                 h_flex()
                     .gap_1()
@@ -667,7 +645,7 @@ impl Render for NewGroup {
 }
 
 fn field(text: &'static str, input: impl IntoElement, cx: &App) -> Div {
-    v_flex().gap_1().child(field_label(text, cx)).child(input)
+    v_flex().gap_1p5().child(field_label(text, cx)).child(input)
 }
 
 fn field_label(text: &'static str, cx: &App) -> Div {

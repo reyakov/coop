@@ -14,7 +14,7 @@ pub fn v_flex() -> Div {
 
 /// Returns a `Div` as divider.
 pub fn divider(cx: &App) -> Div {
-    div().my_1().w_full().h_px().bg(cx.theme().border_faint)
+    div().w_full().h_px().bg(cx.theme().border_faint)
 }
 
 macro_rules! font_weight {
