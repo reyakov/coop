@@ -1,16 +1,31 @@
+use std::collections::BTreeMap;
+
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, ParentElement as _, RenderOnce, SharedString, StyleRefinement, Styled, Window,
-    div, px,
+    MouseDownEvent, ObjectFit, ParentElement as _, RenderOnce, SharedString, SharedUri,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, StyledImage, Window, div, img, px,
 };
 use smallvec::SmallVec;
-use theme::{ActiveTheme, TextStyle, Typeset as _};
+use theme::{ActiveTheme, TextStyle, Typeset as _, bubble_radius, control_radius};
 
 use crate::{InteractiveElementExt as _, StyledExt as _, h_flex, v_flex};
 
 type MouseDownListener = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
-type DoubleClickListener = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type ClickListener = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+
+/// Messages from the same author within this window are grouped into one run.
+pub const RUN_WINDOW_SECS: u64 = 300;
+
+/// Whether a message starts a new run, given the previous message's author and unix time.
+pub fn opens_run<T: PartialEq>(previous: Option<(T, u64)>, current: (T, u64)) -> bool {
+    match previous {
+        None => true,
+        Some((previous_author, previous_at)) => {
+            previous_author != current.0 || current.1.saturating_sub(previous_at) > RUN_WINDOW_SECS
+        }
+    }
+}
 
 /// A single message row in a chat-like list.
 #[derive(IntoElement)]
@@ -26,7 +41,7 @@ pub struct MessageRow {
     body: SmallVec<[AnyElement; 4]>,
     overlays: SmallVec<[AnyElement; 2]>,
     on_mouse_down: Option<(MouseButton, MouseDownListener)>,
-    on_double_click: Option<DoubleClickListener>,
+    on_double_click: Option<ClickListener>,
 }
 
 impl MessageRow {
@@ -214,6 +229,218 @@ impl RenderOnce for MessageRow {
             })
             .hover(|this| this.bg(cx.theme().element_hover))
             .into_any_element()
+    }
+}
+
+/// A quoted preview of a message this message replies to.
+#[derive(IntoElement)]
+pub struct ReplyPreview {
+    id: ElementId,
+    style: StyleRefinement,
+    author: SharedString,
+    preview: SharedString,
+    on_click: Option<ClickListener>,
+}
+
+impl ReplyPreview {
+    /// Create a reply preview with the given element id, author and snippet.
+    pub fn new(
+        id: impl Into<ElementId>,
+        author: impl Into<SharedString>,
+        preview: impl Into<SharedString>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            style: StyleRefinement::default(),
+            author: author.into(),
+            preview: preview.into(),
+            on_click: None,
+        }
+    }
+
+    /// Handle a click anywhere on the preview.
+    #[must_use]
+    pub fn on_click(
+        mut self,
+        listener: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_click = Some(Box::new(listener));
+        self
+    }
+}
+
+impl Styled for ReplyPreview {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for ReplyPreview {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Self {
+            id,
+            style,
+            author,
+            preview,
+            on_click,
+        } = self;
+
+        div()
+            .id(id)
+            .w_full()
+            .px_2()
+            .border_l_2()
+            .border_color(cx.theme().element_active)
+            .text_style(TextStyle::Callout)
+            .refine_style(&style)
+            .child(div().font_semibold().child(author))
+            .child(div().w_full().text_ellipsis().line_clamp(1).child(preview))
+            .hover(|this| this.bg(cx.theme().surface_raised))
+            .when_some(on_click, |this, on_click| this.on_click(on_click))
+            .into_any_element()
+    }
+}
+
+/// The image media of a message: one large image or a wrapping row of thumbnails.
+#[derive(IntoElement)]
+pub struct MessageMedia {
+    style: StyleRefinement,
+    media: Vec<SharedUri>,
+}
+
+impl MessageMedia {
+    /// Create media from image URLs.
+    pub fn new(media: &[SharedUri]) -> Self {
+        Self {
+            style: StyleRefinement::default(),
+            media: media.to_vec(),
+        }
+    }
+}
+
+impl Styled for MessageMedia {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for MessageMedia {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Self { style, media } = self;
+
+        if media.is_empty() {
+            return div().into_any_element();
+        }
+
+        if let [only] = media.as_slice() {
+            return div()
+                .refine_style(&style)
+                .child(
+                    img(only.clone())
+                        .border_1()
+                        .border_color(cx.theme().border_faint)
+                        .h(px(250.))
+                        .object_fit(ObjectFit::Cover)
+                        .rounded(px(bubble_radius())),
+                )
+                .into_any_element();
+        }
+
+        div()
+            .w_full()
+            .flex_1()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .gap(px(theme::SPACE))
+            .refine_style(&style)
+            .children(media.into_iter().enumerate().map(|(ix, item)| {
+                div().id(format!("media-{ix}")).flex_shrink_0().child(
+                    img(item)
+                        .h_32()
+                        .border_1()
+                        .border_color(cx.theme().border_faint)
+                        .rounded(px(bubble_radius())),
+                )
+            }))
+            .into_any_element()
+    }
+}
+
+/// Reactions of one emoji with the count of authors and whether the current user reacted.
+pub struct ReactionGroup {
+    pub emoji: SharedString,
+    pub count: usize,
+    pub mine: bool,
+}
+
+/// Group (emoji, author) pairs by emoji, sorted by emoji, marking groups containing `me`.
+pub fn group_reactions<A: PartialEq>(
+    reactions: impl IntoIterator<Item = (SharedString, A)>,
+    me: Option<A>,
+) -> Vec<ReactionGroup> {
+    let mut groups: BTreeMap<SharedString, (usize, bool)> = BTreeMap::new();
+
+    for (emoji, author) in reactions {
+        let group = groups.entry(emoji).or_default();
+        group.0 += 1;
+        group.1 |= me.as_ref() == Some(&author);
+    }
+
+    groups
+        .into_iter()
+        .map(|(emoji, (count, mine))| ReactionGroup { emoji, count, mine })
+        .collect()
+}
+
+/// Reaction chips shown under a message.
+#[derive(IntoElement)]
+pub struct ReactionBar {
+    style: StyleRefinement,
+    groups: SmallVec<[ReactionGroup; 4]>,
+}
+
+impl ReactionBar {
+    /// Create a reaction bar from grouped reactions.
+    pub fn new(groups: impl IntoIterator<Item = ReactionGroup>) -> Self {
+        Self {
+            style: StyleRefinement::default(),
+            groups: groups.into_iter().collect(),
+        }
+    }
+}
+
+impl Styled for ReactionBar {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for ReactionBar {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Self { style, groups } = self;
+
+        h_flex()
+            .mt_2()
+            .gap_1()
+            .refine_style(&style)
+            .children(groups.into_iter().map(|group| {
+                h_flex()
+                    .gap(px(theme::SPACE))
+                    .py_0p5()
+                    .px_1()
+                    .rounded(px(control_radius()))
+                    .text_style(TextStyle::Caption)
+                    .border_1()
+                    .when(group.mine, |this| {
+                        this.text_color(cx.theme().text)
+                            .bg(cx.theme().surface_raised)
+                            .border_color(cx.theme().element_active)
+                    })
+                    .when(!group.mine, |this| this.border_color(cx.theme().border))
+                    .child(group.emoji)
+                    .child(SharedString::from(group.count.to_string()))
+            }))
     }
 }
 

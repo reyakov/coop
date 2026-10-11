@@ -10,10 +10,9 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, MouseButton,
-    ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, SharedUri,
-    StatefulInteractiveElement, Styled, StyledImage, Subscription, SystemNotification,
-    SystemNotificationAction, Task, WeakEntity, Window, div, img, list, px, red, relative,
-    retain_all, svg, white,
+    ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, StatefulInteractiveElement,
+    Styled, StyledImage, Subscription, SystemNotification, SystemNotificationAction, Task,
+    WeakEntity, Window, div, img, list, px, red, relative, retain_all, svg, white,
 };
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
@@ -30,7 +29,9 @@ use ui::button::{Button, ButtonVariants};
 use ui::dock::{Panel, PanelEvent};
 use ui::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use ui::menu::DropdownMenu;
-use ui::message::{MessageRow, WelcomeMessage};
+use ui::message::{
+    MessageMedia, MessageRow, ReactionBar, ReplyPreview, WelcomeMessage, group_reactions, opens_run,
+};
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
 use ui::tooltip::Tooltip;
@@ -1037,29 +1038,17 @@ impl ChatPanel {
     }
 
     fn is_group_start(&self, ix: usize) -> bool {
-        // 5 minutes
-        const GROUP_WINDOW: u64 = 300;
-
         if ix == 0 {
             return true;
         }
 
-        if let Some(previous) = self.messages.get(ix - 1)
-            && let Some(current) = self.messages.get(ix)
-        {
-            if current.author != previous.author {
-                return true;
-            }
-
-            let gap = current
-                .created_at
-                .as_secs()
-                .saturating_sub(previous.created_at.as_secs());
-
-            return gap > GROUP_WINDOW;
+        match (self.messages.get(ix - 1), self.messages.get(ix)) {
+            (Some(previous), Some(current)) => opens_run(
+                Some((previous.author, previous.created_at.as_secs())),
+                (current.author, current.created_at.as_secs()),
+            ),
+            _ => false,
         }
-
-        false
     }
 
     fn render_message(
@@ -1119,8 +1108,13 @@ impl ChatPanel {
         let has_reactions = self.has_reaction(&id);
         let has_reports = self.has_reports(&id);
 
-        // Hide avatar setting
         let hide_avatar = AppSettings::get_hide_avatar(cx);
+        let nostr = NostrRegistry::global(cx);
+
+        let reactions = ReactionBar::new(group_reactions(
+            self.reaction(&id).iter().cloned(),
+            nostr.read(cx).current_user(),
+        ));
 
         MessageRow::new(ix)
             .show_author(show_author)
@@ -1146,13 +1140,11 @@ impl ChatPanel {
                 this.children(self.render_message_replies(replies, cx))
             })
             .when(message.file.is_none(), |this| this.child(rendered_text))
-            .child(self.render_media(&message.media, cx))
+            .child(MessageMedia::new(&message.media))
             .when_some(message.file.as_ref(), |this, file| {
                 this.child(self.render_message_file(&id, file, cx))
             })
-            .when(has_reactions, |this| {
-                this.child(self.render_reactions(&id, cx))
-            })
+            .when(has_reactions, |this| this.child(reactions))
             .overlay(
                 div()
                     .group_hover("", |this| this.bg(cx.theme().element_active))
@@ -1176,55 +1168,6 @@ impl ChatPanel {
             .into_any_element()
     }
 
-    fn render_media(&self, media: &[SharedUri], cx: &Context<Self>) -> impl IntoElement {
-        // No media: return empty div
-        if media.is_empty() {
-            return div();
-        };
-
-        // Single media item: render full-width image
-        if media.len() == 1 {
-            return div().child(
-                img(media[0].clone())
-                    .border_1()
-                    .border_color(cx.theme().border_faint)
-                    .h(px(250.))
-                    .object_fit(ObjectFit::Cover)
-                    .rounded(px(theme::bubble_radius())),
-            );
-        }
-
-        // Multiple media items: render in a row
-        div()
-            .w_full()
-            .flex_1()
-            .flex()
-            .flex_row()
-            .flex_wrap()
-            .gap(px(theme::SPACE))
-            .children({
-                let mut items = vec![];
-
-                for (ix, item) in media.iter().enumerate() {
-                    items.push(
-                        div()
-                            .id(format!("media-{ix}"))
-                            .flex_grow_0()
-                            .flex_shrink_0()
-                            .child(
-                                img(item.clone())
-                                    .h_32()
-                                    .border_1()
-                                    .border_color(cx.theme().border_faint)
-                                    .rounded(px(theme::bubble_radius())),
-                            ),
-                    );
-                }
-
-                items
-            })
-    }
-
     fn render_message_replies(
         &self,
         replies: &[EventId],
@@ -1239,69 +1182,16 @@ impl ChatPanel {
             let author = self.profile(&message.author, cx);
 
             items.push(
-                div()
-                    .id(ix)
-                    .w_full()
-                    .px_2()
-                    .border_l_2()
-                    .border_color(cx.theme().element_active)
-                    .text_style(TextStyle::Callout)
-                    .child(div().font_semibold().child(author.name()))
-                    .child(
-                        div()
-                            .w_full()
-                            .text_ellipsis()
-                            .line_clamp(1)
-                            .child(message.preview()),
-                    )
-                    .hover(|this| this.bg(cx.theme().surface_raised))
-                    .on_click({
-                        let id = *id;
-                        cx.listener(move |this, _event, _window, _cx| {
-                            this.scroll_to(&id);
-                        })
-                    }),
+                ReplyPreview::new(ix, author.name(), message.preview()).on_click({
+                    let id = *id;
+                    cx.listener(move |this, _event, _window, _cx| {
+                        this.scroll_to(&id);
+                    })
+                }),
             );
         }
 
         items
-    }
-
-    fn render_reactions(&self, id: &EventId, cx: &App) -> impl IntoElement {
-        let current_user = NostrRegistry::global(cx).read(cx).current_user();
-        let reactions = self.reaction(id);
-
-        // Group reactions by emoji and collect authors for each
-        let mut grouped: BTreeMap<SharedString, Vec<PublicKey>> = BTreeMap::new();
-        for (emoji, author) in reactions {
-            grouped.entry(emoji.clone()).or_default().push(*author);
-        }
-
-        h_flex()
-            .mt_2()
-            .gap_1()
-            .children(grouped.into_iter().map(|(emoji, authors)| {
-                let count = authors.len();
-                let has_reacted = current_user
-                    .map(|pk| authors.contains(&pk))
-                    .unwrap_or(false);
-
-                h_flex()
-                    .gap(px(theme::SPACE))
-                    .py_0p5()
-                    .px_1()
-                    .rounded(px(theme::control_radius()))
-                    .text_style(TextStyle::Caption)
-                    .border_1()
-                    .when(has_reacted, |this| {
-                        this.text_color(cx.theme().text)
-                            .bg(cx.theme().surface_raised)
-                            .border_color(cx.theme().element_active)
-                    })
-                    .when(!has_reacted, |this| this.border_color(cx.theme().border))
-                    .child(emoji)
-                    .child(SharedString::from(count.to_string()))
-            }))
     }
 
     fn render_sent_reports(&self, id: &EventId, cx: &App) -> impl IntoElement {

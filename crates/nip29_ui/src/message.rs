@@ -1,21 +1,19 @@
-use std::collections::BTreeMap;
-
 use chat::Message;
 use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, InteractiveElement, IntoElement, ObjectFit, ParentElement, SharedString,
-    SharedUri, StatefulInteractiveElement, Styled, StyledImage, WeakEntity, div, img, px,
+    AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
+    WeakEntity, div, px,
 };
 use nip29::{Activity, Group, Reaction};
-use nostr_sdk::prelude::{EventId, Kind, PublicKey};
+use nostr_sdk::prelude::{EventId, Kind};
 use person::PersonRegistry;
 use settings::AppSettings;
 use state::NostrRegistry;
-use theme::{ActiveTheme, TextStyle, Typeset as _, bubble_radius, control_radius};
+use theme::{ActiveTheme, TextStyle, Typeset as _};
 use ui::avatar::Avatar;
 use ui::menu::{ContextMenu, PopupMenu, PopupMenuItem};
-use ui::message::MessageRow;
+use ui::message::{MessageMedia, MessageRow, ReactionBar, ReplyPreview, group_reactions};
 use ui::{Icon, IconName, Sizable, StyledExt, h_flex};
 
 use crate::GroupPanel;
@@ -38,9 +36,18 @@ pub(crate) fn render(
     actions: Actions,
     cx: &App,
 ) -> AnyElement {
+    let nostr = NostrRegistry::global(cx);
     let persons = PersonRegistry::global(cx);
-    let author = persons.read(cx).get(&message.author, cx);
     let hide_avatar = AppSettings::get_hide_avatar(cx);
+
+    let author = persons.read(cx).get(&message.author, cx);
+
+    let reaction_groups = group_reactions(
+        reactions
+            .iter()
+            .map(|reaction| (SharedString::from(reaction.emoji.as_str()), reaction.author)),
+        nostr.read(cx).current_user(),
+    );
 
     let row = MessageRow::new(ix)
         .show_author(show_author)
@@ -62,10 +69,10 @@ pub(crate) fn render(
         })
         .child(content)
         .when(!message.media.is_empty(), |this| {
-            this.child(media(&message.media, cx))
+            this.child(MessageMedia::new(&message.media))
         })
-        .when(!reactions.is_empty(), |this| {
-            this.child(reaction_bar(reactions, cx))
+        .when(!reaction_groups.is_empty(), |this| {
+            this.child(ReactionBar::new(reaction_groups))
         })
         .into_any_element();
 
@@ -226,43 +233,6 @@ fn action(activity: &Activity) -> String {
     }
 }
 
-fn reaction_bar(reactions: &[Reaction], cx: &App) -> AnyElement {
-    let me = NostrRegistry::global(cx).read(cx).current_user();
-
-    let mut grouped: BTreeMap<String, Vec<PublicKey>> = BTreeMap::new();
-
-    for reaction in reactions {
-        grouped
-            .entry(reaction.emoji.clone())
-            .or_default()
-            .push(reaction.author);
-    }
-
-    h_flex()
-        .mt_1()
-        .gap_1()
-        .children(grouped.into_iter().map(|(emoji, authors)| {
-            let mine = me.is_some_and(|me| authors.contains(&me));
-
-            h_flex()
-                .gap(px(theme::SPACE))
-                .py_0p5()
-                .px_1()
-                .rounded(px(control_radius()))
-                .text_style(TextStyle::Caption)
-                .border_1()
-                .when(mine, |this| {
-                    this.text_color(cx.theme().text)
-                        .bg(cx.theme().surface_raised)
-                        .border_color(cx.theme().element_active)
-                })
-                .when(!mine, |this| this.border_color(cx.theme().border))
-                .child(SharedString::from(emoji))
-                .child(SharedString::from(authors.len().to_string()))
-        }))
-        .into_any_element()
-}
-
 fn replies(
     targets: &[EventId],
     group: &WeakEntity<Group>,
@@ -295,57 +265,17 @@ fn replies(
         let panel = panel.clone();
 
         items.push(
-            div()
-                .id(ix)
-                .w_full()
-                .px_2()
-                .border_l_2()
-                .border_color(cx.theme().element_active)
-                .text_style(TextStyle::Callout)
-                .child(div().font_semibold().child(author))
-                .child(div().w_full().text_ellipsis().line_clamp(1).child(preview))
-                .hover(|this| this.bg(cx.theme().surface_raised))
+            ReplyPreview::new(ix, author, preview)
                 .on_click(move |_event, _window, cx| {
-                    let _ = panel.update(cx, |panel, cx| {
+                    if let Err(error) = panel.update(cx, |panel, cx| {
                         panel.scroll_to(&id, cx);
-                    });
+                    }) {
+                        log::warn!("nip29: scrolling to message failed: {error}");
+                    }
                 })
                 .into_any_element(),
         );
     }
 
     items
-}
-
-fn media(media: &[SharedUri], cx: &App) -> AnyElement {
-    if let [only] = media {
-        return div()
-            .child(
-                img(only.clone())
-                    .border_1()
-                    .border_color(cx.theme().border_faint)
-                    .h(px(250.))
-                    .object_fit(ObjectFit::Cover)
-                    .rounded(px(bubble_radius())),
-            )
-            .into_any_element();
-    }
-
-    div()
-        .w_full()
-        .flex_1()
-        .flex()
-        .flex_row()
-        .flex_wrap()
-        .gap(px(theme::SPACE))
-        .children(media.iter().enumerate().map(|(ix, item)| {
-            div().id(format!("media-{ix}")).child(
-                img(item.clone())
-                    .h_32()
-                    .border_1()
-                    .border_color(cx.theme().border_faint)
-                    .rounded(px(bubble_radius())),
-            )
-        }))
-        .into_any_element()
 }

@@ -7,8 +7,6 @@ use ui::input::{Input, InputState};
 use ui::notification::Notification;
 use ui::{WindowExtension, v_flex};
 
-const RUN_WINDOW_SECS: u64 = 300;
-
 pub(crate) fn display_name(group: &Group) -> SharedString {
     group
         .metadata()
@@ -37,16 +35,13 @@ pub(crate) fn opens_run(rows: &[Row], index: usize) -> bool {
         return true;
     };
 
-    if !matches!((current, previous), (Row::Message(_), Row::Message(_))) {
-        return true;
+    match (current, previous) {
+        (Row::Message(current), Row::Message(previous)) => ui::message::opens_run(
+            Some((previous.author, previous.created_at.as_secs())),
+            (current.author, current.created_at.as_secs()),
+        ),
+        _ => true,
     }
-
-    current.author() != previous.author()
-        || current
-            .created_at()
-            .as_secs()
-            .saturating_sub(previous.created_at().as_secs())
-            > RUN_WINDOW_SECS
 }
 
 pub(crate) fn field(label: &'static str, input: &Entity<InputState>, cx: &App) -> Div {
