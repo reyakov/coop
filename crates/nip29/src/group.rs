@@ -12,7 +12,7 @@ use crate::LOCAL_KEYS;
 use crate::protocol::{
     ACTIVITY_KINDS, Activity, GroupAdmins, GroupId, GroupKey, GroupMembers, GroupMetadata,
     GroupPins, GroupRoles, MEMBERSHIP_KINDS, Membership, PIN_LIST, Pin, RENDER_KINDS, STATE_KINDS,
-    TimelineWindow,
+    TimelineWindow, tag_value,
 };
 
 const REPLAY_LIMIT: usize = 100;
@@ -32,6 +32,13 @@ pub struct Reaction {
     pub id: EventId,
     pub emoji: String,
     pub author: PublicKey,
+}
+
+#[derive(Debug, Clone)]
+pub struct Invite {
+    pub id: EventId,
+    pub code: String,
+    pub created_at: Timestamp,
 }
 
 #[derive(Debug, Clone)]
@@ -86,6 +93,8 @@ pub struct Group {
     rows: Vec<Row>,
     index: HashSet<EventId>,
     reactions: HashMap<EventId, Vec<Reaction>>,
+    /// Active invite codes; revocations arrive as 9005 deletions.
+    invites: Vec<Invite>,
     leave_requests: HashMap<PublicKey, Timestamp>,
     window: TimelineWindow,
     oldest: Option<Timestamp>,
@@ -114,6 +123,7 @@ impl Group {
             rows: Vec::new(),
             index: HashSet::new(),
             reactions: HashMap::new(),
+            invites: Vec::new(),
             leave_requests: HashMap::new(),
             window: TimelineWindow::new(),
             oldest: None,
@@ -191,6 +201,10 @@ impl Group {
 
     pub fn reactions(&self, id: &EventId) -> &[Reaction] {
         self.reactions.get(id).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    pub fn invites(&self) -> &[Invite] {
+        &self.invites
     }
 
     pub fn loading_more(&self) -> bool {
@@ -375,6 +389,7 @@ impl Group {
             let filters = [
                 key.id().timeline_filter(REPLAY_LIMIT),
                 key.id().membership_filter(me),
+                key.id().moderation_filter(REPLAY_LIMIT),
             ]
             .into_iter()
             .chain(key.id().state_filters())
@@ -523,13 +538,22 @@ impl Group {
     }
 
     pub(crate) fn forget(&mut self, id: EventId, cx: &mut Context<Self>) {
+        if self.retract(id) {
+            cx.emit(GroupEvent::Updated);
+            cx.notify();
+        }
+    }
+
+    /// Remove an event and everything attached to it.
+    fn retract(&mut self, id: EventId) -> bool {
         self.window.remove(id);
 
         if !self.index.remove(&id) {
-            return;
+            return false;
         }
 
         self.rows.retain(|row| row.id() != id);
+        self.invites.retain(|invite| invite.id != id);
         self.reactions.remove(&id);
 
         for reactions in self.reactions.values_mut() {
@@ -538,8 +562,7 @@ impl Group {
 
         self.reactions.retain(|_, reactions| !reactions.is_empty());
 
-        cx.emit(GroupEvent::Updated);
-        cx.notify();
+        true
     }
 
     pub(crate) fn eose(&mut self, cx: &mut Context<Self>) {
@@ -557,7 +580,7 @@ impl Group {
 
     fn absorb(&mut self, event: &Event, me: PublicKey) -> Absorbed {
         if STATE_KINDS.contains(&event.kind) {
-            return if self.absorb_state(event) {
+            return if self.absorb_state(event, me) {
                 Absorbed::Updated
             } else {
                 Absorbed::Ignored
@@ -577,6 +600,28 @@ impl Group {
 
         if event.kind == Kind::Reaction {
             return if self.push_reaction(event) {
+                Absorbed::Updated
+            } else {
+                Absorbed::Ignored
+            };
+        }
+
+        if event.kind == Kind::GroupCreateInvite {
+            return if self.push_invite(event) {
+                Absorbed::Updated
+            } else {
+                Absorbed::Ignored
+            };
+        }
+
+        if event.kind == Kind::GroupDeleteEvent {
+            let retracted = event
+                .tags
+                .event_ids()
+                .next()
+                .is_some_and(|target| self.retract(target));
+
+            return if retracted {
                 Absorbed::Updated
             } else {
                 Absorbed::Ignored
@@ -625,18 +670,24 @@ impl Group {
         }
     }
 
-    fn absorb_state(&mut self, event: &Event) -> bool {
+    fn absorb_state(&mut self, event: &Event, me: PublicKey) -> bool {
         match event.kind {
             Kind::GroupMetadata => match GroupMetadata::parse(event) {
                 Ok(metadata) => self.metadata = Some(metadata),
                 Err(_) => return false,
             },
             Kind::GroupAdmins => match GroupAdmins::parse(event) {
-                Ok(admins) => self.admins = admins,
+                Ok(admins) => {
+                    self.admins = admins;
+                    self.adopt_roster_membership(me);
+                }
                 Err(_) => return false,
             },
             Kind::GroupMembers => match GroupMembers::parse(event) {
-                Ok(members) => self.members = members,
+                Ok(members) => {
+                    self.members = members;
+                    self.adopt_roster_membership(me);
+                }
                 Err(_) => return false,
             },
             Kind::GroupRoles => match GroupRoles::parse(event) {
@@ -651,6 +702,21 @@ impl Group {
         }
 
         self.state_ids.insert(event.kind, event.id) != Some(event.id)
+    }
+
+    fn adopt_roster_membership(&mut self, me: PublicKey) -> bool {
+        if self.membership != Membership::Unknown {
+            return false;
+        }
+
+        let listed = self.admins.contains(&me) || self.members.iter().any(|member| *member == me);
+
+        if !listed {
+            return false;
+        }
+
+        self.membership = Membership::Member;
+        true
     }
 
     fn push_row(&mut self, event: &Event) -> bool {
@@ -681,6 +747,24 @@ impl Group {
             id: event.id,
             emoji: event.content.clone(),
             author: event.pubkey,
+        });
+
+        true
+    }
+
+    fn push_invite(&mut self, event: &Event) -> bool {
+        let Some(code) = tag_value(&event.tags, "code") else {
+            return false;
+        };
+
+        if !self.index.insert(event.id) {
+            return false;
+        }
+
+        self.invites.push(Invite {
+            id: event.id,
+            code: code.to_owned(),
+            created_at: event.created_at,
         });
 
         true

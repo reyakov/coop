@@ -16,12 +16,12 @@ trade-offs; each has real gaps the other closed.
   timeline refs, membership-from-9000/9001 (the spec's "implementation
   quirks" section), and fork/migration detection via admins' `kind:10009`.
   nostord implements none of those three.
-- nostord is ahead on product surface: invite code listing/revocation, full
-  LiveKit AV (token endpoint + `kind:39004`), threads UI, subgroup hierarchy
-  management, member rosters as a membership source.
-- Spec bugs in ours worth fixing: no `39002`/`39001` fallback for
-  membership. (Since this comparison: `duplicate:` join rejection, 9008
-  delete-group and reaction aggregation were implemented.)
+- nostord is ahead on product surface: full LiveKit AV (token endpoint +
+  `kind:39004`) and a threads pane. Invite code management, subgroup
+  reparent/reorder and reply chips landed here since the comparison.
+- Spec bugs in ours worth fixing: none open. The `duplicate:` join
+  rejection, 9008 delete-group, reaction aggregation and the `39002`/`39001`
+  membership fallback were implemented.
 
 ## 1. Protocol compliance vs NIP-29
 
@@ -32,7 +32,7 @@ trade-offs; each has real gaps the other closed.
 | **9008 delete-group** | yes, plus confirm dialog | yes |
 | **9010 update-pin-list + 39005** | send + parse + UI | stub ("disabled until the pinning backend exists") |
 | `previous` tag (last 50 seen, excl. self, ≥3 × 8 chars) | `TimelineWindow` (`crates/nip29/src/protocol.rs`) | not built, not validated |
-| Membership = latest of own 9000/9001 | `Membership::from_events` | derived from 39001/39002 rosters + local markers instead |
+| Membership = latest of own 9000/9001 | `Membership::from_events`, rosters resolve `Unknown` as fallback | derived from 39001/39002 rosters + local markers instead |
 | Join request `code` tag / `naddr1…?invite=` | `GroupReference::parse` | yes, plus legacy formats (`wss://host'id`, `?relay=&group=`) |
 | `duplicate:` 9021 rejection = already member | treated as success (`mark_member`) | matched by wording, treated as success |
 | 39000 metadata: all flags + `supported_kinds` + `parent`/`child` | yes, plus banner and content-JSON fallback | yes, minus banner; tags only |
@@ -85,30 +85,30 @@ waits for AUTH explicitly before REQs; both work on auth-gating relays.
 
 ### P2 — client-parity features
 
-4. **Invite management.** We create a 9009 code and copy the link, but never
-   subscribe to 9009, so there is no list of active codes and no revoke
-   (nostord: active codes = 9009 minus 9005 revocations, per-code copy and
-   revoke). Natural fit: add 9009 to the group's state subscription and an
-   "Invites" section in the details dialog.
-5. **Membership fallback to rosters.** We only derive membership from
-   9000/9001. If a relay prunes moderation history (or the user was added
-   without us seeing the 9000), membership shows `Unknown` while 39002 lists
-   us. Consider nostord's "external add" adoption: own pubkey in 39001/39002
-   → treat as member (or invite card), without weakening the 9000/9001
-   override.
-6. **LiveKit.** The flag is parsed and editable, but joining an AV group does
-   nothing. At minimum: the `/.well-known/nip29/livekit` probe (204) to gate
-   the toggle, and the token flow
-   (`/.well-known/nip29/livekit/<id>` with NIP-98 kind 27235 plus a 39004
-   participant subscription) if AV is on the roadmap.
-7. **Subgroup management UI.** `parent` is set at creation (`CreateChannel`),
-   and `edit_metadata` already carries `parent`/`child` tags, but the edit
-   dialog cannot reparent or reorder children (the spec's 9002 child-list
-   replace semantics). nostord has a full Hierarchy tab (move under / make
-   root / reorder). Nothing reads NIP-11 `nip29.subgroups` to gate the UI.
-8. **No reply/thread UI.** `send_message` accepts `replies` but
-   `GroupPanel::send` always passes empty; kind 11/1111 render inline only.
-   nostord has reply chips, a threads pane, and NIP-22 tag nesting.
+4. ~~**Invite management.**~~ **done.** The group subscription now includes a
+   moderation filter (`9009` + `9005`, `GroupId::moderation_filter`),
+   `Group::invites()` exposes active codes (revocations arrive as 9005
+   deletions and via the publisher's own `Sent` path), and the invite dialog
+   lists codes with per-code copy-link and revoke.
+5. ~~**Membership fallback to rosters.**~~ **done.** `Group::
+   adopt_roster_membership`: while the latest own 9000/9001 leaves membership
+   `Unknown`, being listed in 39001/39002 counts as `Member`. `Pending`,
+   `Refused` and `Removed` are never overridden.
+6. **LiveKit — partially done.** The edit dialog probes
+   `/.well-known/nip29/livekit` (expecting 204) and gates the toggle with a
+   description when the relay doesn't announce support. Remaining: the token
+   flow (`/.well-known/nip29/livekit/<id>` with NIP-98 kind 27235) and a
+   `kind:39004` participant subscription — both only useful once an AV
+   client is on the roadmap.
+7. ~~**Subgroup management UI.**~~ **done.** The edit dialog has a Parent
+   field (empty = root; reparenting) and a children list with Up/Down
+   reordering (the spec's 9002 child-list replace semantics). Self-parent and
+   parent-is-child are rejected client-side; NIP-11 `nip29.subgroups` is not
+   read yet.
+8. **Reply UI — partially done.** The composer can target a reply
+   (context menu → Reply, chip with cancel), sends kind 11 with `e` tags, and
+   messages render a reply-context line (author + first line) resolved from
+   loaded rows. Remaining: a dedicated threads pane (nostord has one).
 
 ### P3 — polish
 
@@ -129,8 +129,9 @@ waits for AUTH explicitly before REQs; both work on auth-gating relays.
 1. ~~Fix `duplicate:`-prefix handling on 9021~~ done.
 2. ~~Exclude/aggregate kind-7 reactions in group rows~~ done.
 3. ~~Add 9008 delete-group + confirm dialog~~ done.
-4. Subscribe 9009 → invite list + revoke via 9005 (medium).
-5. 39002/39001 membership fallback (medium).
-6. Subgroup reparent/reorder in the edit dialog (medium, uses the existing
-   9002 path).
-7. LiveKit probe + token flow (larger; only if AV is in scope).
+4. ~~Subscribe 9009 → invite list + revoke via 9005~~ done.
+5. ~~39002/39001 membership fallback~~ done.
+6. ~~Subgroup reparent/reorder in the edit dialog~~ done.
+7. LiveKit probe (done, gates the toggle) + token flow (larger; only if AV is
+   in scope).
+8. Reply sending + chips (done); a dedicated threads pane remains.

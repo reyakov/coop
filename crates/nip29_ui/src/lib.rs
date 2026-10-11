@@ -26,7 +26,7 @@ use ui::markdown::RenderedText;
 use ui::message::WelcomeMessage;
 use ui::notification::Notification;
 use ui::scroll::Scrollbar;
-use ui::{Disableable, Icon, IconName, Sizable, WindowExtension, h_flex, v_flex};
+use ui::{Disableable, Icon, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 use util::{attachment_name, display_name, opens_run, pin_label, report};
 
 mod details;
@@ -310,6 +310,8 @@ pub struct GroupPanel {
     group: WeakEntity<Group>,
     list_state: ListState,
     head: Option<EventId>,
+    /// The message the composer is replying to, if any.
+    reply_to: Option<EventId>,
     rendered_texts_by_id: BTreeMap<EventId, RenderedText>,
     input: Entity<TextareaState>,
     /// Uploaded, non-encrypted attachments waiting to be sent.
@@ -380,6 +382,7 @@ impl GroupPanel {
             group: group.downgrade(),
             list_state: ListState::new(count + 2, ListAlignment::Bottom, px(1024.)),
             head,
+            reply_to: None,
             rendered_texts_by_id: BTreeMap::new(),
             input,
             attachments: Vec::new(),
@@ -452,6 +455,20 @@ impl GroupPanel {
         });
     }
 
+    fn start_reply(&mut self, id: EventId, window: &mut Window, cx: &mut Context<Self>) {
+        self.reply_to = Some(id);
+        self.input.update(cx, |input, cx| {
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    fn cancel_reply(&mut self, cx: &mut Context<Self>) {
+        if self.reply_to.take().is_some() {
+            cx.notify();
+        }
+    }
+
     fn send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let mut content = self.input.read(cx).value().trim().to_owned();
 
@@ -474,9 +491,11 @@ impl GroupPanel {
             return;
         }
 
+        let replies: Vec<EventId> = self.reply_to.take().into_iter().collect();
+
         let Ok(send) = self
             .group
-            .update(cx, |group, cx| group.send_message(&content, vec![], cx))
+            .update(cx, |group, cx| group.send_message(&content, replies, cx))
         else {
             return;
         };
@@ -911,6 +930,9 @@ impl GroupPanel {
             .w_full()
             .p_2()
             .gap_1()
+            .when_some(self.reply_to, |this, target| {
+                this.child(self.render_reply_target(target, cx))
+            })
             .children(self.render_attachments(cx))
             .child(
                 h_flex()
@@ -939,6 +961,73 @@ impl GroupPanel {
                                 this.send(window, cx);
                             })),
                     ),
+            )
+            .into_any_element()
+    }
+
+    fn render_reply_target(&self, target: EventId, cx: &mut Context<Self>) -> AnyElement {
+        let context = self.group.upgrade().and_then(|entity| {
+            entity.read_with(cx, |group, cx| {
+                let message = group.message(target)?;
+                let persons = PersonRegistry::global(cx);
+                let author = persons.read(cx).get(&message.author, cx);
+                let line = message.content.lines().next().unwrap_or_default().trim();
+
+                Some((
+                    author.name(),
+                    SharedString::from(line.chars().take(80).collect::<String>()),
+                ))
+            })
+        });
+
+        let (author, snippet) = context.unwrap_or_else(|| {
+            (
+                SharedString::from("Message"),
+                SharedString::from(target.to_hex().chars().take(8).collect::<String>()),
+            )
+        });
+
+        h_flex()
+            .min_w_0()
+            .items_center()
+            .gap_1()
+            .px_2()
+            .py_1()
+            .rounded(px(control_radius()))
+            .bg(cx.theme().surface_raised)
+            .text_style(TextStyle::Caption)
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .text_color(cx.theme().text_muted)
+                    .child("Replying to"),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .max_w(px(140.))
+                    .truncate()
+                    .font_semibold()
+                    .text_color(cx.theme().text)
+                    .child(author),
+            )
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_1()
+                    .truncate()
+                    .text_color(cx.theme().text_faint)
+                    .child(snippet),
+            )
+            .child(
+                Button::new("cancel-reply")
+                    .icon(IconName::Close)
+                    .tooltip("Cancel reply")
+                    .ghost()
+                    .small()
+                    .on_click(cx.listener(|this, _event, _window, cx| {
+                        this.cancel_reply(cx);
+                    })),
             )
             .into_any_element()
     }

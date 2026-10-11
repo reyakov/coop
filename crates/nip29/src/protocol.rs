@@ -43,7 +43,7 @@ fn has_tag(tags: &Tags, name: &str) -> bool {
     tags.iter().any(|tag| tag.kind() == name)
 }
 
-fn tag_value<'a>(tags: &'a Tags, name: &str) -> Option<&'a str> {
+pub(crate) fn tag_value<'a>(tags: &'a Tags, name: &str) -> Option<&'a str> {
     tags.iter()
         .find(|tag| tag.kind() == name)
         .and_then(|tag| tag.content())
@@ -96,6 +96,13 @@ impl GroupId {
             .custom_tag(SingleLetterTag::LOWERCASE_H, self.0.clone())
             .custom_tag(SingleLetterTag::LOWERCASE_P, me.to_hex())
             .kinds(MEMBERSHIP_KINDS)
+    }
+
+    pub fn moderation_filter(&self, limit: usize) -> Filter {
+        Filter::new()
+            .custom_tag(SingleLetterTag::LOWERCASE_H, self.0.clone())
+            .kinds([Kind::GroupCreateInvite, Kind::GroupDeleteEvent])
+            .limit(limit)
     }
 
     pub fn message(

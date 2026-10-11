@@ -52,6 +52,9 @@ pub(crate) fn render(
         )
         .author(author.name())
         .timestamp(message.created_at.to_human_time())
+        .when_some(message.replies_to.first().copied(), |this, target| {
+            this.child(reply_context(target, &actions.group, cx))
+        })
         .child(content)
         .when(!message.media.is_empty(), |this| {
             this.child(media(&message.media, cx))
@@ -71,12 +74,22 @@ pub(crate) fn render(
         format!("message-menu-{}", id.to_hex()),
         row,
         move |menu, window, cx| {
-            let menu = menu.submenu("React", window, cx, {
-                let group = group.clone();
-                let panel = panel.clone();
+            let menu = menu
+                .item({
+                    let panel = panel.clone();
 
-                move |menu, _window, _cx| react_menu(menu, group.clone(), panel.clone(), id)
-            });
+                    PopupMenuItem::new("Reply").on_click(move |_event, _window, cx| {
+                        let _ = panel.update_in(cx, |panel, window, cx| {
+                            panel.start_reply(id, window, cx);
+                        });
+                    })
+                })
+                .submenu("React", window, cx, {
+                    let group = group.clone();
+                    let panel = panel.clone();
+
+                    move |menu, _window, _cx| react_menu(menu, group.clone(), panel.clone(), id)
+                });
 
             if !admin {
                 return menu;
@@ -89,11 +102,9 @@ pub(crate) fn render(
 
                     PopupMenuItem::new(if pinned { "Unpin" } else { "Pin" }).on_click(
                         move |_event, _window, cx| {
-                            if let Err(error) = panel.update_in(cx, |panel, window, cx| {
+                            let _ = panel.update_in(cx, |panel, window, cx| {
                                 panel.toggle_pin(group.clone(), id, window, cx);
-                            }) {
-                                log::warn!("nip29: pinning a message failed: {error}");
-                            }
+                            });
                         },
                     )
                 })
@@ -102,11 +113,9 @@ pub(crate) fn render(
                     let panel = panel.clone();
 
                     PopupMenuItem::new("Delete message").on_click(move |_event, _window, cx| {
-                        if let Err(error) = panel.update_in(cx, |panel, window, cx| {
+                        let _ = panel.update_in(cx, |panel, window, cx| {
                             panel.delete_message(group.clone(), id, window, cx);
-                        }) {
-                            log::warn!("nip29: deleting a message failed: {error}");
-                        }
+                        });
                     })
                 })
         },
@@ -246,6 +255,58 @@ fn reaction_bar(reactions: &[Reaction], cx: &App) -> AnyElement {
                 .child(SharedString::from(emoji))
                 .child(SharedString::from(authors.len().to_string()))
         }))
+        .into_any_element()
+}
+
+fn reply_context(target: EventId, group: &WeakEntity<Group>, cx: &App) -> AnyElement {
+    let context = group.upgrade().and_then(|entity| {
+        entity.read_with(cx, |group, cx| {
+            let message = group.message(target)?;
+            let persons = PersonRegistry::global(cx);
+            let author = persons.read(cx).get(&message.author, cx);
+            let line = message.content.lines().next().unwrap_or_default().trim();
+
+            Some((
+                author.name(),
+                SharedString::from(line.chars().take(80).collect::<String>()),
+            ))
+        })
+    });
+
+    let (author, snippet) = context.unwrap_or_else(|| {
+        (
+            SharedString::from("Message"),
+            SharedString::from("original not loaded"),
+        )
+    });
+
+    h_flex()
+        .min_w_0()
+        .gap_1()
+        .items_center()
+        .child(
+            Icon::new(IconName::Reply)
+                .small()
+                .text_color(cx.theme().text_faint),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .max_w(px(120.))
+                .truncate()
+                .font_semibold()
+                .text_style(TextStyle::Caption)
+                .text_color(cx.theme().text_muted)
+                .child(author),
+        )
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .text_style(TextStyle::Caption)
+                .text_color(cx.theme().text_faint)
+                .child(snippet),
+        )
         .into_any_element()
 }
 
