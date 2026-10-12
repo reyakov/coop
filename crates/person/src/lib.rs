@@ -4,14 +4,16 @@ use std::sync::RwLock;
 
 use anyhow::{Error, anyhow};
 use common::{EventExt, emojis_from_tags};
-use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
+use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use state::{Announcement, BOOTSTRAP_RELAYS, NostrRegistry, TIMEOUT};
 
+mod directory;
 mod person;
 
+pub use directory::*;
 pub use person::*;
 
 pub fn init(cx: &mut App) {
@@ -21,6 +23,14 @@ pub fn init(cx: &mut App) {
 struct GlobalPersonRegistry(Entity<PersonRegistry>);
 
 impl Global for GlobalPersonRegistry {}
+
+/// A change to a person's data
+#[derive(Debug, Clone)]
+pub enum PersonEvent {
+    Updated(Person),
+}
+
+impl EventEmitter<PersonEvent> for PersonRegistry {}
 
 #[derive(Debug, Clone)]
 enum Dispatch {
@@ -37,6 +47,8 @@ pub struct PersonRegistry {
     persons: HashMap<PublicKey, Entity<Person>>,
     /// Set of public keys that have been seen
     seen: RwLock<HashSet<PublicKey>>,
+    /// Public keys with a metadata request in flight
+    in_flight: RwLock<HashSet<PublicKey>>,
     sender: flume::Sender<PublicKey>,
     tasks: SmallVec<[Task<()>; 4]>,
     _subscriptions: SmallVec<[Subscription; 1]>,
@@ -114,6 +126,7 @@ impl PersonRegistry {
         Self {
             persons: HashMap::new(),
             seen: RwLock::new(HashSet::new()),
+            in_flight: RwLock::new(HashSet::new()),
             sender: metadata_tx,
             tasks,
             _subscriptions: smallvec![subscription],
@@ -283,7 +296,7 @@ impl PersonRegistry {
     }
 
     /// Set profile encryption keys announcement
-    fn set_announcement(&mut self, event: &Event, cx: &mut App) {
+    fn set_announcement(&mut self, event: &Event, cx: &mut Context<Self>) {
         let Some(announcement) = Announcement::from_event(event) else {
             log::warn!("Ignoring announcement with missing or invalid key tag");
             return;
@@ -294,6 +307,7 @@ impl PersonRegistry {
                 person.set_announcement(announcement);
                 cx.notify();
             });
+            cx.emit(PersonEvent::Updated(person.read(cx).clone()));
         } else {
             let person =
                 Person::new(event.pubkey, Metadata::default()).with_announcement(announcement);
@@ -302,7 +316,7 @@ impl PersonRegistry {
     }
 
     /// Set messaging relays for a person
-    fn set_messaging_relays(&mut self, event: &Event, cx: &mut App) {
+    fn set_messaging_relays(&mut self, event: &Event, cx: &mut Context<Self>) {
         let urls: Vec<RelayUrl> = nip17::extract_relay_list(event).collect();
 
         if let Some(person) = self.persons.get(&event.pubkey) {
@@ -310,6 +324,7 @@ impl PersonRegistry {
                 person.set_messaging_relays(urls);
                 cx.notify();
             });
+            cx.emit(PersonEvent::Updated(person.read(cx).clone()));
         } else {
             let person = Person::new(event.pubkey, Metadata::default()).with_messaging_relays(urls);
             self.insert(person, cx);
@@ -317,17 +332,23 @@ impl PersonRegistry {
     }
 
     /// Set custom emoji for a person from their emoji list event
-    fn set_emojis(&mut self, event: &Event, cx: &mut App) {
+    fn set_emojis(&mut self, event: &Event, cx: &mut Context<Self>) {
         self.set_emojis_for(event.pubkey, emojis_from_tags(&event.tags), cx);
     }
 
     /// Set custom emoji for a person
-    fn set_emojis_for(&mut self, public_key: PublicKey, emojis: Vec<(String, Url)>, cx: &mut App) {
+    fn set_emojis_for(
+        &mut self,
+        public_key: PublicKey,
+        emojis: Vec<(String, Url)>,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(person) = self.persons.get(&public_key) {
             person.update(cx, |person, cx| {
                 person.set_emojis(emojis);
                 cx.notify();
             });
+            cx.emit(PersonEvent::Updated(person.read(cx).clone()));
         } else {
             let person = Person::new(public_key, Metadata::default()).with_emojis(emojis);
             self.insert(person, cx);
@@ -336,18 +357,23 @@ impl PersonRegistry {
 
     /// Insert batch of persons
     fn bulk_insert(&mut self, persons: Vec<Person>, cx: &mut Context<Self>) {
-        for person in persons.into_iter() {
+        for person in persons {
             let public_key = person.public_key();
-            self.persons
-                .entry(public_key)
-                .or_insert_with(|| cx.new(|_| person));
+
+            if self.persons.contains_key(&public_key) {
+                continue;
+            }
+
+            cx.emit(PersonEvent::Updated(person.clone()));
+            self.persons.insert(public_key, cx.new(|_| person));
         }
         cx.notify();
     }
 
     /// Insert or update a person
-    pub fn insert(&mut self, person: Person, cx: &mut App) {
+    pub fn insert(&mut self, person: Person, cx: &mut Context<Self>) {
         let public_key = person.public_key();
+        self.release_in_flight(&public_key);
 
         match self.persons.get(&public_key) {
             Some(this) => {
@@ -355,9 +381,13 @@ impl PersonRegistry {
                     this.set_metadata(person.metadata());
                     cx.notify();
                 });
+                cx.emit(PersonEvent::Updated(this.read(cx).clone()));
             }
             None => {
+                cx.emit(PersonEvent::Updated(person.clone()));
                 self.persons.insert(public_key, cx.new(|_| person));
+                // Views rendering a placeholder only observed this registry
+                cx.notify();
             }
         }
     }
@@ -384,6 +414,41 @@ impl PersonRegistry {
 
         // Return a temporary profile with default metadata
         Person::new(public_key, Metadata::default())
+    }
+
+    /// Queue a batched metadata request for keys without one in flight
+    pub(crate) fn fetch<I>(&self, keys: I)
+    where
+        I: IntoIterator<Item = PublicKey>,
+    {
+        let mut queue = Vec::new();
+        {
+            let mut in_flight = match self.in_flight.write() {
+                Ok(in_flight) => in_flight,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+
+            for key in keys {
+                if in_flight.insert(key) {
+                    queue.push(key);
+                }
+            }
+        }
+
+        for public_key in queue {
+            if let Err(error) = self.sender.send(public_key) {
+                log::warn!("Failed to queue metadata request: {error}");
+            }
+        }
+    }
+
+    /// Allow future fetches for a key once its metadata has arrived
+    fn release_in_flight(&self, public_key: &PublicKey) {
+        let mut in_flight = match self.in_flight.write() {
+            Ok(in_flight) => in_flight,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        in_flight.remove(public_key);
     }
 
     /// The signed-in user's custom emoji
