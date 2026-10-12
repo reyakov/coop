@@ -8,7 +8,7 @@ use instant::Duration;
 use itertools::Itertools;
 use nip4e::DeviceRegistry;
 use nostr_sdk::prelude::*;
-use person::{Directory, Person, PersonRegistry};
+use person::{Directory, Person};
 use settings::{RoomConfig, SignerKind};
 use state::{NostrRegistry, TIMEOUT, UniversalSigner};
 
@@ -431,9 +431,10 @@ impl Room {
         let sender = nostr.read(cx).current_user()?;
 
         // Construct a direct message rumor event
+        //
         // WARNING: never sign and send this event to relays
         let mut tags = self.conversation_tags(&replies, sender, cx);
-        tags.extend(PersonRegistry::emoji_tags(&content, cx));
+        tags.extend(self.member(&sender, cx).emoji_tags(&content));
 
         let mut event = EventBuilder::new(kind, content)
             .tags(tags)

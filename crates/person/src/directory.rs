@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use anyhow::Error;
+use common::emojis_from_tags;
 use gpui::{App, AppContext, Context, Entity, Subscription, Task};
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
@@ -39,8 +40,11 @@ impl Directory {
         })
     }
 
-    /// Track keys: load known profiles from the database, request the rest
+    /// Load known profiles from the database, request the rest
     pub fn track(&mut self, keys: impl IntoIterator<Item = PublicKey>, cx: &mut Context<Self>) {
+        /// Profiles and emoji lists loaded from the database
+        type Loaded = (Vec<Person>, Vec<(PublicKey, Vec<(String, Url)>)>);
+
         let missing: Vec<PublicKey> = keys
             .into_iter()
             .filter(|key| {
@@ -54,29 +58,53 @@ impl Directory {
         }
 
         // Accept events that arrive while the database query is running
-        self.with_pending(|pending| pending.extend(missing.iter().copied()));
+        self.with_pending(|pending| {
+            pending.extend(missing.iter().copied());
+        });
 
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let authors = missing.clone();
 
-        let task: Task<Result<Vec<Person>, Error>> = cx.background_spawn(async move {
-            let filter = Filter::new().kind(Kind::Metadata).authors(authors);
-            let mut events: Vec<Event> =
-                client.database().query(filter).await?.into_iter().collect();
+        let task: Task<Result<Loaded, Error>> = cx.background_spawn(async move {
+            let mut metadata_events: Vec<Event> = client
+                .database()
+                .query(Filter::new().kind(Kind::Metadata).authors(authors.clone()))
+                .await?
+                .into_iter()
+                .collect();
 
             // Keep only the newest event per author
-            events.sort_by_key(|event| Reverse(event.created_at));
+            metadata_events.sort_by_key(|event| Reverse(event.created_at));
             let mut seen = HashSet::new();
 
-            Ok(events
+            let persons = metadata_events
                 .into_iter()
                 .filter(|event| seen.insert(event.pubkey))
                 .map(|event| {
                     let metadata = Metadata::from_json(event.content).unwrap_or_default();
                     Person::new(event.pubkey, metadata)
                 })
-                .collect())
+                .collect();
+
+            let mut emoji_events: Vec<Event> = client
+                .database()
+                .query(Filter::new().kind(Kind::Emojis).authors(authors))
+                .await?
+                .into_iter()
+                .collect();
+
+            // Keep only the newest event per author
+            emoji_events.sort_by_key(|event| Reverse(event.created_at));
+            let mut seen = HashSet::new();
+
+            let emojis = emoji_events
+                .into_iter()
+                .filter(|event| seen.insert(event.pubkey))
+                .map(|event| (event.pubkey, emojis_from_tags(&event.tags)))
+                .collect();
+
+            Ok((persons, emojis))
         });
 
         self.tasks.push(cx.spawn(async move |this, cx| {
@@ -84,17 +112,38 @@ impl Directory {
 
             this.update(cx, |this, cx| {
                 let remaining = match loaded {
-                    Ok(persons) => {
+                    Ok((persons, emojis)) => {
                         let found: HashSet<PublicKey> =
                             persons.iter().map(Person::public_key).collect();
                         this.bulk_insert(persons, cx);
+
+                        // Emojis apply on top of loaded or already received data
+                        let mut updated = false;
+
+                        for (public_key, emojis) in emojis {
+                            if emojis.is_empty() {
+                                continue;
+                            }
+
+                            let person = this
+                                .persons
+                                .entry(public_key)
+                                .or_insert_with(|| Person::new(public_key, Metadata::default()));
+                            person.set_emojis(emojis);
+                            updated = true;
+                        }
+
+                        if updated {
+                            cx.notify();
+                        }
+
                         missing
                             .into_iter()
                             .filter(|key| !found.contains(key))
                             .collect()
                     }
-                    Err(error) => {
-                        log::warn!("Failed to load persons from the local database: {error}");
+                    Err(e) => {
+                        log::warn!("Failed to load persons from the database: {e}");
                         missing
                     }
                 };
@@ -122,17 +171,36 @@ impl Directory {
         Person::new(*public_key, Metadata::default())
     }
 
-    /// Accept events for tracked keys and drop the rest
+    /// Merge event data into the tracked person
     fn handle_event(&mut self, event: PersonEvent, cx: &mut Context<Self>) {
-        let PersonEvent::Updated(person) = event;
-        let public_key = person.public_key();
+        let public_key = match &event {
+            PersonEvent::Metadata(person) => person.public_key(),
+            PersonEvent::Emojis { public_key, .. }
+            | PersonEvent::Announcement { public_key, .. }
+            | PersonEvent::MessagingRelays { public_key, .. } => *public_key,
+        };
 
-        if self.persons.contains_key(&public_key)
-            || self.with_pending(|pending| pending.remove(&public_key))
+        if !self.persons.contains_key(&public_key)
+            && !self.with_pending(|pending| pending.remove(&public_key))
         {
-            self.persons.insert(public_key, person);
-            cx.notify();
+            return;
         }
+
+        let person = self
+            .persons
+            .entry(public_key)
+            .or_insert_with(|| Person::new(public_key, Metadata::default()));
+
+        match event {
+            PersonEvent::Metadata(updated) => person.set_metadata(updated.metadata()),
+            PersonEvent::Emojis { emojis, .. } => person.set_emojis(emojis),
+            PersonEvent::Announcement { announcement, .. } => {
+                person.set_announcement(announcement);
+            }
+            PersonEvent::MessagingRelays { relays, .. } => person.set_messaging_relays(relays),
+        }
+
+        cx.notify();
     }
 
     /// Insert loaded persons, keeping data already received from relays
@@ -161,7 +229,6 @@ impl Directory {
             Ok(pending) => pending,
             Err(poisoned) => poisoned.into_inner(),
         };
-
         then(&mut pending)
     }
 }

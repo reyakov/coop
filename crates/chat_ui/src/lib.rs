@@ -17,7 +17,7 @@ use gpui::{
 };
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
-use person::{Directory, Person, PersonRegistry};
+use person::{Directory, Person};
 use regex::Regex;
 use settings::{AppSettings, SignerKind};
 use smallvec::{SmallVec, smallvec};
@@ -1770,7 +1770,18 @@ impl ChatPanel {
     }
 
     fn render_emoji_menu(&self, _window: &Window, cx: &Context<Self>) -> impl IntoElement {
-        let emojis = PersonRegistry::current_emojis(cx);
+        let nostr = NostrRegistry::global(cx);
+        let current_user = nostr.read(cx).current_user();
+
+        let emojis = current_user
+            .map(|current_user| {
+                self.directory
+                    .read(cx)
+                    .person(&current_user, cx)
+                    .emojis()
+                    .to_vec()
+            })
+            .unwrap_or_default();
 
         Button::new("emoji")
             .icon(IconName::Emoji)

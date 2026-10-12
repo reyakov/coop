@@ -7,7 +7,7 @@ use gpui::{
 };
 use nip29::{Activity, Group, Reaction};
 use nostr_sdk::prelude::{EventId, Kind};
-use person::{Directory, PersonRegistry};
+use person::Directory;
 use settings::AppSettings;
 use state::NostrRegistry;
 use theme::{ActiveTheme, TextStyle, Typeset as _};
@@ -164,7 +164,22 @@ fn react_menu(
         )
     });
 
-    let emojis = PersonRegistry::current_emojis(cx);
+    let emojis = panel
+        .upgrade()
+        .and_then(|panel| {
+            let current_user = NostrRegistry::global(cx).read(cx).current_user()?;
+            Some(
+                panel
+                    .read(cx)
+                    .directory
+                    .read(cx)
+                    .person(&current_user, cx)
+                    .emojis()
+                    .to_vec(),
+            )
+        })
+        .unwrap_or_default();
+
     if emojis.is_empty() {
         return menu;
     }

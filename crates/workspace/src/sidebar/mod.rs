@@ -142,15 +142,27 @@ impl Sidebar {
         );
 
         subscriptions.push(
-            cx.subscribe_in(&nostr, window, |this, _, event, window, cx| {
-                if let StateEvent::NoSigner = event {
-                    this.banner = onboarding::pick_banner();
-                    if this.search_open {
-                        this.toggle_search(window, cx);
+            cx.subscribe_in(
+                &nostr,
+                window,
+                |this, state, event, window, cx| match event {
+                    StateEvent::NoSigner => {
+                        this.banner = onboarding::pick_banner();
+                        if this.search_open {
+                            this.toggle_search(window, cx);
+                        }
+                        cx.notify();
                     }
-                    cx.notify();
-                }
-            }),
+                    StateEvent::SignerChanged => {
+                        if let Some(current_user) = state.read(cx).current_user() {
+                            this.directory.update(cx, |directory, cx| {
+                                directory.track([current_user], cx);
+                            });
+                        }
+                    }
+                    _ => {}
+                },
+            ),
         );
 
         subscriptions.push(cx.subscribe_in(

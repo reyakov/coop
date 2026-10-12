@@ -9,7 +9,7 @@ use gpui::{
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
-use person::{Person, PersonRegistry, shorten_pubkey};
+use person::{Directory, Person, PersonRegistry, shorten_pubkey};
 use settings::AppSettings;
 use state::{NostrRegistry, upload};
 use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius};
@@ -34,6 +34,8 @@ struct ProfileDialog {
     public_key: PublicKey,
     /// Whether the profile belongs to the signed-in user
     is_current_user: bool,
+    /// Person directory for the profile
+    directory: Entity<Directory>,
     /// Whether the metadata inputs are shown
     editing: bool,
     /// User's name text input
@@ -74,9 +76,15 @@ impl ProfileDialog {
                 .placeholder("A short introduce about you.")
         });
 
+        let directory = Directory::new(cx);
+        directory.update(cx, |directory, cx| {
+            directory.track([public_key], cx);
+        });
+
         Self {
             public_key,
             is_current_user,
+            directory,
             editing: false,
             name_input,
             avatar_input,
@@ -90,8 +98,7 @@ impl ProfileDialog {
     }
 
     fn profile(&self, cx: &App) -> Person {
-        let persons = PersonRegistry::global(cx);
-        persons.read(cx).get(&self.public_key, cx)
+        self.directory.read(cx).person(&self.public_key, cx)
     }
 
     fn set_profile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -238,9 +245,8 @@ impl ProfileDialog {
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let persons = PersonRegistry::global(cx);
         let public_key = self.public_key;
-        let old_metadata = persons.read(cx).get(&public_key, cx).metadata();
+        let old_metadata = self.directory.read(cx).person(&public_key, cx).metadata();
 
         // Extract all new metadata fields
         let avatar = self.avatar_input.read(cx).value();
@@ -274,9 +280,9 @@ impl ProfileDialog {
             match task.await {
                 Ok(_) => {
                     this.update_in(cx, |this, window, cx| {
-                        // Update the registry
-                        persons.update(cx, |this, cx| {
-                            this.insert(Person::new(public_key, new_metadata), cx);
+                        // Publish the new metadata to every directory
+                        PersonRegistry::global(cx).update(cx, |registry, cx| {
+                            registry.insert(Person::new(public_key, new_metadata), cx);
                         });
 
                         this.set_updating(false, cx);

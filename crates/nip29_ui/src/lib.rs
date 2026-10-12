@@ -532,11 +532,11 @@ impl GroupPanel {
         }
 
         let replies: Vec<EventId> = self.reply_to.take().into_iter().collect();
+        let emojis = self.emoji_tags(&content, cx);
 
-        let Ok(send) = self
-            .group
-            .update(cx, |group, cx| group.send_message(&content, replies, cx))
-        else {
+        let Ok(send) = self.group.update(cx, |group, cx| {
+            group.send_message(&content, replies, emojis, cx)
+        }) else {
             return;
         };
 
@@ -613,6 +613,18 @@ impl GroupPanel {
             .and_then(|group| Notice::of(group.read(cx)))
     }
 
+    /// The signed-in user's custom emoji tags referenced in `content`
+    fn emoji_tags(&self, content: &str, cx: &App) -> Vec<Tag> {
+        let Some(current_user) = NostrRegistry::global(cx).read(cx).current_user() else {
+            return Vec::new();
+        };
+
+        self.directory
+            .read(cx)
+            .person(&current_user, cx)
+            .emoji_tags(content)
+    }
+
     fn react(
         &mut self,
         group: WeakEntity<Group>,
@@ -621,7 +633,10 @@ impl GroupPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Ok(react) = group.update(cx, |group, cx| group.send_reaction(id, emoji, cx)) else {
+        let emojis = self.emoji_tags(&emoji, cx);
+
+        let Ok(react) = group.update(cx, |group, cx| group.send_reaction(id, emoji, emojis, cx))
+        else {
             return;
         };
 
