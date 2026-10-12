@@ -106,6 +106,14 @@ impl Sidebar {
             .chain(groups.into_iter().map(SearchResult::Group))
             .chain(messages.into_iter().map(SearchResult::Message))
             .collect();
+
+        let authors = self.results.iter().filter_map(|result| match result {
+            SearchResult::Message(hit) => Some(hit.author),
+            _ => None,
+        });
+        self.directory
+            .update(cx, |directory, cx| directory.track(authors, cx));
+
         cx.notify();
     }
 
@@ -133,7 +141,7 @@ impl Sidebar {
 
             this.update(cx, |this, cx| {
                 this.global_finding = false;
-                this.global_results = Some(match result {
+                let keys: Vec<PublicKey> = match result {
                     Ok(profiles) => {
                         // Relays may return the same profile more than once
                         let mut seen = HashSet::new();
@@ -146,7 +154,12 @@ impl Sidebar {
                         log::debug!("Global search failed: {error}");
                         Vec::new()
                     }
+                };
+
+                this.directory.update(cx, |directory, cx| {
+                    directory.track(keys.iter().copied(), cx)
                 });
+                this.global_results = Some(keys);
                 cx.notify();
             })
             .ok();

@@ -11,7 +11,7 @@ use gpui::{
     SharedString, Styled, Subscription, Task, Window, div, px, relative,
 };
 use nostr_sdk::prelude::*;
-use person::PersonRegistry;
+use person::Directory;
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
 use state::{Announcement, CLIENT_NAME, NostrRegistry, UniversalSigner};
@@ -63,6 +63,8 @@ pub struct DeviceRegistry {
     pub(crate) pending_request: bool,
     /// Whether an announcement has been made for this device
     pub(crate) announcement_existed: Arc<AtomicBool>,
+    /// Person directory for requesters shown in notifications
+    directory: Entity<Directory>,
     /// Relay notification listener
     notification_listener: Option<Task<Result<(), Error>>>,
     tasks: Vec<Task<Result<(), Error>>>,
@@ -122,6 +124,7 @@ impl DeviceRegistry {
             signer,
             pending_request: false,
             announcement_existed: Arc::new(AtomicBool::new(false)),
+            directory: Directory::new(cx),
             notification_listener: None,
             tasks: vec![],
             _subscriptions: subscriptions,
@@ -690,7 +693,11 @@ impl DeviceRegistry {
     }
 
     /// Build a notification for the encryption request.
-    fn notification(&self, event: Event, cx: &Context<Self>) -> Result<Notification, Error> {
+    fn notification(
+        &mut self,
+        event: Event,
+        cx: &mut Context<Self>,
+    ) -> Result<Notification, Error> {
         const MSG: &str = "You've requested an encryption key from another device. \
                            Approve to allow Coop to share with it. Before approving, \
                            compare the code with the one shown on the requesting \
@@ -705,8 +712,8 @@ impl DeviceRegistry {
             .context("Request has no valid requester key")?;
 
         let code = authorization_code(&requester);
-        let persons = PersonRegistry::global(cx);
-        let profile = persons.read(cx).get(&requester, cx);
+        let directory = self.directory.clone();
+        directory.update(cx, |directory, cx| directory.track([requester], cx));
         let code_label = code.clone();
 
         let entity = cx.entity().downgrade();
@@ -719,6 +726,8 @@ impl DeviceRegistry {
             .with_kind(NotificationKind::Info)
             .title("Encryption Key Request")
             .content(move |_this, _window, cx| {
+                let profile = directory.read(cx).person(&requester, cx);
+
                 v_flex()
                     .gap(px(theme::SPACE))
                     .text_style(TextStyle::Callout)

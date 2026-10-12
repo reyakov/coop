@@ -13,6 +13,7 @@ use gpui::{
 use instant::Duration;
 use nip29::{Group, GroupKey, GroupsEvent, GroupsRegistry};
 use nostr_sdk::prelude::*;
+use person::Directory;
 use smallvec::{SmallVec, smallvec};
 use state::{FIND_DELAY, NostrRegistry, StateEvent};
 use theme::{ActiveTheme, TABBAR_HEIGHT, TextStyle, Typeset as _};
@@ -61,6 +62,8 @@ pub struct Sidebar {
     contacts_open: bool,
     /// The signed-in user's contacts, loaded when the contact picker opens.
     contacts: Option<Vec<PublicKey>>,
+    /// Person directory for contacts, search hits, and group members
+    directory: Entity<Directory>,
     /// Contacts selected in the contact picker.
     selected_contacts: HashSet<PublicKey>,
     /// Scroll state of the contact picker's list.
@@ -139,15 +142,27 @@ impl Sidebar {
         );
 
         subscriptions.push(
-            cx.subscribe_in(&nostr, window, |this, _, event, window, cx| {
-                if let StateEvent::NoSigner = event {
-                    this.banner = onboarding::pick_banner();
-                    if this.search_open {
-                        this.toggle_search(window, cx);
+            cx.subscribe_in(
+                &nostr,
+                window,
+                |this, state, event, window, cx| match event {
+                    StateEvent::NoSigner => {
+                        this.banner = onboarding::pick_banner();
+                        if this.search_open {
+                            this.toggle_search(window, cx);
+                        }
+                        cx.notify();
                     }
-                    cx.notify();
-                }
-            }),
+                    StateEvent::SignerChanged => {
+                        if let Some(current_user) = state.read(cx).current_user() {
+                            this.directory.update(cx, |directory, cx| {
+                                directory.track([current_user], cx);
+                            });
+                        }
+                    }
+                    _ => {}
+                },
+            ),
         );
 
         subscriptions.push(cx.subscribe_in(
@@ -196,6 +211,7 @@ impl Sidebar {
             chats_open: None,
             contacts_open: false,
             contacts: None,
+            directory: Directory::new(cx),
             selected_contacts: HashSet::new(),
             contacts_scroll: UniformListScrollHandle::new(),
             requests_open: false,

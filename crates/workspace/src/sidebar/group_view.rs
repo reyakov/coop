@@ -8,7 +8,6 @@ use gpui::{
 };
 use nip29::Group;
 use nostr_sdk::prelude::*;
-use person::PersonRegistry;
 use settings::AppSettings;
 use state::NostrRegistry;
 use theme::{ActiveTheme, TextStyle, Typeset as _};
@@ -51,6 +50,19 @@ impl Sidebar {
     pub(super) fn show_group(&mut self, group: &Entity<Group>, cx: &mut Context<Self>) {
         self.group = Some(group.downgrade());
         self.group_open = true;
+
+        let group = group.read(cx);
+        let mut keys: Vec<PublicKey> = group.members().iter().copied().collect();
+        keys.extend(
+            group
+                .admins()
+                .entries()
+                .iter()
+                .map(|(public_key, _)| *public_key),
+        );
+        self.directory
+            .update(cx, |directory, cx| directory.track(keys, cx));
+
         cx.notify();
     }
 
@@ -253,9 +265,8 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let hide_avatar = AppSettings::get_hide_avatar(cx);
-        let persons = PersonRegistry::global(cx);
 
-        let person = persons.read(cx).get(public_key, cx);
+        let person = self.directory.read(cx).person(public_key, cx);
         let group = group.clone();
 
         let public_key = *public_key;

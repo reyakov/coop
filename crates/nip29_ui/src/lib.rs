@@ -11,7 +11,7 @@ use gpui::{
 };
 use nip29::{Group, GroupEvent, GroupKey, GroupsRegistry, Membership, Pin, Row};
 use nostr_sdk::prelude::*;
-use person::PersonRegistry;
+use person::Directory;
 use serde::Deserialize;
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
@@ -308,6 +308,8 @@ pub struct GroupPanel {
     id: SharedString,
     focus_handle: FocusHandle,
     group: WeakEntity<Group>,
+    /// Person directory for members, message authors, and activity subjects
+    directory: Entity<Directory>,
     list_state: ListState,
     head: Option<EventId>,
     /// The message the composer is replying to, if any.
@@ -356,12 +358,14 @@ impl GroupPanel {
         subscriptions.push(cx.subscribe(&group, |this, _group, event, cx| {
             if !matches!(event, GroupEvent::Sent(_)) {
                 this.sync(cx);
+                this.track_participants(cx);
                 cx.notify();
             }
         }));
 
         subscriptions.push(cx.observe(&group, |this, _group, cx| {
             this.sync(cx);
+            this.track_participants(cx);
             cx.notify();
         }));
 
@@ -376,10 +380,11 @@ impl GroupPanel {
             ));
         });
 
-        Self {
+        let mut this = Self {
             id,
             focus_handle: cx.focus_handle(),
             group: group.downgrade(),
+            directory: Directory::new(cx),
             list_state: ListState::new(count + 2, ListAlignment::Bottom, px(1024.)),
             head,
             reply_to: None,
@@ -389,7 +394,29 @@ impl GroupPanel {
             uploading: false,
             tasks: smallvec![],
             _subscriptions: subscriptions,
-        }
+        };
+
+        this.track_participants(cx);
+
+        this
+    }
+
+    /// Track the keys rendered by this panel: members, message authors, and
+    /// activity subjects
+    fn track_participants(&mut self, cx: &mut Context<Self>) {
+        let Some(group) = self.group.upgrade() else {
+            return;
+        };
+
+        let group = group.read(cx);
+        let mut keys: Vec<PublicKey> = group.members().iter().copied().collect();
+        keys.extend(group.rows().iter().map(|row| match row {
+            Row::Message(message) => message.author,
+            Row::Activity(activity) => activity.subject(),
+        }));
+
+        self.directory
+            .update(cx, |directory, cx| directory.track(keys, cx));
     }
 
     fn item_count(&self, cx: &App) -> usize {
@@ -505,11 +532,11 @@ impl GroupPanel {
         }
 
         let replies: Vec<EventId> = self.reply_to.take().into_iter().collect();
+        let emojis = self.emoji_tags(&content, cx);
 
-        let Ok(send) = self
-            .group
-            .update(cx, |group, cx| group.send_message(&content, replies, cx))
-        else {
+        let Ok(send) = self.group.update(cx, |group, cx| {
+            group.send_message(&content, replies, emojis, cx)
+        }) else {
             return;
         };
 
@@ -586,6 +613,18 @@ impl GroupPanel {
             .and_then(|group| Notice::of(group.read(cx)))
     }
 
+    /// The signed-in user's custom emoji tags referenced in `content`
+    fn emoji_tags(&self, content: &str, cx: &App) -> Vec<Tag> {
+        let Some(current_user) = NostrRegistry::global(cx).read(cx).current_user() else {
+            return Vec::new();
+        };
+
+        self.directory
+            .read(cx)
+            .person(&current_user, cx)
+            .emoji_tags(content)
+    }
+
     fn react(
         &mut self,
         group: WeakEntity<Group>,
@@ -594,7 +633,10 @@ impl GroupPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Ok(react) = group.update(cx, |group, cx| group.send_reaction(id, emoji, cx)) else {
+        let emojis = self.emoji_tags(&emoji, cx);
+
+        let Ok(react) = group.update(cx, |group, cx| group.send_reaction(id, emoji, emojis, cx))
+        else {
             return;
         };
 
@@ -877,11 +919,13 @@ impl GroupPanel {
 
         let message = match row {
             Row::Message(message) => message,
-            Row::Activity(activity) => return message::render_activity(ix, activity, cx),
+            Row::Activity(activity) => {
+                return message::render_activity(ix, activity, &self.directory, cx);
+            }
         };
 
         let nostr = NostrRegistry::global(cx);
-        let persons = PersonRegistry::global(cx);
+        let directory = self.directory.clone();
 
         let content = self
             .rendered_texts_by_id
@@ -891,7 +935,7 @@ impl GroupPanel {
                     &message.content,
                     &message.mentions,
                     &message.emojis,
-                    &persons,
+                    &directory,
                     cx,
                 )
             })
@@ -916,6 +960,7 @@ impl GroupPanel {
                 panel: cx.weak_entity(),
                 admin,
                 pinned,
+                persons: self.directory.clone(),
             },
             cx,
         )
@@ -990,8 +1035,7 @@ impl GroupPanel {
         let context = self.group.upgrade().and_then(|entity| {
             entity.read_with(cx, |group, cx| {
                 let message = group.message(target)?;
-                let persons = PersonRegistry::global(cx);
-                let author = persons.read(cx).get(&message.author, cx);
+                let author = self.directory.read(cx).person(&message.author, cx);
                 let preview = message.preview();
                 let line = preview.lines().next().unwrap_or_default().trim();
 

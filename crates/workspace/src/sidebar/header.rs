@@ -5,7 +5,6 @@ use gpui::{
     Stateful, Styled, div, px,
 };
 use nostr_sdk::prelude::*;
-use person::PersonRegistry;
 use theme::TABBAR_HEIGHT;
 use ui::avatar::Avatar;
 use ui::button::{Button, ButtonVariants};
@@ -22,8 +21,7 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         let updater = AutoUpdater::try_global(cx);
-        let persons = PersonRegistry::global(cx);
-        let profile = persons.read(cx).get(current_user, cx);
+        let profile = self.directory.read(cx).person(current_user, cx);
         let avatar = profile.avatar();
         let avatar_seed = profile.avatar_seed();
 

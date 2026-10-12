@@ -580,6 +580,7 @@ impl ChatRegistry {
         let room: Room = room.into().organize(&public_key);
         let room_id = room.id;
         let entity = cx.new(|_| room);
+        entity.update(cx, |room, cx| room.ensure_directory(cx));
 
         self.room_index.insert(room_id, entity.clone());
         self.rooms.insert(0, entity);
@@ -594,6 +595,7 @@ impl ChatRegistry {
 
         if let hash_map::Entry::Vacant(e) = self.room_index.entry(id) {
             let entity = room.to_owned();
+            entity.update(cx, |room, cx| room.ensure_directory(cx));
             e.insert(entity.clone());
 
             self.rooms.insert(0, entity);
@@ -670,6 +672,7 @@ impl ChatRegistry {
             } else {
                 let new_room_id = new_room.id;
                 let entity = cx.new(|_| new_room);
+                entity.update(cx, |room, cx| room.ensure_directory(cx));
                 self.room_index.insert(new_room_id, entity.clone());
                 self.rooms.push(entity);
 

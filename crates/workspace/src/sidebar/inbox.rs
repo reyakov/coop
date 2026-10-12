@@ -69,6 +69,9 @@ impl Sidebar {
             match task.await {
                 Ok(contacts) => {
                     this.update(cx, |this, cx| {
+                        this.directory.update(cx, |directory, cx| {
+                            directory.track(contacts.iter().copied(), cx)
+                        });
                         this.contacts = Some(contacts);
                         cx.notify();
                     })?;

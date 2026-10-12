@@ -9,7 +9,7 @@ use gpui::{
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
-use person::{Person, PersonRegistry, shorten_pubkey};
+use person::{Directory, Person, shorten_pubkey};
 use smallvec::{SmallVec, smallvec};
 use state::{BOOTSTRAP_RELAYS, NostrAddress, NostrRegistry, TIMEOUT};
 use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius};
@@ -33,6 +33,8 @@ pub struct Screening {
     last_active: Option<Timestamp>,
     /// All mutual contacts of the person being screened.
     mutual_contacts: Vec<PublicKey>,
+    /// Person directory for the person and their mutual contacts
+    directory: Entity<Directory>,
     tasks: SmallVec<[Task<()>; 3]>,
     _subscriptions: SmallVec<[Subscription; 1]>,
 }
@@ -53,12 +55,16 @@ impl Screening {
             this.verify_identifier(cx);
         });
 
+        let directory = Directory::new(cx);
+        directory.update(cx, |directory, cx| directory.track([public_key], cx));
+
         Self {
             public_key,
             verified: false,
             followed: false,
             last_active: None,
             mutual_contacts: vec![],
+            directory,
             tasks: smallvec![],
             _subscriptions: subscriptions,
         }
@@ -208,8 +214,7 @@ impl Screening {
     }
 
     fn profile(&self, cx: &Context<Self>) -> Person {
-        let persons = PersonRegistry::global(cx);
-        persons.read(cx).get(&self.public_key, cx)
+        self.directory.read(cx).person(&self.public_key, cx)
     }
 
     fn address(&self, cx: &Context<Self>) -> Option<Nip05Address> {
@@ -260,22 +265,23 @@ impl Screening {
 
     fn mutual_contacts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let contacts = self.mutual_contacts.clone();
+        let directory = self.directory.clone();
 
         window.open_dialog(cx, move |this, _window, _cx| {
             let contacts = contacts.clone();
+            let directory = directory.clone();
             let total = contacts.len();
 
             this.title("Mutual contacts").child(
                 v_flex().gap_1().pb_2().child(
                     uniform_list("contacts", total, move |range, _window, cx| {
-                        let persons = PersonRegistry::global(cx);
                         let mut items = Vec::with_capacity(total);
 
                         for ix in range {
                             let Some(contact) = contacts.get(ix) else {
                                 continue;
                             };
-                            let profile = persons.read(cx).get(contact, cx);
+                            let profile = directory.read(cx).person(contact, cx);
 
                             items.push(
                                 h_flex()

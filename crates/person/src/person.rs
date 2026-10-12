@@ -57,21 +57,6 @@ impl Person {
         }
     }
 
-    /// Build profile encryption keys announcement
-    pub(crate) fn with_announcement(mut self, announcement: Announcement) -> Self {
-        self.announcement = Some(announcement);
-        self
-    }
-
-    /// Build profile messaging relays
-    pub(crate) fn with_messaging_relays<I>(mut self, relays: I) -> Self
-    where
-        I: IntoIterator<Item = RelayUrl>,
-    {
-        self.messaging_relays = relays.into_iter().collect();
-        self
-    }
-
     /// Get profile public key
     pub fn public_key(&self) -> PublicKey {
         self.public_key
@@ -90,12 +75,6 @@ impl Person {
     /// Set custom emoji from the person's emoji list
     pub(crate) fn set_emojis(&mut self, emojis: Vec<(String, Url)>) {
         self.emojis = emojis;
-    }
-
-    /// Build custom emoji from the person's emoji list
-    pub(crate) fn with_emojis(mut self, emojis: Vec<(String, Url)>) -> Self {
-        self.emojis = emojis;
-        self
     }
 
     /// An `emoji` tag for every custom emoji referenced as `:shortcode:` in `content`

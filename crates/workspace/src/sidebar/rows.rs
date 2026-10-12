@@ -9,7 +9,6 @@ use gpui::{
 };
 use nip29::Group;
 use nostr_sdk::prelude::*;
-use person::PersonRegistry;
 use settings::AppSettings;
 use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius};
 use ui::avatar::Avatar;
@@ -196,8 +195,7 @@ impl Sidebar {
                         .into_any_element()
                     }
                     SidebarRow::Contact { public_key } => {
-                        let persons = PersonRegistry::global(cx);
-                        let person = persons.read(cx).get(public_key, cx);
+                        let person = self.directory.read(cx).person(public_key, cx);
                         let selected = self.selected_contacts.contains(public_key);
                         let sidebar = cx.entity().downgrade();
                         let public_key = public_key.to_owned();
@@ -224,8 +222,7 @@ impl Sidebar {
                             .into_any_element()
                     }
                     SidebarRow::Profile { public_key } => {
-                        let persons = PersonRegistry::global(cx);
-                        let person = persons.read(cx).get(public_key, cx);
+                        let person = self.directory.read(cx).person(public_key, cx);
                         let public_key = public_key.to_owned();
 
                         Nav::new(index)
@@ -330,7 +327,7 @@ impl Sidebar {
                         .into_any_element()
                     }
                     SidebarRow::Message { hit } => {
-                        let person = PersonRegistry::global(cx).read(cx).get(&hit.author, cx);
+                        let person = self.directory.read(cx).person(&hit.author, cx);
                         let name = hit.room.read(cx).display_name(cx);
                         let detail = format!("{} · {}", name, hit.created_at.to_ago());
                         let dock = self.dock.clone();

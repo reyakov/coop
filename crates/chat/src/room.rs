@@ -3,12 +3,12 @@ use std::hash::{Hash, Hasher};
 
 use anyhow::{Error, anyhow};
 use common::EventExt;
-use gpui::{App, AppContext, Context, EventEmitter, SharedString, Task};
+use gpui::{App, AppContext, Context, Entity, EventEmitter, SharedString, Task};
 use instant::Duration;
 use itertools::Itertools;
 use nip4e::DeviceRegistry;
 use nostr_sdk::prelude::*;
-use person::{Person, PersonRegistry};
+use person::{Directory, Person};
 use settings::{RoomConfig, SignerKind};
 use state::{NostrRegistry, TIMEOUT, UniversalSigner};
 
@@ -88,6 +88,9 @@ pub struct Room {
 
     /// Configuration
     config: RoomConfig,
+
+    /// Person directory, attached when the room is registered
+    directory: Option<Entity<Directory>>,
 }
 
 impl Ord for Room {
@@ -136,6 +139,7 @@ impl From<&UnsignedEvent> for Room {
             members,
             kind: RoomKind::default(),
             config: RoomConfig::new(),
+            directory: None,
         }
     }
 }
@@ -236,6 +240,32 @@ impl Room {
         self.members.len() > 2
     }
 
+    /// The room's person directory, attached when the room is registered
+    pub fn directory(&self) -> Option<Entity<Directory>> {
+        self.directory.clone()
+    }
+
+    /// Attach the person directory, tracking the room's members
+    pub(crate) fn ensure_directory(&mut self, cx: &mut Context<Self>) {
+        if self.directory.is_some() {
+            return;
+        }
+
+        let directory = Directory::new(cx);
+        let members = self.members.clone();
+        directory.update(cx, |directory, cx| directory.track(members, cx));
+        self.directory = Some(directory);
+    }
+
+    /// The person for a room member
+    fn member(&self, public_key: &PublicKey, cx: &App) -> Person {
+        let Some(directory) = self.directory.as_ref() else {
+            return Person::new(*public_key, Metadata::default());
+        };
+
+        directory.read(cx).person(public_key, cx)
+    }
+
     /// Gets the display name for the room
     pub fn display_name(&self, cx: &App) -> SharedString {
         if let Some(value) = self.subject.clone() {
@@ -267,19 +297,16 @@ impl Room {
     ///
     /// Display member is always different from the current user.
     pub fn display_member(&self, cx: &App) -> Person {
-        let persons = PersonRegistry::global(cx);
-        persons.read(cx).get(&self.members[0], cx)
+        self.member(&self.members[0], cx)
     }
 
     /// Merge the names of the first two members of the room.
     fn merged_name(&self, cx: &App) -> SharedString {
-        let persons = PersonRegistry::global(cx);
-
         if self.is_group() {
             let profiles: Vec<Person> = self
                 .members
                 .iter()
-                .map(|public_key| persons.read(cx).get(public_key, cx))
+                .map(|public_key| self.member(public_key, cx))
                 .collect();
 
             let mut name = profiles
@@ -404,9 +431,10 @@ impl Room {
         let sender = nostr.read(cx).current_user()?;
 
         // Construct a direct message rumor event
+        //
         // WARNING: never sign and send this event to relays
         let mut tags = self.conversation_tags(&replies, sender, cx);
-        tags.extend(PersonRegistry::emoji_tags(&content, cx));
+        tags.extend(self.member(&sender, cx).emoji_tags(&content));
 
         let mut event = EventBuilder::new(kind, content)
             .tags(tags)
@@ -446,8 +474,6 @@ impl Room {
 
     // Build the `subject` + reply `e` tags + receiver `p` tags (excluding `sender`)
     fn conversation_tags(&self, replies: &[EventId], sender: PublicKey, cx: &App) -> Vec<Tag> {
-        let persons = PersonRegistry::global(cx);
-
         // Construct event's tags
         let mut tags = vec![];
 
@@ -463,7 +489,7 @@ impl Room {
 
         // Add all receiver tags (no intermediate allocation)
         for public_key in self.members.iter().filter(|pk| *pk != &sender) {
-            let member = persons.read(cx).get(public_key, cx);
+            let member = self.member(public_key, cx);
             tags.push(Tag::from(Nip01Tag::PublicKey {
                 public_key: member.public_key(),
                 relay_hint: member.messaging_relay_hint(),
@@ -486,15 +512,14 @@ impl Room {
         let current_user = nostr.read(cx).current_user()?;
 
         // Get sender's profile
-        let persons = PersonRegistry::global(cx);
-        let sender = persons.read(cx).get(&current_user, cx);
+        let sender = self.member(&current_user, cx);
 
         // Get all members (excluding sender)
         let receivers: Vec<Person> = self
             .members
             .iter()
             .filter(|public_key| public_key != &&sender.public_key())
-            .map(|member| persons.read(cx).get(member, cx))
+            .map(|member| self.member(member, cx))
             .collect();
 
         Some(cx.background_spawn(async move {

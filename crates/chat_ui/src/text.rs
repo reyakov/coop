@@ -1,7 +1,7 @@
 use chat::{Mention, nevent_refs};
 use gpui::{App, Entity};
 use nostr_sdk::prelude::Url;
-use person::PersonRegistry;
+use person::Directory;
 use ui::markdown::InlineReplacement;
 pub use ui::markdown::RenderedText;
 
@@ -9,7 +9,7 @@ pub fn rendered_text(
     content: &str,
     mentions: &[Mention],
     emojis: &[(String, Url)],
-    persons: &Entity<PersonRegistry>,
+    persons: &Entity<Directory>,
     cx: &App,
 ) -> RenderedText {
     let mut replacements = mentions
@@ -17,7 +17,10 @@ pub fn rendered_text(
         .map(|mention| {
             InlineReplacement::new(
                 mention.range.clone(),
-                format!("@{}", persons.read(cx).get(&mention.public_key, cx).name()),
+                format!(
+                    "@{}",
+                    persons.read(cx).person(&mention.public_key, cx).name()
+                ),
             )
         })
         .collect::<Vec<_>>();

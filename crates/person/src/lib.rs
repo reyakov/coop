@@ -1,17 +1,18 @@
-use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use anyhow::{Error, anyhow};
-use common::{EventExt, emojis_from_tags};
-use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
+use common::emojis_from_tags;
+use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use state::{Announcement, BOOTSTRAP_RELAYS, NostrRegistry, TIMEOUT};
 
+mod directory;
 mod person;
 
+pub use directory::*;
 pub use person::*;
 
 pub fn init(cx: &mut App) {
@@ -21,6 +22,30 @@ pub fn init(cx: &mut App) {
 struct GlobalPersonRegistry(Entity<PersonRegistry>);
 
 impl Global for GlobalPersonRegistry {}
+
+/// A change to a person's data
+#[derive(Debug, Clone)]
+pub enum PersonEvent {
+    /// Profile metadata
+    Metadata(Box<Person>),
+    /// Custom emoji list (NIP-30)
+    Emojis {
+        public_key: PublicKey,
+        emojis: Vec<(String, Url)>,
+    },
+    /// Profile encryption keys announcement (NIP-4e)
+    Announcement {
+        public_key: PublicKey,
+        announcement: Announcement,
+    },
+    /// Messaging relay list (NIP-65)
+    MessagingRelays {
+        public_key: PublicKey,
+        relays: Vec<RelayUrl>,
+    },
+}
+
+impl EventEmitter<PersonEvent> for PersonRegistry {}
 
 #[derive(Debug, Clone)]
 enum Dispatch {
@@ -33,10 +58,8 @@ enum Dispatch {
 /// Person Registry
 #[derive(Debug)]
 pub struct PersonRegistry {
-    /// Collection of all persons (user profiles)
-    persons: HashMap<PublicKey, Entity<Person>>,
-    /// Set of public keys that have been seen
-    seen: RwLock<HashSet<PublicKey>>,
+    /// Public keys with a metadata request in flight
+    in_flight: RwLock<HashSet<PublicKey>>,
     sender: flume::Sender<PublicKey>,
     tasks: SmallVec<[Task<()>; 4]>,
     _subscriptions: SmallVec<[Subscription; 1]>,
@@ -57,7 +80,6 @@ impl PersonRegistry {
     fn new(cx: &mut Context<Self>) -> Self {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
-        let entity = cx.entity().downgrade();
 
         // Channel for communication between nostr and gpui
         let (tx, rx) = flume::bounded::<Dispatch>(100);
@@ -103,17 +125,8 @@ impl PersonRegistry {
             }
         });
 
-        // Load all user profiles from the database
-        cx.defer(move |cx| {
-            _ = entity.update(cx, |this, cx| {
-                this.load(cx);
-                this.load_emojis(cx);
-            });
-        });
-
         Self {
-            persons: HashMap::new(),
-            seen: RwLock::new(HashSet::new()),
+            in_flight: RwLock::new(HashSet::new()),
             sender: metadata_tx,
             tasks,
             _subscriptions: smallvec![subscription],
@@ -144,12 +157,6 @@ impl PersonRegistry {
 
                         if tx.send_async(Dispatch::Person(person)).await.is_err() {
                             log::warn!("Channel closed, dropping metadata event");
-                        }
-                    }
-                    Kind::ContactList => {
-                        let public_keys = event.extract_public_keys();
-                        if let Err(e) = get_metadata(client, public_keys).await {
-                            log::warn!("Failed to get metadata for contact list: {e}");
                         }
                     }
                     Kind::InboxRelays => {
@@ -198,72 +205,6 @@ impl PersonRegistry {
         }
     }
 
-    /// Load all user profiles from the database
-    fn load(&mut self, cx: &mut Context<Self>) {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-
-        let task: Task<Result<Vec<Person>, Error>> = cx.background_spawn(async move {
-            let filter = Filter::new().kind(Kind::Metadata).limit(200);
-            let events = client.database().query(filter).await?;
-            let persons = events
-                .into_iter()
-                .map(|event| {
-                    let metadata = Metadata::from_json(event.content).unwrap_or_default();
-                    Person::new(event.pubkey, metadata)
-                })
-                .collect();
-
-            Ok(persons)
-        });
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            if let Ok(persons) = task.await {
-                this.update(cx, |this, cx| {
-                    this.bulk_insert(persons, cx);
-                })
-                .ok();
-            }
-        }));
-    }
-
-    /// Load cached emoji lists from the database
-    fn load_emojis(&mut self, cx: &mut Context<Self>) {
-        let nostr = NostrRegistry::global(cx);
-        let client = nostr.read(cx).client();
-
-        type EmojiLists = Vec<(PublicKey, Vec<(String, Url)>)>;
-
-        let task: Task<Result<EmojiLists, Error>> = cx.background_spawn(async move {
-            let filter = Filter::new().kind(Kind::Emojis).limit(200);
-            let mut events: Vec<Event> =
-                client.database().query(filter).await?.into_iter().collect();
-
-            // Keep only the newest list per author
-            events.sort_by_key(|event| Reverse(event.created_at));
-            let mut seen = HashSet::new();
-
-            let lists = events
-                .into_iter()
-                .filter(|event| seen.insert(event.pubkey))
-                .map(|event| (event.pubkey, emojis_from_tags(&event.tags)))
-                .collect();
-
-            Ok(lists)
-        });
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            if let Ok(lists) = task.await {
-                this.update(cx, |this, cx| {
-                    for (public_key, emojis) in lists {
-                        this.set_emojis_for(public_key, emojis, cx);
-                    }
-                })
-                .ok();
-            }
-        }));
-    }
-
     /// Subscribe to the signed-in user's emoji list
     fn get_emojis(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
@@ -283,130 +224,82 @@ impl PersonRegistry {
     }
 
     /// Set profile encryption keys announcement
-    fn set_announcement(&mut self, event: &Event, cx: &mut App) {
+    fn set_announcement(&mut self, event: &Event, cx: &mut Context<Self>) {
         let Some(announcement) = Announcement::from_event(event) else {
             log::warn!("Ignoring announcement with missing or invalid key tag");
             return;
         };
 
-        if let Some(person) = self.persons.get(&event.pubkey) {
-            person.update(cx, |person, cx| {
-                person.set_announcement(announcement);
-                cx.notify();
-            });
-        } else {
-            let person =
-                Person::new(event.pubkey, Metadata::default()).with_announcement(announcement);
-            self.insert(person, cx);
-        }
+        cx.emit(PersonEvent::Announcement {
+            public_key: event.pubkey,
+            announcement,
+        });
     }
 
     /// Set messaging relays for a person
-    fn set_messaging_relays(&mut self, event: &Event, cx: &mut App) {
-        let urls: Vec<RelayUrl> = nip17::extract_relay_list(event).collect();
-
-        if let Some(person) = self.persons.get(&event.pubkey) {
-            person.update(cx, |person, cx| {
-                person.set_messaging_relays(urls);
-                cx.notify();
-            });
-        } else {
-            let person = Person::new(event.pubkey, Metadata::default()).with_messaging_relays(urls);
-            self.insert(person, cx);
-        }
+    fn set_messaging_relays(&mut self, event: &Event, cx: &mut Context<Self>) {
+        cx.emit(PersonEvent::MessagingRelays {
+            public_key: event.pubkey,
+            relays: nip17::extract_relay_list(event).collect(),
+        });
     }
 
     /// Set custom emoji for a person from their emoji list event
-    fn set_emojis(&mut self, event: &Event, cx: &mut App) {
+    fn set_emojis(&mut self, event: &Event, cx: &mut Context<Self>) {
         self.set_emojis_for(event.pubkey, emojis_from_tags(&event.tags), cx);
     }
 
     /// Set custom emoji for a person
-    fn set_emojis_for(&mut self, public_key: PublicKey, emojis: Vec<(String, Url)>, cx: &mut App) {
-        if let Some(person) = self.persons.get(&public_key) {
-            person.update(cx, |person, cx| {
-                person.set_emojis(emojis);
-                cx.notify();
-            });
-        } else {
-            let person = Person::new(public_key, Metadata::default()).with_emojis(emojis);
-            self.insert(person, cx);
-        }
+    fn set_emojis_for(
+        &mut self,
+        public_key: PublicKey,
+        emojis: Vec<(String, Url)>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(PersonEvent::Emojis { public_key, emojis });
     }
 
-    /// Insert batch of persons
-    fn bulk_insert(&mut self, persons: Vec<Person>, cx: &mut Context<Self>) {
-        for person in persons.into_iter() {
-            let public_key = person.public_key();
-            self.persons
-                .entry(public_key)
-                .or_insert_with(|| cx.new(|_| person));
-        }
-        cx.notify();
-    }
-
-    /// Insert or update a person
-    pub fn insert(&mut self, person: Person, cx: &mut App) {
+    /// Publish a person's profile metadata to every directory
+    pub fn insert(&mut self, person: Person, cx: &mut Context<Self>) {
         let public_key = person.public_key();
+        self.release_in_flight(&public_key);
 
-        match self.persons.get(&public_key) {
-            Some(this) => {
-                this.update(cx, |this, cx| {
-                    this.set_metadata(person.metadata());
-                    cx.notify();
-                });
-            }
-            None => {
-                self.persons.insert(public_key, cx.new(|_| person));
-            }
-        }
+        cx.emit(PersonEvent::Metadata(Box::new(person)));
     }
 
-    /// Get single person by public key
-    pub fn get(&self, public_key: &PublicKey, cx: &App) -> Person {
-        if let Some(person) = self.persons.get(public_key) {
-            return person.read(cx).clone();
-        }
+    /// Queue a batched metadata request for keys without one in flight
+    pub(crate) fn fetch<I>(&self, keys: I)
+    where
+        I: IntoIterator<Item = PublicKey>,
+    {
+        let mut queue = Vec::new();
+        {
+            let mut in_flight = match self.in_flight.write() {
+                Ok(in_flight) => in_flight,
+                Err(poisoned) => poisoned.into_inner(),
+            };
 
-        let public_key = *public_key;
-
-        if self.seen.write().unwrap().insert(public_key) {
-            let sender = self.sender.clone();
-
-            // Spawn background task to request metadata
-            cx.background_spawn(async move {
-                if let Err(e) = sender.send_async(public_key).await {
-                    log::warn!("Failed to send public key for metadata request: {e}");
+            for key in keys {
+                if in_flight.insert(key) {
+                    queue.push(key);
                 }
-            })
-            .detach();
+            }
         }
 
-        // Return a temporary profile with default metadata
-        Person::new(public_key, Metadata::default())
+        for public_key in queue {
+            if let Err(error) = self.sender.send(public_key) {
+                log::warn!("Failed to queue metadata request: {error}");
+            }
+        }
     }
 
-    /// The signed-in user's custom emoji
-    pub fn current_emojis(cx: &App) -> Vec<(String, Url)> {
-        let registry = Self::global(cx);
-        let nostr = NostrRegistry::global(cx);
-
-        let Some(public_key) = nostr.read(cx).current_user() else {
-            return Vec::new();
+    /// Allow future fetches for a key once its metadata has arrived
+    fn release_in_flight(&self, public_key: &PublicKey) {
+        let mut in_flight = match self.in_flight.write() {
+            Ok(in_flight) => in_flight,
+            Err(poisoned) => poisoned.into_inner(),
         };
-
-        registry.read(cx).get(&public_key, cx).emojis().to_vec()
-    }
-
-    /// An `emoji` tag for every signed-in user's custom emoji referenced.
-    pub fn emoji_tags(content: &str, cx: &App) -> Vec<Tag> {
-        let registry = Self::global(cx);
-        let nostr = NostrRegistry::global(cx);
-        let Some(public_key) = nostr.read(cx).current_user() else {
-            return Vec::new();
-        };
-
-        registry.read(cx).get(&public_key, cx).emoji_tags(content)
+        in_flight.remove(public_key);
     }
 }
 

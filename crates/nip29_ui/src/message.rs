@@ -2,12 +2,12 @@ use chat::Message;
 use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
+    AnyElement, App, Entity, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
     WeakEntity, div, px,
 };
 use nip29::{Activity, Group, Reaction};
 use nostr_sdk::prelude::{EventId, Kind};
-use person::PersonRegistry;
+use person::Directory;
 use settings::AppSettings;
 use state::NostrRegistry;
 use theme::{ActiveTheme, TextStyle, Typeset as _};
@@ -25,6 +25,7 @@ pub(crate) struct Actions {
     pub panel: WeakEntity<GroupPanel>,
     pub admin: bool,
     pub pinned: bool,
+    pub persons: Entity<Directory>,
 }
 
 pub(crate) fn render(
@@ -37,10 +38,10 @@ pub(crate) fn render(
     cx: &App,
 ) -> AnyElement {
     let nostr = NostrRegistry::global(cx);
-    let persons = PersonRegistry::global(cx);
     let hide_avatar = AppSettings::get_hide_avatar(cx);
 
-    let author = persons.read(cx).get(&message.author, cx);
+    let persons = actions.persons.clone();
+    let author = persons.read(cx).person(&message.author, cx);
 
     let reaction_groups = group_reactions(
         reactions.iter().map(|reaction| {
@@ -66,6 +67,7 @@ pub(crate) fn render(
         .when(!message.replies_to.is_empty(), |this| {
             this.children(replies(
                 &message.replies_to,
+                &persons,
                 &actions.group,
                 &actions.panel,
                 cx,
@@ -162,7 +164,22 @@ fn react_menu(
         )
     });
 
-    let emojis = PersonRegistry::current_emojis(cx);
+    let emojis = panel
+        .upgrade()
+        .and_then(|panel| {
+            let current_user = NostrRegistry::global(cx).read(cx).current_user()?;
+            Some(
+                panel
+                    .read(cx)
+                    .directory
+                    .read(cx)
+                    .person(&current_user, cx)
+                    .emojis()
+                    .to_vec(),
+            )
+        })
+        .unwrap_or_default();
+
     if emojis.is_empty() {
         return menu;
     }
@@ -185,9 +202,13 @@ fn react_menu(
     })
 }
 
-pub(crate) fn render_activity(ix: usize, activity: &Activity, cx: &App) -> AnyElement {
-    let persons = PersonRegistry::global(cx);
-    let subject = persons.read(cx).get(&activity.subject(), cx);
+pub(crate) fn render_activity(
+    ix: usize,
+    activity: &Activity,
+    persons: &Entity<Directory>,
+    cx: &App,
+) -> AnyElement {
+    let subject = persons.read(cx).person(&activity.subject(), cx);
     let hide_avatar = AppSettings::get_hide_avatar(cx);
 
     h_flex()
@@ -262,6 +283,7 @@ fn action(activity: &Activity) -> String {
 
 fn replies(
     targets: &[EventId],
+    persons: &Entity<Directory>,
     group: &WeakEntity<Group>,
     panel: &WeakEntity<GroupPanel>,
     cx: &App,
@@ -275,8 +297,7 @@ fn replies(
     for (ix, id) in targets.iter().enumerate() {
         let context = entity.read_with(cx, |group, cx| {
             let message = group.message(*id)?;
-            let persons = PersonRegistry::global(cx);
-            let author = persons.read(cx).get(&message.author, cx);
+            let author = persons.read(cx).person(&message.author, cx);
 
             Some((author.name(), message.preview()))
         });

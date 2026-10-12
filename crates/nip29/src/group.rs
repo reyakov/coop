@@ -6,7 +6,6 @@ use chat::Message;
 use common::emojis_from_tags;
 use gpui::{App, AppContext, Context, EventEmitter, SharedString, SharedUri, Task};
 use nostr_sdk::prelude::*;
-use person::PersonRegistry;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
 
@@ -234,9 +233,9 @@ impl Group {
         &mut self,
         content: &str,
         replies: Vec<EventId>,
+        emojis: Vec<Tag>,
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
-        let emojis = PersonRegistry::emoji_tags(content, cx);
         self.dispatch(
             move |id, prev| id.message(content, &replies, &emojis, prev),
             cx,
@@ -247,9 +246,9 @@ impl Group {
         &mut self,
         target: EventId,
         emoji: String,
+        emojis: Vec<Tag>,
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
-        let emojis = PersonRegistry::emoji_tags(&emoji, cx);
         self.dispatch(
             move |id, prev| id.reaction(target, &emoji, &emojis, prev),
             cx,
