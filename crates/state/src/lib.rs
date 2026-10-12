@@ -4,7 +4,7 @@ use anyhow::{Error, anyhow};
 #[cfg(not(target_arch = "wasm32"))]
 use browser_signer_proxy::prelude::*;
 use common::config_dir;
-use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Task};
+use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Task, TaskExt};
 use gpui_tokio::Tokio;
 use instant::Duration;
 use nostr_connect::prelude::*;
@@ -53,6 +53,8 @@ pub enum StateEvent {
     NoSigner,
     /// The signer has changed
     SignerChanged,
+    /// A stored credential needs a passphrase to unlock
+    PassphraseRequired,
     /// An error occurred
     Error(String),
 }
@@ -75,16 +77,14 @@ impl StateEvent {
 pub struct NostrRegistry {
     /// Nostr client
     client: Client,
-
     /// Universal signer
     signer: UniversalSigner,
-
     /// Current user's public key
     current_user: Option<PublicKey>,
-
+    /// Whether the stored credential needs a passphrase to unlock
+    passphrase_required: bool,
     /// Whether the initial credential check has concluded
     ready: bool,
-
     /// Tasks for asynchronous operations
     tasks: Vec<Task<Result<(), Error>>>,
 }
@@ -126,6 +126,8 @@ impl NostrRegistry {
             .gossip(NostrGossipMemory::unbounded())
             .gossip_config(GossipConfig::default().no_background_refresh())
             .connect_timeout(Duration::from_secs(10))
+            .verify_subscriptions(true)
+            .ban_relay_on_mismatch(true)
             .sleep_when_idle(SleepWhenIdle::Enabled {
                 timeout: Duration::from_secs(600),
             })
@@ -140,11 +142,11 @@ impl NostrRegistry {
                     this.mark_ready(cx);
                     cx.emit(StateEvent::NoSigner);
                 } else if let Some(secret) = cli_key {
-                    // Use CLI-provided key -- same path as get_user_credential
+                    // Use CLI-provided key -- same path as restore_session
                     let keys = Keys::new(secret);
                     this.set_signer(keys, cx);
                 } else {
-                    this.get_user_credential(cx);
+                    this.restore_session(cx);
                 }
             });
         });
@@ -153,6 +155,7 @@ impl NostrRegistry {
             client,
             signer,
             current_user: None,
+            passphrase_required: false,
             ready: false,
             tasks: vec![],
         }
@@ -183,7 +186,7 @@ impl NostrRegistry {
     }
 
     /// Update the signer
-    pub fn set_signer<T>(&mut self, new_signer: T, cx: &mut Context<Self>)
+    fn set_signer<T>(&mut self, new_signer: T, cx: &mut Context<Self>)
     where
         T: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + 'static,
         <T as AsyncGetPublicKey>::Error: std::error::Error + Send + Sync + 'static,
@@ -196,6 +199,7 @@ impl NostrRegistry {
                     this.update(cx, |this, cx| {
                         this.signer.swap_inner(new_signer);
                         this.current_user = Some(public_key);
+                        this.passphrase_required = false;
                         this.mark_ready(cx);
                         cx.emit(StateEvent::SignerChanged);
                         cx.notify();
@@ -247,91 +251,252 @@ impl NostrRegistry {
         }));
     }
 
-    /// Check the user's credential and set the signer if valid
-    fn get_user_credential(&mut self, cx: &mut Context<Self>) {
+    /// Restore the signer from the stored credential
+    fn restore_session(&mut self, cx: &mut Context<Self>) {
         let user_keyring = cx.read_credentials(USER_KEYRING);
-        let master_keyring = self.get_master_key(cx);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            match user_keyring.await {
-                Ok(Some((_username, secret))) => {
-                    let content = String::from_utf8(secret)?;
+            let result = async {
+                match user_keyring.await {
+                    Ok(Some((_username, secret))) => {
+                        let content = String::from_utf8(secret)?;
 
-                    if content.starts_with("nsec1") {
-                        let secret_key = SecretKey::parse(&content)?;
-                        let keys = Keys::new(secret_key);
+                        if content.starts_with("nsec1") {
+                            let keys = Keys::new(SecretKey::parse(&content)?);
+                            this.update(cx, |this, cx| {
+                                this.set_signer(keys, cx);
+                            })?;
+                        } else if content.starts_with("bunker://") {
+                            // The master key used for Nostr Connect is embedded in
+                            // the stored URI so reconnects reuse the same local key
+                            let (base, keys) = extract_master_key(&content);
+                            let uri = NostrConnectUri::parse(base)?;
 
-                        this.update(cx, |this, cx| {
-                            this.set_signer(keys, cx);
-                            cx.notify();
-                        })?;
-                    } else if content.starts_with("bunker://") {
-                        let keys = master_keyring.await;
-                        let timeout = Duration::from_secs(30);
-                        let uri = NostrConnectUri::parse(content)?;
+                            // Construct the nostr connect signer
+                            let mut signer = NostrConnect::new(
+                                uri,
+                                keys,
+                                Duration::from_secs(NOSTR_CONNECT_TIMEOUT),
+                                None,
+                            )?;
 
-                        // Construct the nostr connect signer
-                        let mut signer = NostrConnect::new(uri, keys, timeout, None)?;
+                            // Handle auth url with the default browser
+                            signer.auth_url_handler(CoopAuthUrlHandler);
 
-                        // Handle auth url with the default browser
-                        signer.auth_url_handler(CoopAuthUrlHandler);
-
-                        this.update(cx, |this, cx| {
-                            this.set_signer(signer, cx);
-                            cx.notify();
-                        })?;
-                    } else if content == "proxy" {
-                        #[cfg(not(target_arch = "wasm32"))]
+                            this.update(cx, |this, cx| {
+                                this.set_signer(signer, cx);
+                            })?;
+                        } else if content.starts_with("ncryptsec1") {
+                            this.update(cx, |this, cx| {
+                                this.passphrase_required = true;
+                                this.mark_ready(cx);
+                                cx.emit(StateEvent::PassphraseRequired);
+                            })?;
+                        } else if content == "proxy" {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            this.update(cx, |this, cx| {
+                                this.mark_ready(cx);
+                                this.connect_proxy(cx);
+                            })?;
+                        } else {
+                            this.update(cx, |this, cx| {
+                                this.mark_ready(cx);
+                                cx.emit(StateEvent::NoSigner);
+                            })?;
+                        }
+                    }
+                    _ => {
                         this.update(cx, |this, cx| {
                             this.mark_ready(cx);
-                            this.connect_proxy(cx);
+                            cx.emit(StateEvent::NoSigner);
                         })?;
-                    } else {
-                        this.update(cx, |this, cx| this.mark_ready(cx))?;
                     }
                 }
-                _ => {
-                    this.update(cx, |this, cx| {
-                        this.mark_ready(cx);
-                        cx.emit(StateEvent::NoSigner);
-                    })?;
-                }
+
+                Ok::<(), Error>(())
+            }
+            .await;
+
+            if let Err(e) = result {
+                this.update(cx, |this, cx| {
+                    this.mark_ready(cx);
+                    cx.emit(StateEvent::error(e.to_string()));
+                    cx.emit(StateEvent::NoSigner);
+                })?;
             }
 
             Ok(())
         }));
     }
 
-    /// Get the master key that used for Nostr Connect
-    pub fn get_master_key(&self, cx: &App) -> Task<Keys> {
-        if cfg!(target_arch = "wasm32") {
-            return cx.background_spawn(async move { Keys::generate() });
-        }
+    /// Unlock the stored encrypted key with its passphrase
+    pub fn restore_with_passphrase(
+        &mut self,
+        password: &str,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<PublicKey, Error>> {
+        let password = password.to_owned();
+        let user_keyring = cx.read_credentials(USER_KEYRING);
 
-        let task = cx.read_credentials(MASTER_KEYRING);
+        cx.spawn(async move |this, cx| {
+            let content = user_keyring
+                .await?
+                .map(|(_username, secret)| String::from_utf8(secret))
+                .transpose()?
+                .ok_or_else(|| anyhow!("no stored credential; nothing to unlock"))?;
 
-        cx.spawn(async move |cx| {
-            let (keys, new_key) = match task.await {
-                Ok(Some((_user, secret))) => match SecretKey::from_slice(&secret) {
-                    Ok(secret_key) => (Keys::new(secret_key), false),
-                    _ => (Keys::generate(), true),
-                },
-                _ => (Keys::generate(), true),
-            };
-
-            if new_key {
-                let keys_clone = keys.clone();
-                let username = keys_clone.public_key().to_hex();
-                let password = keys_clone.secret_key().to_secret_bytes();
-
-                cx.update(|cx| {
-                    let task = cx.write_credentials(MASTER_KEYRING, &username, &password);
-                    cx.background_spawn(async move { task.await.ok() }).detach();
-                });
+            if !content.starts_with("ncryptsec1") {
+                return Err(anyhow!("stored credential is not passphrase-encrypted"));
             }
 
-            keys
+            let decrypt_task = cx.background_spawn(async move {
+                let encrypted = EncryptedSecretKey::from_bech32(&content)?;
+                let secret = encrypted.decrypt(&password)?;
+                Ok::<_, Error>(Keys::new(secret))
+            });
+
+            let keys = decrypt_task.await?;
+            let public_key = keys.public_key();
+
+            this.update(cx, |this, cx| {
+                this.set_signer(keys, cx);
+            })?;
+
+            Ok(public_key)
         })
+    }
+
+    /// Import an `nsec1...` secret key, storing it NIP-49 encrypted with `password`
+    pub fn import_nsec(
+        &mut self,
+        nsec: &str,
+        password: &str,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<PublicKey, Error>> {
+        let keys = match SecretKey::parse(nsec.trim()) {
+            Ok(secret) => Keys::new(secret),
+            Err(e) => return Task::ready(Err(anyhow!(e))),
+        };
+
+        if password.is_empty() {
+            return Task::ready(Err(anyhow!("Passphrase must not be empty")));
+        }
+
+        let password = password.to_owned();
+
+        cx.spawn(async move |this, cx| {
+            let job = cx.background_spawn(async move {
+                let encrypted =
+                    EncryptedSecretKey::new(keys.secret_key(), &password, 16, KeySecurity::Medium)?;
+                let ncryptsec = encrypted.to_bech32()?;
+                Ok::<_, Error>((keys, ncryptsec))
+            });
+
+            let (keys, ncryptsec) = job.await?;
+            let public_key = keys.public_key();
+
+            let write = cx.update(|cx| {
+                cx.write_credentials(USER_KEYRING, &public_key.to_hex(), ncryptsec.as_bytes())
+            });
+            write.await?;
+
+            this.update(cx, |this, cx| {
+                this.set_signer(keys, cx);
+            })?;
+
+            Ok(public_key)
+        })
+    }
+
+    /// Import an NIP-49 encrypted secret key (`ncryptsec1...`), decrypting it with `password`
+    pub fn import_ncryptsec(
+        &mut self,
+        ncryptsec: &str,
+        password: &str,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<PublicKey, Error>> {
+        let ncryptsec = ncryptsec.trim().to_owned();
+
+        if password.is_empty() {
+            return Task::ready(Err(anyhow!("Passphrase must not be empty")));
+        }
+
+        let password = password.to_owned();
+
+        cx.spawn(async move |this, cx| {
+            let stored = ncryptsec.clone();
+            let decrypt_task = cx.background_spawn(async move {
+                let encrypted = EncryptedSecretKey::from_bech32(&ncryptsec)?;
+                let secret = encrypted.decrypt(&password)?;
+                Ok::<_, Error>(Keys::new(secret))
+            });
+
+            let keys = decrypt_task.await?;
+            let public_key = keys.public_key();
+
+            let write = cx.update(|cx| {
+                cx.write_credentials(USER_KEYRING, &public_key.to_hex(), stored.as_bytes())
+            });
+            write.await?;
+
+            this.update(cx, |this, cx| {
+                this.set_signer(keys, cx);
+            })?;
+
+            Ok(public_key)
+        })
+    }
+
+    /// Import a `bunker://...` URI (NIP-46), connecting to the remote signer
+    pub fn import_bunker(
+        &mut self,
+        uri: &str,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<PublicKey, Error>> {
+        let uri_string = uri.trim().to_owned();
+
+        let connect_uri = match NostrConnectUri::parse(&uri_string) {
+            Ok(uri) => uri,
+            Err(e) => return Task::ready(Err(anyhow!(e))),
+        };
+
+        let keys = Keys::generate();
+        let credential = with_master_key(&uri_string, &keys);
+        let write = cx.write_credentials(USER_KEYRING, "bunker", credential.as_bytes());
+
+        cx.spawn(async move |this, cx| {
+            // Construct the nostr connect signer
+            let mut signer = NostrConnect::new(
+                connect_uri,
+                keys,
+                Duration::from_secs(NOSTR_CONNECT_TIMEOUT),
+                None,
+            )?;
+
+            // Handle auth url with the default browser
+            signer.auth_url_handler(CoopAuthUrlHandler);
+
+            // Verify the bunker responds before persisting the credential
+            let public_key = signer.get_public_key_async().await?;
+            write.await?;
+
+            this.update(cx, |this, cx| {
+                this.set_signer(signer, cx);
+            })?;
+
+            Ok(public_key)
+        })
+    }
+
+    /// Sign out and remove the stored credential
+    pub fn sign_out(&mut self, cx: &mut Context<Self>) {
+        self.current_user = None;
+        self.passphrase_required = false;
+
+        cx.delete_credentials(USER_KEYRING).detach_and_log_err(cx);
+        cx.emit(StateEvent::SignerChanged);
+        cx.emit(StateEvent::NoSigner);
+        cx.notify();
     }
 
     /// Start the browser proxy
@@ -513,4 +678,24 @@ impl NostrRegistry {
             Ok(results)
         })
     }
+}
+
+// Extract the base URI and the master key from a bunker credential with `master=<nsec>`
+fn extract_master_key(credential: &str) -> (&str, Keys) {
+    match credential.split_once("master=") {
+        Some((base, nsec)) => {
+            let keys = SecretKey::parse(nsec)
+                .map(Keys::new)
+                .unwrap_or_else(|_| Keys::generate());
+            (base.trim_end_matches(['?', '&']), keys)
+        }
+        None => (credential, Keys::generate()),
+    }
+}
+
+// Embed the master key in a bunker URI so reconnects reuse the same local key
+fn with_master_key(uri: &str, keys: &Keys) -> String {
+    let separator = if uri.contains('?') { '&' } else { '?' };
+    let nsec = keys.secret_key().to_bech32().expect("infallible");
+    format!("{uri}{separator}master={nsec}")
 }

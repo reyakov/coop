@@ -21,7 +21,7 @@ use ui::notification::{Notification, NotificationKind};
 use ui::{Root, WindowExtension, v_flex};
 
 use crate::dialogs::restore::RestoreEncryption;
-use crate::dialogs::{join_group, new_chat, new_group, profile, relays, settings};
+use crate::dialogs::{import, join_group, new_chat, new_group, profile, relays, settings};
 use crate::panels::{backup, browse, contact_list, greeter, inbox};
 use crate::sidebar::Sidebar;
 
@@ -76,6 +76,7 @@ impl Workspace {
         let sidebar = cx.new(|cx| Sidebar::new(window, dock.downgrade(), cx));
         let left_sidebar = sidebar.clone();
 
+        let workspace = cx.entity().downgrade();
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
@@ -87,10 +88,10 @@ impl Workspace {
 
         subscriptions.push(
             // Subscribe to the nostr events
-            cx.subscribe_in(&nostr, window, move |_this, _state, event, window, cx| {
-                if let StateEvent::SignerChanged = event {
-                    window.close_all_dialogs(cx);
-                }
+            cx.subscribe_in(&nostr, window, move |_, _, event, window, cx| match event {
+                StateEvent::SignerChanged => window.close_all_dialogs(cx),
+                StateEvent::PassphraseRequired => import::open_unlock(window, cx),
+                _ => {}
             }),
         );
 
@@ -183,6 +184,27 @@ impl Workspace {
             }),
         );
 
+        App::on_action(cx, {
+            let workspace = workspace.clone();
+            move |action, cx| {
+                let Some(workspace) = workspace.upgrade() else {
+                    return;
+                };
+                workspace.update(cx, |this, cx| {
+                    this.show_group_meta(action, cx);
+                });
+            }
+        });
+
+        App::on_action(cx, move |action, cx| {
+            let Some(workspace) = workspace.upgrade() else {
+                return;
+            };
+            workspace.update(cx, |this, cx| {
+                this.hide_group_meta(action, cx);
+            });
+        });
+
         cx.defer_in(window, move |this, window, cx| {
             let sidebar = PanelHandle::new(left_sidebar);
             let greeter = PanelHandle::new(greeter::init(window, cx));
@@ -196,29 +218,6 @@ impl Workspace {
                 this.set_dock_size(DockPlacement::Left, SIDEBAR_WIDTH, window, cx);
                 this.set_center(center, window, cx);
             });
-        });
-
-        // Listen app-wide, so a group panel can show or hide the sidebar without holding it.
-        let workspace = cx.entity().downgrade();
-
-        App::on_action(cx, {
-            let workspace = workspace.clone();
-
-            move |action: &nip29_ui::ShowGroupMeta, cx| {
-                let Some(workspace) = workspace.upgrade() else {
-                    return;
-                };
-
-                workspace.update(cx, |this, cx| this.show_group_meta(action, cx));
-            }
-        });
-
-        App::on_action(cx, move |action: &nip29_ui::HideGroupMeta, cx| {
-            let Some(workspace) = workspace.upgrade() else {
-                return;
-            };
-
-            workspace.update(cx, |this, cx| this.hide_group_meta(action, cx));
         });
 
         Self {
