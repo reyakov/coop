@@ -17,7 +17,7 @@ use gpui::{
 };
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
-use person::{Person, PersonRegistry};
+use person::{Directory, Person, PersonRegistry};
 use regex::Regex;
 use settings::{AppSettings, SignerKind};
 use smallvec::{SmallVec, smallvec};
@@ -72,6 +72,9 @@ pub struct ChatPanel {
 
     /// Chat Room
     room: WeakEntity<Room>,
+
+    /// Person directory shared with the room
+    directory: Entity<Directory>,
 
     /// Message list state
     list_state: ListState,
@@ -132,6 +135,13 @@ impl ChatPanel {
 
         let messages = Vec::new();
         let list_state = ListState::new(messages.len() + 1, ListAlignment::Bottom, px(1024.));
+
+        // Share the room's person directory
+        let directory = room
+            .read_with(cx, |room, _cx| room.directory())
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| Directory::new(cx));
 
         // Get room id and name
         let (id, name) = room
@@ -194,6 +204,7 @@ impl ChatPanel {
             message_index: HashMap::new(),
             reactions: BTreeMap::new(),
             room,
+            directory,
             list_state,
             input,
             subject_input,
@@ -832,8 +843,7 @@ impl ChatPanel {
     }
 
     fn profile(&self, public_key: &PublicKey, cx: &App) -> Person {
-        let persons = PersonRegistry::global(cx);
-        persons.read(cx).get(public_key, cx)
+        self.directory.read(cx).person(public_key, cx)
     }
 
     fn on_command(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) {
@@ -1085,7 +1095,7 @@ impl ChatPanel {
         }
 
         if let Some(message) = self.messages.get(index) {
-            let persons = PersonRegistry::global(cx);
+            let directory = self.directory.clone();
             let show_author = self.is_group_start(index);
             let text = self
                 .rendered_texts_by_id
@@ -1095,7 +1105,7 @@ impl ChatPanel {
                         &message.content,
                         &message.mentions,
                         &message.emojis,
-                        &persons,
+                        &directory,
                         cx,
                     )
                 })
@@ -1210,8 +1220,9 @@ impl ChatPanel {
         items
     }
 
-    fn render_sent_reports(&self, id: &EventId, cx: &App) -> impl IntoElement {
+    fn render_sent_reports(&self, id: &EventId, cx: &Context<Self>) -> impl IntoElement {
         let reports = self.sent_reports(id);
+        let panel = cx.weak_entity();
 
         let pending = reports.as_ref().is_some_and(|reports| reports.is_empty());
 
@@ -1241,28 +1252,29 @@ impl ChatPanel {
                 this.when(!pending, |this| {
                     this.on_click(move |_e, window, cx| {
                         let reports = reports.clone();
+                        let panel = panel.clone();
 
                         window.open_dialog(cx, move |this, _window, cx| {
+                            let items = panel
+                                .update(cx, |panel, cx| {
+                                    reports
+                                        .iter()
+                                        .map(|report| panel.render_report(report, cx))
+                                        .collect::<Vec<_>>()
+                                })
+                                .unwrap_or_default();
+
                             this.title(SharedString::from("Sent Reports"))
                                 .show_close(true)
-                                .child(v_flex().gap_4().children({
-                                    let mut items = Vec::with_capacity(reports.len());
-
-                                    for report in reports.iter() {
-                                        items.push(Self::render_report(report, cx))
-                                    }
-
-                                    items
-                                }))
+                                .child(v_flex().gap_4().children(items))
                         });
                     })
                 })
             })
     }
 
-    fn render_report(report: &SendReport, cx: &App) -> impl IntoElement {
-        let persons = PersonRegistry::global(cx);
-        let profile = persons.read(cx).get(&report.receiver, cx);
+    fn render_report(&self, report: &SendReport, cx: &App) -> AnyElement {
+        let profile = self.directory.read(cx).person(&report.receiver, cx);
         let name = profile.name();
         let avatar = profile.avatar();
 
@@ -1363,6 +1375,7 @@ impl ChatPanel {
                         }),
                 )
             })
+            .into_any_element()
     }
 
     fn render_actions(
@@ -1652,8 +1665,7 @@ impl ChatPanel {
 
     fn render_reply(&self, id: &EventId, cx: &Context<Self>) -> impl IntoElement {
         if let Some(text) = self.message(id) {
-            let persons = PersonRegistry::global(cx);
-            let profile = persons.read(cx).get(&text.author, cx);
+            let profile = self.directory.read(cx).person(&text.author, cx);
 
             div()
                 .w_full()

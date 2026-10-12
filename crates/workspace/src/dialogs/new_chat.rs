@@ -10,7 +10,7 @@ use gpui::{
     Window, div, px, uniform_list,
 };
 use nostr_sdk::prelude::*;
-use person::PersonRegistry;
+use person::Directory;
 use settings::AppSettings;
 use state::NostrRegistry;
 use theme::{ActiveTheme, TextStyle, Typeset as _};
@@ -39,6 +39,8 @@ pub struct NewChat {
     input: Entity<InputState>,
     /// Current user's contacts
     contacts: Option<Vec<PublicKey>>,
+    /// Person directory for contacts and selected members
+    directory: Entity<Directory>,
     /// Public keys selected as members of the chat
     members: Vec<PublicKey>,
     /// Whether a NIP-05 address is being resolved
@@ -69,6 +71,7 @@ impl NewChat {
             dock,
             input,
             contacts: None,
+            directory: Directory::new(cx),
             members: Vec::new(),
             resolving: false,
             error: None,
@@ -112,6 +115,9 @@ impl NewChat {
             match task.await {
                 Ok(contacts) => {
                     this.update(cx, |this, cx| {
+                        this.directory.update(cx, |directory, cx| {
+                            directory.track(contacts.iter().copied(), cx)
+                        });
                         this.contacts = Some(contacts);
                         cx.notify();
                     })?;
@@ -133,7 +139,6 @@ impl NewChat {
             return Vec::new();
         };
 
-        let persons = PersonRegistry::global(cx);
         let query = self.input.read(cx).value().trim().to_lowercase();
 
         if query.is_empty() {
@@ -146,7 +151,7 @@ impl NewChat {
                 if public_key.to_hex().to_lowercase().contains(&query) {
                     return true;
                 }
-                let name = persons.read(cx).get(public_key, cx).name();
+                let name = self.directory.read(cx).person(public_key, cx).name();
                 name.to_lowercase().contains(&query)
             })
             .cloned()
@@ -318,7 +323,6 @@ impl NewChat {
         contacts: &[PublicKey],
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let persons = PersonRegistry::global(cx);
         let start = range.start;
 
         contacts
@@ -327,7 +331,7 @@ impl NewChat {
             .flatten()
             .enumerate()
             .map(|(offset, public_key)| {
-                let profile = persons.read(cx).get(public_key, cx);
+                let profile = self.directory.read(cx).person(public_key, cx);
                 let public_key = *public_key;
 
                 Nav::new(start + offset)
@@ -350,13 +354,11 @@ impl NewChat {
     }
 
     fn render_members(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let persons = PersonRegistry::global(cx);
-
         h_flex()
             .flex_wrap()
             .gap_1()
             .children(self.members.iter().map(|public_key| {
-                let profile = persons.read(cx).get(public_key, cx);
+                let profile = self.directory.read(cx).person(public_key, cx);
                 let public_key = *public_key;
                 let id = SharedString::from(format!("m-{}", public_key.to_hex()));
 

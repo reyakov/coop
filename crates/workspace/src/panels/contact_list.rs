@@ -9,7 +9,7 @@ use gpui::{
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
-use person::PersonRegistry;
+use person::Directory;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
 use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius, panel_radius};
@@ -40,6 +40,9 @@ pub struct ContactListPanel {
 
     /// All contacts
     contacts: HashSet<PublicKey>,
+
+    /// Person directory for the contacts
+    directory: Entity<Directory>,
 
     /// Event subscriptions
     _subscriptions: SmallVec<[Subscription; 1]>,
@@ -73,6 +76,7 @@ impl ContactListPanel {
             input,
             updating: false,
             contacts: HashSet::new(),
+            directory: Directory::new(cx),
             error: None,
             _subscriptions: subscriptions,
             tasks: vec![],
@@ -110,6 +114,9 @@ impl ContactListPanel {
 
             // Update state
             this.update(cx, |this, cx| {
+                this.directory.update(cx, |directory, cx| {
+                    directory.track(public_keys.iter().copied(), cx)
+                });
                 this.contacts.extend(public_keys);
                 cx.notify();
             })?;
@@ -123,6 +130,8 @@ impl ContactListPanel {
 
         if let Ok(public_key) = PublicKey::parse(&value) {
             if self.contacts.insert(public_key) {
+                self.directory
+                    .update(cx, |directory, cx| directory.track([public_key], cx));
                 self.input.update(cx, |this, cx| {
                     this.set_value("", window, cx);
                 });
@@ -218,11 +227,10 @@ impl ContactListPanel {
     }
 
     fn render_list_items(&mut self, cx: &mut Context<Self>) -> Vec<impl IntoElement> {
-        let persons = PersonRegistry::global(cx);
         let mut items = Vec::new();
 
         for (ix, public_key) in self.contacts.iter().enumerate() {
-            let profile = persons.read(cx).get(public_key, cx);
+            let profile = self.directory.read(cx).person(public_key, cx);
 
             items.push(
                 h_flex()
