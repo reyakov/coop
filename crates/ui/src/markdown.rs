@@ -113,6 +113,8 @@ impl RenderedText {
             .on_link_click(|url, _, _, cx| {
                 if is_web_url(url) {
                     cx.open_url(url);
+                } else if let Some(bech32) = nevent_bech32(url) {
+                    cx.open_url(&format!("https://njump.me/{bech32}"));
                 }
             })
             .into_any_element()
@@ -135,4 +137,10 @@ fn escape_link_text(text: &str) -> String {
 fn is_web_url(url: &str) -> bool {
     let url = url.to_ascii_lowercase();
     url.starts_with("http://") || url.starts_with("https://")
+}
+
+/// Extracts the bech32 from a NIP-19 event reference (`nevent1...` or `nostr:nevent1...`).
+fn nevent_bech32(url: &str) -> Option<&str> {
+    let bech32 = url.strip_prefix("nostr:").unwrap_or(url);
+    bech32.starts_with("nevent1").then_some(bech32)
 }

@@ -992,7 +992,8 @@ impl GroupPanel {
                 let message = group.message(target)?;
                 let persons = PersonRegistry::global(cx);
                 let author = persons.read(cx).get(&message.author, cx);
-                let line = message.content.lines().next().unwrap_or_default().trim();
+                let preview = message.preview();
+                let line = preview.lines().next().unwrap_or_default().trim();
 
                 Some((
                     author.name(),

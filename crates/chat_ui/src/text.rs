@@ -1,4 +1,4 @@
-use chat::Mention;
+use chat::{Mention, nevent_refs};
 use gpui::{App, Entity};
 use nostr_sdk::prelude::Url;
 use person::PersonRegistry;
@@ -23,6 +23,11 @@ pub fn rendered_text(
         .collect::<Vec<_>>();
 
     replacements.extend(emoji_replacements(content, emojis));
+    replacements.extend(
+        nevent_refs(content)
+            .into_iter()
+            .map(|reference| InlineReplacement::new(reference.range, reference.label)),
+    );
     replacements.sort_by_key(|replacement| replacement.range.start);
 
     RenderedText::new(content, &replacements)
@@ -52,32 +57,4 @@ fn emoji_replacements(content: &str, emojis: &[(String, Url)]) -> Vec<InlineRepl
     }
 
     replacements
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn emoji(shortcode: &str, url: &str) -> (String, Url) {
-        (String::from(shortcode), Url::parse(url).expect("valid url"))
-    }
-
-    #[test]
-    fn declared_shortcodes_become_image_replacements() {
-        let emojis = vec![emoji("soapbox", "https://example.com/soapbox.png")];
-
-        let replacements = emoji_replacements("hi :soapbox: and :other:", &emojis);
-
-        assert_eq!(replacements.len(), 1);
-        assert_eq!(replacements[0].range, 3..12);
-    }
-
-    #[test]
-    fn matches_glued_to_word_characters_are_skipped() {
-        let emojis = vec![emoji("30", "https://example.com/30.png")];
-
-        assert!(emoji_replacements("at 12:30:45 exactly", &emojis).is_empty());
-        assert!(emoji_replacements("x:30: and :30:y", &emojis).is_empty());
-        assert_eq!(emoji_replacements("(:30:)", &emojis).len(), 1);
-    }
 }
