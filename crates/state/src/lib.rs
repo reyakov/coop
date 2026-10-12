@@ -83,8 +83,6 @@ pub struct NostrRegistry {
     current_user: Option<PublicKey>,
     /// Whether the stored credential needs a passphrase to unlock
     passphrase_required: bool,
-    /// Whether the initial credential check has concluded
-    ready: bool,
     /// Tasks for asynchronous operations
     tasks: Vec<Task<Result<(), Error>>>,
 }
@@ -139,7 +137,6 @@ impl NostrRegistry {
                 this.connect_bootstrap_relays(cx);
 
                 if cfg!(target_arch = "wasm32") {
-                    this.mark_ready(cx);
                     cx.emit(StateEvent::NoSigner);
                 } else if let Some(secret) = cli_key {
                     // Use CLI-provided key -- same path as restore_session
@@ -156,7 +153,6 @@ impl NostrRegistry {
             signer,
             current_user: None,
             passphrase_required: false,
-            ready: false,
             tasks: vec![],
         }
     }
@@ -176,15 +172,6 @@ impl NostrRegistry {
         self.current_user
     }
 
-    fn mark_ready(&mut self, cx: &mut Context<Self>) {
-        if self.ready {
-            return;
-        }
-
-        self.ready = true;
-        cx.notify();
-    }
-
     /// Update the signer
     fn set_signer<T>(&mut self, new_signer: T, cx: &mut Context<Self>)
     where
@@ -200,7 +187,7 @@ impl NostrRegistry {
                         this.signer.swap_inner(new_signer);
                         this.current_user = Some(public_key);
                         this.passphrase_required = false;
-                        this.mark_ready(cx);
+
                         cx.emit(StateEvent::SignerChanged);
                         cx.notify();
                     })?;
@@ -289,25 +276,21 @@ impl NostrRegistry {
                         } else if content.starts_with("ncryptsec1") {
                             this.update(cx, |this, cx| {
                                 this.passphrase_required = true;
-                                this.mark_ready(cx);
                                 cx.emit(StateEvent::PassphraseRequired);
                             })?;
                         } else if content == "proxy" {
                             #[cfg(not(target_arch = "wasm32"))]
                             this.update(cx, |this, cx| {
-                                this.mark_ready(cx);
                                 this.connect_proxy(cx);
                             })?;
                         } else {
-                            this.update(cx, |this, cx| {
-                                this.mark_ready(cx);
+                            this.update(cx, |_, cx| {
                                 cx.emit(StateEvent::NoSigner);
                             })?;
                         }
                     }
                     _ => {
-                        this.update(cx, |this, cx| {
-                            this.mark_ready(cx);
+                        this.update(cx, |_, cx| {
                             cx.emit(StateEvent::NoSigner);
                         })?;
                     }
@@ -318,8 +301,7 @@ impl NostrRegistry {
             .await;
 
             if let Err(e) = result {
-                this.update(cx, |this, cx| {
-                    this.mark_ready(cx);
+                this.update(cx, |_, cx| {
                     cx.emit(StateEvent::error(e.to_string()));
                     cx.emit(StateEvent::NoSigner);
                 })?;
