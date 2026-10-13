@@ -2,8 +2,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, AnyView, App, Element, Entity, EventEmitter, FocusHandle, Focusable, ImageSource,
-    Render, SharedString, Window,
+    AnyElement, AnyView, App, Context, Element, Entity, EventEmitter, FocusHandle, Focusable,
+    ImageSource, Render, SharedString, Window,
 };
 use gpui_base::dock::{PanelId, PanelState};
 
@@ -39,6 +39,9 @@ pub trait Panel: EventEmitter<PanelEvent> + Render + Focusable {
     /// Set active state of the panel.
     fn set_active(&self, _active: bool, _window: &mut Window, _cx: &mut App) {}
 
+    /// Called when the panel leaves the dock.
+    fn on_removed(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
+
     /// Set zoomed state of the panel.
     fn set_zoomed(&self, _zoomed: bool, _cx: &mut App) {}
 
@@ -62,6 +65,7 @@ pub(crate) trait PanelView: 'static + Send + Sync {
     fn background(&self, cx: &App) -> Option<ImageSource>;
     fn set_active(&self, active: bool, window: &mut Window, cx: &mut App);
     fn set_zoomed(&self, zoomed: bool, cx: &mut App);
+    fn on_removed(&self, window: &mut Window, cx: &mut App);
     fn view(&self) -> AnyView;
     fn focus_handle(&self, cx: &App) -> FocusHandle;
 }
@@ -100,6 +104,12 @@ impl<T: Panel> PanelView for Entity<T> {
     fn set_zoomed(&self, zoomed: bool, cx: &mut App) {
         self.update(cx, |this, cx| {
             this.set_zoomed(zoomed, cx);
+        })
+    }
+
+    fn on_removed(&self, window: &mut Window, cx: &mut App) {
+        self.update(cx, |this, cx| {
+            this.on_removed(window, cx);
         })
     }
 
@@ -173,7 +183,9 @@ impl gpui_base::dock::PanelView for PanelHandle {
     ) {
     }
 
-    fn on_removed(&self, _: &mut Window, _: &mut App) {}
+    fn on_removed(&self, window: &mut Window, cx: &mut App) {
+        self.panel.on_removed(window, cx);
+    }
 
     fn view(&self) -> AnyView {
         self.panel.view()

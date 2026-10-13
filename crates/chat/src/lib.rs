@@ -594,11 +594,10 @@ impl ChatRegistry {
         let id = room.read(cx).id;
 
         if let hash_map::Entry::Vacant(e) = self.room_index.entry(id) {
-            let entity = room.to_owned();
-            entity.update(cx, |room, cx| room.ensure_directory(cx));
-            e.insert(entity.clone());
+            room.update(cx, |room, cx| room.ensure_directory(cx));
+            e.insert(room.clone());
 
-            self.rooms.insert(0, entity);
+            self.rooms.insert(0, room.clone());
             cx.notify();
         }
     }

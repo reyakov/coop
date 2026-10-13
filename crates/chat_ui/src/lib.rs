@@ -1752,7 +1752,7 @@ impl ChatPanel {
                         auto,
                     )
                     .menu_with_check_and_disabled(
-                        "Decoupled Encryption Key",
+                        "Encryption Key",
                         encryption,
                         Box::new(Command::ChangeSigner(SignerKind::Encryption)),
                         encryption,

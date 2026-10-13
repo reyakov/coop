@@ -1196,6 +1196,10 @@ impl Panel for GroupPanel {
             window.dispatch_action(Box::new(HideGroupMeta { relay, group: id }), cx);
         }
     }
+
+    fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.set_active(false, window, cx);
+    }
 }
 
 impl EventEmitter<PanelEvent> for GroupPanel {}
