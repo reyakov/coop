@@ -1,8 +1,18 @@
-use gpui_updater_core::{Asset, Error, Release, Result, UpdateSource, parse_tag};
+use std::sync::Arc;
+use std::time::Duration;
+
+use futures::AsyncReadExt;
+use futures::executor::block_on;
+use gpui::http_client::{AsyncBody, HttpClient, HttpRequestExt, RedirectPolicy, Request};
+use gpui_updater_pre::{Asset, Error, Release, Result, UpdateSource, parse_tag};
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 const CHECKSUMS_ASSET: &str = "SHA256SUMS";
 const RELEASE_PAGE_SIZE: usize = 20;
+const USER_AGENT: &str = concat!("coop-updater/", env!("CARGO_PKG_VERSION"));
+/// Deadline for the complete metadata request, including its body.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Which published artifact belongs to a target platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,12 +49,38 @@ pub fn asset_filter_for(os: &str, arch: &str) -> Option<AssetFilter> {
     Some(AssetFilter { extension, arch })
 }
 
+/// A release as returned by the Gitea API.
+#[derive(Debug, Deserialize)]
+struct GiteaRelease {
+    tag_name: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
+    assets: Vec<GiteaAsset>,
+}
+
+/// A release asset as returned by the Gitea API.
+#[derive(Debug, Deserialize)]
+struct GiteaAsset {
+    name: String,
+    browser_download_url: String,
+    #[serde(default)]
+    size: u64,
+}
+
 /// Reads releases from a Gitea repository's Releases.
 pub struct GiteaSource {
     api_base: String,
     owner: String,
     repo: String,
     filter: AssetFilter,
+    http_client: Arc<dyn HttpClient>,
 }
 
 impl GiteaSource {
@@ -55,12 +91,14 @@ impl GiteaSource {
         owner: impl Into<String>,
         repo: impl Into<String>,
         filter: AssetFilter,
+        http_client: Arc<dyn HttpClient>,
     ) -> Self {
         Self {
             api_base: api_base.into().trim_end_matches('/').to_string(),
             owner: owner.into(),
             repo: repo.into(),
             filter,
+            http_client,
         }
     }
 
@@ -70,11 +108,49 @@ impl GiteaSource {
             self.api_base, self.owner, self.repo
         )
     }
+
+    async fn get_bytes(&self, url: &str) -> Result<Vec<u8>> {
+        let request = Request::get(url)
+            .header("User-Agent", USER_AGENT)
+            .timeout(REQUEST_TIMEOUT)
+            .follow_redirects(RedirectPolicy::FollowAll)
+            .body(AsyncBody::empty())
+            .map_err(|error| Error::Http(format!("GET {url}: {error}")))?;
+
+        let mut response = self
+            .http_client
+            .send(request)
+            .await
+            .map_err(|error| Error::Http(format!("GET {url}: {error}")))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            return Err(Error::Http(format!("GET {url} -> {status}")));
+        }
+
+        let mut body = Vec::new();
+        response
+            .body_mut()
+            .read_to_end(&mut body)
+            .await
+            .map_err(|error| Error::Http(format!("GET {url}: {error}")))?;
+        Ok(body)
+    }
+
+    async fn get_json<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
+        let body = self.get_bytes(url).await?;
+        serde_json::from_slice(&body).map_err(|error| Error::Parse(error.to_string()))
+    }
+
+    async fn get_string(&self, url: &str) -> Result<String> {
+        let body = self.get_bytes(url).await?;
+        String::from_utf8(body).map_err(|error| Error::Parse(error.to_string()))
+    }
 }
 
 impl UpdateSource for GiteaSource {
     fn fetch_latest(&self) -> Result<Release> {
-        let releases: Vec<GiteaRelease> = http::get_json(&self.releases_url())?;
+        let releases: Vec<GiteaRelease> = block_on(self.get_json(&self.releases_url()))?;
         let release = newest_published(&releases)
             .ok_or_else(|| Error::Parse("repository has no published releases".to_string()))?;
 
@@ -92,26 +168,27 @@ impl UpdateSource for GiteaSource {
             .assets
             .iter()
             .find(|candidate| candidate.name.eq_ignore_ascii_case(CHECKSUMS_ASSET))
-            .map(|sums| http::get_string(&sums.browser_download_url))
+            .map(|sums| block_on(self.get_string(&sums.browser_download_url)))
             .transpose()?
             .and_then(|sums| sha256_for(&sums, &asset.name));
 
-        Ok(Release {
-            version: parse_tag(&release.tag_name)?,
-            notes: release
-                .body
-                .clone()
-                .filter(|body| !body.trim().is_empty())
-                .or_else(|| release.name.clone()),
-            asset: Asset {
-                name: asset.name.clone(),
-                url: asset.browser_download_url.clone(),
-                size: asset.size,
-            },
-            signature: None,
-            signature_url: None,
-            sha256,
-        })
+        let notes = release
+            .body
+            .clone()
+            .filter(|body| !body.trim().is_empty())
+            .or_else(|| release.name.clone());
+
+        let mut update = Release::new(
+            parse_tag(&release.tag_name)?,
+            Asset::new(&asset.name, &asset.browser_download_url, asset.size),
+        );
+        if let Some(notes) = notes {
+            update = update.with_notes(notes);
+        }
+        if let Some(sha256) = sha256 {
+            update = update.with_sha256(sha256);
+        }
+        Ok(update)
     }
 }
 
@@ -139,83 +216,9 @@ fn sha256_for(sums: &str, asset_name: &str) -> Option<String> {
     })
 }
 
-/// A release as returned by the Gitea API.
-#[derive(Debug, Deserialize)]
-struct GiteaRelease {
-    tag_name: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    body: Option<String>,
-    #[serde(default)]
-    draft: bool,
-    #[serde(default)]
-    prerelease: bool,
-    #[serde(default)]
-    assets: Vec<GiteaAsset>,
-}
-
-/// A release asset as returned by the Gitea API.
-#[derive(Debug, Deserialize)]
-struct GiteaAsset {
-    name: String,
-    browser_download_url: String,
-    #[serde(default)]
-    size: u64,
-}
-
-/// Blocking HTTP helpers for release metadata.
-mod http {
-    use std::time::Duration;
-
-    use gpui_updater_core::{Error, Result};
-    use serde::de::DeserializeOwned;
-    use ureq::Agent;
-    use ureq::tls::{RootCerts, TlsConfig};
-
-    const USER_AGENT: &str = concat!("coop-updater/", env!("CARGO_PKG_VERSION"));
-    const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
-    const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
-
-    fn agent() -> Agent {
-        Agent::config_builder()
-            .user_agent(USER_AGENT)
-            .tls_config(
-                TlsConfig::builder()
-                    .root_certs(RootCerts::PlatformVerifier)
-                    .build(),
-            )
-            .timeout_resolve(Some(CONNECT_TIMEOUT))
-            .timeout_connect(Some(CONNECT_TIMEOUT))
-            .timeout_recv_response(Some(RESPONSE_TIMEOUT))
-            .build()
-            .into()
-    }
-
-    fn get_bytes(url: &str) -> Result<Vec<u8>> {
-        let mut response = agent().get(url).call().map_err(|error| match error {
-            ureq::Error::StatusCode(code) => Error::Http(format!("GET {url} -> {code}")),
-            other => Error::Http(other.to_string()),
-        })?;
-
-        response
-            .body_mut()
-            .read_to_vec()
-            .map_err(|error| Error::Http(format!("GET {url} -> {error}")))
-    }
-
-    pub(super) fn get_json<T: DeserializeOwned>(url: &str) -> Result<T> {
-        serde_json::from_slice(&get_bytes(url)?).map_err(|error| Error::Parse(error.to_string()))
-    }
-
-    pub(super) fn get_string(url: &str) -> Result<String> {
-        String::from_utf8(get_bytes(url)?).map_err(|error| Error::Parse(error.to_string()))
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use gpui_updater_core::Version;
+    use gpui_updater_pre::Version;
 
     use super::*;
 
@@ -344,7 +347,13 @@ abcdef  macos-arm64-artifacts/Coop_1.0.1_aarch64.dmg
     fn live_release_source_resolves_the_running_platform() {
         let filter = asset_filter_for(std::env::consts::OS, std::env::consts::ARCH)
             .expect("this platform should be supported");
-        let source = GiteaSource::new("https://git.reya.info/api/v1", "reya", "coop", filter);
+        let source = GiteaSource::new(
+            "https://git.reya.info/api/v1",
+            "reya",
+            "coop",
+            filter,
+            Arc::new(reqwest_client::ReqwestClient::new()),
+        );
 
         let release = source
             .fetch_latest()
