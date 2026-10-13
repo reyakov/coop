@@ -2,8 +2,8 @@ use std::any::Any;
 use std::sync::Arc;
 
 use gpui::{
-    AnyElement, AnyView, App, Element, Entity, EventEmitter, FocusHandle, Focusable, Render,
-    SharedString, Window,
+    AnyElement, AnyView, App, Element, Entity, EventEmitter, FocusHandle, Focusable, ImageSource,
+    Render, SharedString, Window,
 };
 use gpui_base::dock::{PanelId, PanelState};
 
@@ -46,6 +46,11 @@ pub trait Panel: EventEmitter<PanelEvent> + Render + Focusable {
     fn toolbar_buttons(&self, _window: &Window, _cx: &App) -> Vec<Button> {
         vec![]
     }
+
+    /// An optional image drawn behind the panel and its tab bar.
+    fn background(&self, _cx: &App) -> Option<ImageSource> {
+        None
+    }
 }
 
 pub(crate) trait PanelView: 'static + Send + Sync {
@@ -54,6 +59,7 @@ pub(crate) trait PanelView: 'static + Send + Sync {
     fn closable(&self, cx: &App) -> bool;
     fn zoomable(&self, cx: &App) -> bool;
     fn visible(&self, cx: &App) -> bool;
+    fn background(&self, cx: &App) -> Option<ImageSource>;
     fn set_active(&self, active: bool, window: &mut Window, cx: &mut App);
     fn set_zoomed(&self, zoomed: bool, cx: &mut App);
     fn view(&self) -> AnyView;
@@ -79,6 +85,10 @@ impl<T: Panel> PanelView for Entity<T> {
 
     fn visible(&self, cx: &App) -> bool {
         self.read(cx).visible(cx)
+    }
+
+    fn background(&self, cx: &App) -> Option<ImageSource> {
+        self.read(cx).background(cx)
     }
 
     fn set_active(&self, active: bool, window: &mut Window, cx: &mut App) {

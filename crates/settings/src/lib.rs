@@ -1,6 +1,8 @@
+use std::path::PathBuf;
+
 use anyhow::{Error, anyhow};
 use common::config_dir;
-use gpui::{App, AppContext, Context, Entity, Global, Subscription, Task};
+use gpui::{App, AppContext, Context, Entity, Global, ImageSource, Subscription, Task};
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use smallvec::{SmallVec, smallvec};
@@ -12,6 +14,8 @@ pub fn init(cx: &mut App) {
 
 const DEFAULT_FILE_SERVER: &str = "https://nostr.download/";
 const LEGACY_FILE_SERVER: &str = "blossom.band";
+/// Built-in image shown behind chat and group panels
+pub const DEFAULT_BACKGROUND: &str = "brand/default-bg.jpg";
 
 macro_rules! setting_accessors {
     ($(pub $field:ident: $type:ty),* $(,)?) => {
@@ -56,6 +60,8 @@ setting_accessors! {
     pub screening: bool,
     pub nip4e: bool,
     pub file_server: Url,
+    pub panel_background: bool,
+    pub panel_background_path: Option<PathBuf>,
 }
 
 setting_getters! {
@@ -114,12 +120,8 @@ impl RoomConfig {
     }
 }
 
-/// Settings
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
-    /// Which appearance to paint: follow the OS, or pin light or dark.
-    /// `alias` reads the pre-bezel `theme_mode` key so old config files keep
-    /// their pinned choice.
     #[serde(default, alias = "theme_mode")]
     pub appearance_mode: AppearanceMode,
 
@@ -131,6 +133,14 @@ pub struct Settings {
 
     /// Enable decoupling encryption key
     pub nip4e: bool,
+
+    /// Show an image behind chat and group panels
+    #[serde(default)]
+    pub panel_background: bool,
+
+    /// Custom image for the panel background; the built-in one when unset
+    #[serde(default)]
+    pub panel_background_path: Option<PathBuf>,
 
     /// Trusted relays; Coop will automatically authenticate with these relays
     pub trusted_relays: Vec<String>,
@@ -154,6 +164,8 @@ impl Default for Settings {
             hide_avatar: false,
             screening: true,
             nip4e: false,
+            panel_background: true,
+            panel_background_path: None,
             trusted_relays: vec![],
             file_server: Url::parse(DEFAULT_FILE_SERVER).unwrap(),
             pinned_rooms: vec![],
@@ -270,6 +282,17 @@ impl AppSettings {
     /// Check if decoupling encryption key is enabled
     pub fn is_nip4e_enabled(&self, cx: &App) -> bool {
         self.inner.read(cx).nip4e
+    }
+
+    /// The image to show behind chat and group panels, when enabled
+    pub fn panel_background_source(cx: &App) -> Option<ImageSource> {
+        if !Self::get_panel_background(cx) {
+            return None;
+        }
+        Some(match Self::get_panel_background_path(cx) {
+            Some(path) => path.into(),
+            None => DEFAULT_BACKGROUND.into(),
+        })
     }
 
     /// Check if the chat room is pinned

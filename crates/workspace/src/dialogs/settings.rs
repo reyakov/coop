@@ -1,7 +1,7 @@
 use gpui::http_client::Url;
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
-    Window, div,
+    App, AppContext, Context, Entity, IntoElement, ParentElement, PathPromptOptions, Render,
+    SharedString, Styled, Window, div,
 };
 use settings::AppSettings;
 use theme::{ActiveTheme, AppExt as _, AppearanceMode, TextStyle, Typeset as _};
@@ -11,7 +11,7 @@ use ui::input::{Input, InputState};
 use ui::menu::{DropdownMenu, PopupMenuItem};
 use ui::notification::Notification;
 use ui::switch::Switch;
-use ui::{IconName, Sizable, WindowExtension, h_flex, v_flex};
+use ui::{Disableable, IconName, Sizable, WindowExtension, h_flex, v_flex};
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Preferences> {
     cx.new(|cx| Preferences::new(window, cx))
@@ -52,6 +52,32 @@ impl Preferences {
         AppSettings::update_appearance_mode(mode, cx);
         cx.set_appearance_mode(mode);
     }
+
+    /// Ask the user for an image to show behind chat and group panels
+    fn choose_background(cx: &mut App) {
+        let task = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: None,
+        });
+
+        cx.spawn(async move |cx| {
+            let Ok(Ok(Some(mut paths))) = task.await else {
+                return;
+            };
+
+            let Some(path) = paths.pop() else {
+                return;
+            };
+
+            cx.update(|cx| {
+                AppSettings::update_panel_background_path(Some(path), cx);
+                cx.refresh_windows();
+            });
+        })
+        .detach();
+    }
 }
 
 impl Render for Preferences {
@@ -60,11 +86,19 @@ impl Render for Preferences {
         const AVATAR: &str = "Hide all avatar pictures to improve performance.";
         const MODE: &str = "Follow the OS, or always use light or dark.";
         const NIP4E: &str = "Use a dedicated key to encrypt and decrypt messages.";
+        const BACKGROUND: &str = "Show an image behind chat and group panels.";
 
         let screening = AppSettings::get_screening(cx);
         let hide_avatar = AppSettings::get_hide_avatar(cx);
         let nip4e = AppSettings::get_nip4e(cx);
         let appearance_mode = AppSettings::get_appearance_mode(cx);
+        let panel_background = AppSettings::get_panel_background(cx);
+        let panel_background_path = AppSettings::get_panel_background_path(cx);
+
+        let background_label = match &panel_background_path {
+            Some(path) => path.display().to_string(),
+            None => String::from("Default Background"),
+        };
 
         v_flex()
             .gap_4()
@@ -129,6 +163,73 @@ impl Render for Preferences {
                                             ))
                                         })
                                     }),
+                            ),
+                    ),
+            )
+            .child(
+                GroupBox::new()
+                    .id("background")
+                    .title("Background")
+                    .fill()
+                    .child(
+                        Switch::new("panel-background")
+                            .label("Panel background")
+                            .description(BACKGROUND)
+                            .checked(panel_background)
+                            .on_click(move |_, _window, cx| {
+                                AppSettings::update_panel_background(!panel_background, cx);
+                                cx.refresh_windows();
+                            }),
+                    )
+                    .child(
+                        h_flex()
+                            .gap_3()
+                            .justify_between()
+                            .child(
+                                v_flex()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .text_style(TextStyle::Callout)
+                                            .child(SharedString::from("Image")),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_style(TextStyle::Caption)
+                                            .text_color(cx.theme().text_muted)
+                                            .truncate()
+                                            .child(SharedString::from(background_label)),
+                                    ),
+                            )
+                            .child(
+                                h_flex()
+                                    .flex_shrink_0()
+                                    .gap_1()
+                                    .child(
+                                        Button::new("choose-background")
+                                            .label("Choose image")
+                                            .ghost_alt()
+                                            .small()
+                                            .disabled(!panel_background)
+                                            .on_click(|_, _window, cx| {
+                                                Self::choose_background(cx);
+                                            }),
+                                    )
+                                    .child(
+                                        Button::new("reset-background")
+                                            .label("Reset")
+                                            .ghost_alt()
+                                            .small()
+                                            .disabled(
+                                                !panel_background
+                                                    || panel_background_path.is_none(),
+                                            )
+                                            .on_click(|_, _window, cx| {
+                                                AppSettings::update_panel_background_path(None, cx);
+                                                cx.refresh_windows();
+                                            }),
+                                    ),
                             ),
                     ),
             )

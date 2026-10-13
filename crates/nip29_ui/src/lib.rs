@@ -5,7 +5,7 @@ use chat_ui::text::rendered_text;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FollowMode, IntoElement, ListAlignment, ListScrollEvent, ListState, ParentElement,
+    FollowMode, ImageSource, IntoElement, ListAlignment, ListScrollEvent, ListState, ParentElement,
     PathPromptOptions, Render, SharedString, Styled, Subscription, Task, WeakEntity, Window, div,
     list, px,
 };
@@ -1170,6 +1170,10 @@ impl Panel for GroupPanel {
 
     fn toolbar_buttons(&self, _window: &Window, _cx: &App) -> Vec<Button> {
         Vec::new()
+    }
+
+    fn background(&self, cx: &App) -> Option<ImageSource> {
+        AppSettings::panel_background_source(cx)
     }
 
     fn set_active(&self, active: bool, window: &mut Window, cx: &mut App) {

@@ -9,8 +9,8 @@ use common::{TimestampExt, emojis_from_tags};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, MouseButton,
-    ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, SharedUri,
+    Focusable, ImageSource, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState,
+    MouseButton, ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, SharedUri,
     StatefulInteractiveElement, Styled, StyledImage, Subscription, SystemNotification,
     SystemNotificationAction, Task, WeakEntity, Window, div, img, list, px, red, relative,
     retain_all, svg, white,
@@ -1845,6 +1845,10 @@ impl Panel for ChatPanel {
                     });
                 }),
         ]
+    }
+
+    fn background(&self, cx: &App) -> Option<ImageSource> {
+        AppSettings::panel_background_source(cx)
     }
 }
 

@@ -6,10 +6,10 @@ use std::sync::Arc;
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, AnyView, App, AppContext as _, Bounds, Context, Div, Empty, Entity,
-    GlobalElementId, InspectorElementId, InteractiveElement as _, IntoElement, LayoutId,
-    MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render, ScrollHandle,
-    SharedString, Stateful, StatefulInteractiveElement as _, Style, StyleRefinement, Styled as _,
-    WeakEntity, Window, actions, div, px,
+    GlobalElementId, ImageSource, InspectorElementId, InteractiveElement as _, IntoElement,
+    LayoutId, MouseButton, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Render,
+    ScrollHandle, SharedString, Stateful, StatefulInteractiveElement as _, Style, StyleRefinement,
+    Styled as _, WeakEntity, Window, actions, div, px,
 };
 pub use gpui_base::dock::{DockArea, DockLayout, DockPlacement};
 use gpui_base::dock::{
@@ -24,7 +24,7 @@ use crate::resizable::{resize_handle, resize_handle_appearance};
 use crate::tab::Tab;
 use crate::tab::tab_bar::TabBar;
 use crate::title_bar::{TRAFFIC_LIGHT_PADDING, title_bar_drag_handlers, window_controls};
-use crate::{IconName, Selectable, Sizable, StyledExt, h_flex, v_flex};
+use crate::{IconName, Selectable, Sizable, StyledExt, background, h_flex, v_flex};
 
 mod panel;
 pub use panel::*;
@@ -431,6 +431,11 @@ impl TabGroupSkin {
         let tabs_count = group.panels().len();
         let is_title_bar = self.is_title_bar_group(group, cx);
 
+        let wallpaper = group
+            .active_panel()
+            .and_then(|panel| panel_background(panel, cx))
+            .is_some();
+
         let displayed = group.active_panel().map(|panel| panel.panel_id(cx));
         let displayed_ix = displayed.and_then(|displayed| {
             group
@@ -467,7 +472,7 @@ impl TabGroupSkin {
         let bar = TabBar::new("tab-bar")
             .track_scroll(&self.scroll_handle)
             .h(TABBAR_HEIGHT)
-            .bg(cx.theme().bg)
+            .when(!wallpaper, |this| this.bg(cx.theme().bg))
             .when(needs_traffic_light_padding, |this| {
                 this.pl(px(TRAFFIC_LIGHT_PADDING))
             })
@@ -569,7 +574,7 @@ impl TabGroupSkin {
             h_flex()
                 .h(TABBAR_HEIGHT)
                 .w_full()
-                .bg(cx.theme().bg)
+                .when(!wallpaper, |this| this.bg(cx.theme().bg))
                 .child(bar.flex_1())
                 .child(window_controls())
                 .into_any_element()
@@ -647,23 +652,31 @@ impl TabGroupSkin {
 }
 
 impl TabGroupRenderer for TabGroupSkin {
-    fn frame(&self, group: &TabGroupContext, _: &mut Window, _cx: &mut App) -> Stateful<Div> {
-        div().id("tab-panel").when(!group.is_collapsed(), |this| {
-            this.on_action({
-                let group = TabGroupContext::clone(group);
-                move |_: &ToggleZoom, window, cx| group.toggle_zoom(window, cx)
+    fn frame(&self, group: &TabGroupContext, _: &mut Window, cx: &mut App) -> Stateful<Div> {
+        let wallpaper = group
+            .active_panel()
+            .and_then(|panel| panel_background(panel, cx));
+
+        div()
+            .id("tab-panel")
+            .relative()
+            .when_some(wallpaper, |this, source| this.child(background(source, cx)))
+            .when(!group.is_collapsed(), |this| {
+                this.on_action({
+                    let group = TabGroupContext::clone(group);
+                    move |_: &ToggleZoom, window, cx| group.toggle_zoom(window, cx)
+                })
+                .on_action({
+                    let group = TabGroupContext::clone(group);
+                    move |_: &ClosePanel, window, cx| {
+                        let Some(panel) = group.active_panel() else {
+                            return;
+                        };
+                        let panel = panel.panel_id(cx);
+                        group.close(panel, window, cx);
+                    }
+                })
             })
-            .on_action({
-                let group = TabGroupContext::clone(group);
-                move |_: &ClosePanel, window, cx| {
-                    let Some(panel) = group.active_panel() else {
-                        return;
-                    };
-                    let panel = panel.panel_id(cx);
-                    group.close(panel, window, cx);
-                }
-            })
-        })
     }
 
     fn render_tab_bar(
@@ -710,6 +723,11 @@ impl TabGroupRenderer for TabGroupSkin {
             return Empty.into_any_element();
         }
 
+        let wallpaper = group
+            .active_panel()
+            .and_then(|active| panel_background(active, cx))
+            .is_some();
+
         v_flex()
             .id("tab-content")
             .group("")
@@ -718,7 +736,7 @@ impl TabGroupRenderer for TabGroupSkin {
             .child(
                 div()
                     .size_full()
-                    .bg(cx.theme().bg)
+                    .when(!wallpaper, |this| this.bg(cx.theme().bg))
                     .overflow_hidden()
                     .child(panel.cached(StyleRefinement::default().v_flex().size_full())),
             )
@@ -780,4 +798,8 @@ fn panel_title(panel: &Arc<dyn gpui_base::dock::PanelView>, cx: &App) -> AnyElem
         Some(handle) => handle.panel().title(cx),
         None => SharedString::from(panel.panel_name(cx)).into_any_element(),
     }
+}
+
+fn panel_background(panel: &Arc<dyn gpui_base::dock::PanelView>, cx: &App) -> Option<ImageSource> {
+    PanelHandle::of(panel).and_then(|handle| handle.panel().background(cx))
 }

@@ -1,4 +1,7 @@
-use gpui::{App, Div, Pixels, Refineable, StyleRefinement, Styled, div, px};
+use gpui::{
+    App, Div, ImageSource, ObjectFit, ParentElement, Pixels, Refineable, StyleRefinement, Styled,
+    StyledImage, div, img, px,
+};
 pub use gpui_base::component_traits::{Disableable, Selectable};
 use theme::{ActiveTheme, TextStyle, Typeset as _, surface_radius, surface_shadows};
 
@@ -15,6 +18,19 @@ pub fn v_flex() -> Div {
 /// Returns a `Div` as divider.
 pub fn divider(cx: &App) -> Div {
     div().w_full().h_px().bg(cx.theme().border_faint)
+}
+
+/// Returns a full-bleed image with a wash for readability, to show behind panel content.
+pub fn background<I>(image: I, cx: &App) -> Div
+where
+    I: Into<ImageSource>,
+{
+    let wash = if cx.theme().is_dark() { 0.5 } else { 0.2 };
+    div()
+        .absolute()
+        .inset_0()
+        .child(img(image).size_full().object_fit(ObjectFit::Cover))
+        .child(div().absolute().inset_0().bg(cx.theme().bg.opacity(wash)))
 }
 
 macro_rules! font_weight {
