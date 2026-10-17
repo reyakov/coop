@@ -31,6 +31,7 @@ mod onboarding;
 mod rows;
 mod search;
 
+pub(crate) use rows::open_room;
 use search::SearchResult;
 
 pub struct Sidebar {

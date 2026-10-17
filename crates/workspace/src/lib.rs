@@ -205,9 +205,11 @@ impl Workspace {
             });
         });
 
+        let greeter_dock = dock.downgrade();
+
         cx.defer_in(window, move |this, window, cx| {
             let sidebar = PanelHandle::new(left_sidebar);
-            let greeter = PanelHandle::new(greeter::init(window, cx));
+            let greeter = PanelHandle::new(greeter::init(greeter_dock, window, cx));
 
             this.dock.update(cx, |this, cx| {
                 let left = DockLayout::tabs().panel_view(Arc::new(sidebar), cx);

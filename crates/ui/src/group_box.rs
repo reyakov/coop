@@ -101,14 +101,14 @@ impl RenderOnce for GroupBox {
         v_flex()
             .id(self.id.unwrap_or("group-box".into()))
             .w_full()
-            .when(has_paddings, |this| this.gap_3())
-            .when(!has_paddings, |this| this.gap_4())
+            .when(has_paddings, |this| this.gap_1p5())
+            .when(!has_paddings, |this| this.gap_2())
             .refine_style(&self.style)
             .when_some(self.title, |this, title| {
                 this.child(
                     div()
                         .text_color(cx.theme().text_muted)
-                        .text_style(TextStyle::Callout)
+                        .text_style(TextStyle::Subheadline)
                         .font_semibold()
                         .child(title),
                 )

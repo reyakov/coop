@@ -24,7 +24,12 @@ use super::search::MessageHit;
 use crate::dialogs::{profile, screening};
 
 /// Open a room in the dock, screening new requests when enabled.
-fn open_room(room: &Entity<Room>, dock: &WeakEntity<DockArea>, window: &mut Window, cx: &mut App) {
+pub(crate) fn open_room(
+    room: &Entity<Room>,
+    dock: &WeakEntity<DockArea>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     ui::dock::add_panel_to(
         dock,
         PanelHandle::new(chat_ui::init(room.downgrade(), window, cx)),
