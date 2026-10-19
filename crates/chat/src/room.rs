@@ -73,22 +73,16 @@ pub enum RoomKind {
 pub struct Room {
     /// Conversation ID
     pub id: u64,
-
     /// The timestamp of the last message in the room
     pub created_at: Timestamp,
-
     /// Subject of the room
     pub(crate) subject: Option<SharedString>,
-
     /// All members of the room
     pub(super) members: Vec<PublicKey>,
-
     /// Kind
     pub kind: RoomKind,
-
     /// Configuration
     config: RoomConfig,
-
     /// Person directory, attached when the room is registered
     directory: Option<Entity<Directory>>,
 }

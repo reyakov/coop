@@ -246,18 +246,26 @@ impl GreeterPanel {
                             .items_center()
                             .justify_end()
                             .child(
-                                div().group_hover("", |this| this.invisible()).child(
-                                    div()
-                                        .text_style(TextStyle::Caption)
-                                        .text_color(cx.theme().text_faint)
-                                        .child(created_at),
-                                ),
+                                div()
+                                    .absolute()
+                                    .left_0()
+                                    .right_0()
+                                    .top_0()
+                                    .bottom_0()
+                                    .group_hover("", |this| this.invisible())
+                                    .child(
+                                        div()
+                                            .text_align(gpui::TextAlign::Right)
+                                            .text_style(TextStyle::Caption)
+                                            .text_color(cx.theme().text_faint)
+                                            .child(created_at),
+                                    ),
                             )
                             .child(
                                 Button::new(format!("response-{index}"))
                                     .label("Response")
                                     .xsmall()
-                                    .primary()
+                                    .ghost()
                                     .invisible()
                                     .group_hover("", |this| this.visible())
                                     .on_click({
@@ -359,13 +367,10 @@ impl GreeterPanel {
                                     .right_0()
                                     .top_0()
                                     .bottom_0()
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
                                     .group_hover("", |this| this.invisible())
                                     .child(
                                         div()
-                                            .font_normal()
+                                            .text_align(gpui::TextAlign::Right)
                                             .text_style(TextStyle::Caption)
                                             .text_color(cx.theme().text_faint)
                                             .child(created_at),
@@ -375,7 +380,7 @@ impl GreeterPanel {
                                 Button::new(format!("reply-{index}"))
                                     .label("Reply")
                                     .xsmall()
-                                    .primary()
+                                    .ghost()
                                     .invisible()
                                     .group_hover("", |this| this.visible())
                                     .on_click({
