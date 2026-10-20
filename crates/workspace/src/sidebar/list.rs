@@ -120,7 +120,7 @@ impl Sidebar {
                         .px_4()
                         .text_style(TextStyle::Caption)
                         .font_semibold()
-                        .text_color(cx.theme().text_faint)
+                        .text_color(cx.theme().text_muted)
                         .child(list_title),
                 )
             })

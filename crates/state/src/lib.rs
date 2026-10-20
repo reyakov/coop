@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::{Error, anyhow};
 #[cfg(not(target_arch = "wasm32"))]
@@ -260,15 +261,9 @@ impl NostrRegistry {
                             let uri = NostrConnectUri::parse(base)?;
 
                             // Construct the nostr connect signer
-                            let mut signer = NostrConnect::new(
-                                uri,
-                                keys,
-                                Duration::from_secs(NOSTR_CONNECT_TIMEOUT),
-                                None,
-                            )?;
-
-                            // Handle auth url with the default browser
-                            signer.auth_url_handler(CoopAuthUrlHandler);
+                            let signer = NostrConnect::builder(uri, keys)
+                                .auth_url_handler(Arc::new(CoopAuthUrlHandler))
+                                .build()?;
 
                             this.update(cx, |this, cx| {
                                 this.set_signer(signer, cx);
@@ -447,16 +442,9 @@ impl NostrRegistry {
         let write = cx.write_credentials(USER_KEYRING, "bunker", credential.as_bytes());
 
         cx.spawn(async move |this, cx| {
-            // Construct the nostr connect signer
-            let mut signer = NostrConnect::new(
-                connect_uri,
-                keys,
-                Duration::from_secs(NOSTR_CONNECT_TIMEOUT),
-                None,
-            )?;
-
-            // Handle auth url with the default browser
-            signer.auth_url_handler(CoopAuthUrlHandler);
+            let signer = NostrConnect::builder(connect_uri, keys)
+                .auth_url_handler(Arc::new(CoopAuthUrlHandler))
+                .build()?;
 
             // Verify the bunker responds before persisting the credential
             let public_key = signer.get_public_key_async().await?;

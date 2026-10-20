@@ -13,7 +13,7 @@ use gpui::{
 use instant::Duration;
 use nip29::{Group, GroupKey, GroupsEvent, GroupsRegistry};
 use nostr_sdk::prelude::*;
-use person::Directory;
+use person::{Directory, PersonRegistry};
 use smallvec::{SmallVec, smallvec};
 use state::{FIND_DELAY, NostrRegistry, StateEvent};
 use theme::{ActiveTheme, TABBAR_HEIGHT, TextStyle, Typeset as _};
@@ -103,6 +103,7 @@ impl Sidebar {
         let chat = ChatRegistry::global(cx);
         let groups = GroupsRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
+        let wot = PersonRegistry::global(cx).read(cx).wot();
 
         let find_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -118,6 +119,12 @@ impl Sidebar {
                     this.new_requests = true;
                     cx.notify();
                 };
+            }),
+        );
+
+        subscriptions.push(
+            cx.subscribe_in(&wot, window, |_this, _wot, _event, _window, cx| {
+                cx.notify();
             }),
         );
 

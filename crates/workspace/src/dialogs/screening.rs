@@ -9,7 +9,7 @@ use gpui::{
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
-use person::{Directory, Person, shorten_pubkey};
+use person::{Directory, Person, PersonRegistry, shorten_pubkey};
 use smallvec::{SmallVec, smallvec};
 use state::{BOOTSTRAP_RELAYS, NostrAddress, NostrRegistry, TIMEOUT};
 use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius};
@@ -33,14 +33,19 @@ pub struct Screening {
     last_active: Option<Timestamp>,
     /// All mutual contacts of the person being screened.
     mutual_contacts: Vec<PublicKey>,
+    /// Whether the fallback lookup for mutual contacts has run.
+    mutuals_fallback: bool,
     /// Person directory for the person and their mutual contacts
     directory: Entity<Directory>,
     tasks: SmallVec<[Task<()>; 3]>,
-    _subscriptions: SmallVec<[Subscription; 1]>,
+    _subscriptions: SmallVec<[Subscription; 2]>,
 }
 
 impl Screening {
     pub fn new(public_key: PublicKey, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let wot = PersonRegistry::global(cx).read(cx).wot();
+        let directory = Directory::new(cx);
+
         let mut subscriptions = smallvec![];
 
         subscriptions.push(cx.on_release_in(window, move |this, window, cx| {
@@ -48,15 +53,20 @@ impl Screening {
             window.close_all_dialogs(cx);
         }));
 
+        subscriptions.push(cx.subscribe(&wot, |_this, _wot, _event, cx| {
+            cx.notify();
+        }));
+
+        directory.update(cx, |directory, cx| {
+            directory.track([public_key], cx);
+        });
+
         cx.defer_in(window, |this, _window, cx| {
             this.check_contact(cx);
-            this.check_wot(cx);
+            this.fetch_fallback(cx);
             this.check_last_activity(cx);
             this.verify_identifier(cx);
         });
-
-        let directory = Directory::new(cx);
-        directory.update(cx, |directory, cx| directory.track([public_key], cx));
 
         Self {
             public_key,
@@ -64,6 +74,7 @@ impl Screening {
             followed: false,
             last_active: None,
             mutual_contacts: vec![],
+            mutuals_fallback: false,
             directory,
             tasks: smallvec![],
             _subscriptions: subscriptions,
@@ -110,42 +121,48 @@ impl Screening {
         }));
     }
 
-    fn check_wot(&mut self, cx: &mut Context<Self>) {
+    /// Fetch mutual contacts from the database while the web of trust loads
+    fn fetch_fallback(&mut self, cx: &mut Context<Self>) {
+        let persons = PersonRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
+
+        if self.mutuals_fallback || persons.read(cx).wot().read(cx).is_loaded() {
+            return;
+        }
+        self.mutuals_fallback = true;
+
         let public_key = self.public_key;
 
         let Some(current_user) = nostr.read(cx).current_user() else {
             return;
         };
 
-        let task: Task<Result<Vec<PublicKey>, Error>> = cx.background_spawn(async move {
-            // Check mutual contacts
+        let task: Task<Vec<PublicKey>> = cx.background_spawn(async move {
+            // Check mutual contacts among the locally stored contact lists
             let filter = Filter::new().kind(Kind::ContactList).pubkey(public_key);
-            let mut mutual_contacts = vec![];
+            let mut contacts = vec![];
 
             if let Ok(events) = client.database().query(filter).await {
                 for event in events.into_iter().filter(|ev| ev.pubkey != current_user) {
-                    mutual_contacts.push(event.pubkey);
+                    contacts.push(event.pubkey);
                 }
             }
 
-            Ok(mutual_contacts)
+            contacts
         });
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            match task.await {
-                Ok(contacts) => {
-                    this.update(cx, |this, cx| {
-                        this.mutual_contacts = contacts;
-                        cx.notify();
-                    })
-                    .ok();
+            let contacts = task.await;
+
+            this.update(cx, |this, cx| {
+                if persons.read(cx).wot().read(cx).is_loaded() {
+                    return;
                 }
-                Err(e) => {
-                    log::error!("Failed to fetch mutual contacts: {}", e);
-                }
-            };
+                this.mutual_contacts = contacts;
+                cx.notify();
+            })
+            .ok();
         }));
     }
 
@@ -263,8 +280,12 @@ impl Screening {
         }));
     }
 
-    fn mutual_contacts(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let contacts = self.mutual_contacts.clone();
+    fn mutual_contacts(
+        &mut self,
+        contacts: Vec<PublicKey>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let directory = self.directory.clone();
 
         window.open_dialog(cx, move |this, _window, _cx| {
@@ -317,11 +338,23 @@ impl Render for Screening {
         const NIP05_NOT_MATCH: &str = "The address does not match the user's public key.";
         const NO_NIP05: &str = "This person has not set up their friendly address";
 
+        let persons = PersonRegistry::global(cx);
         let profile = self.profile(cx);
         let shorten_pubkey = shorten_pubkey(self.public_key, 8);
 
         let last_active = self.last_active.map(|_| true);
-        let mutuals = self.mutual_contacts.len();
+
+        // Pull from the web of trust once loaded, else use the database fallback
+        let mutual_contacts = {
+            let wot = persons.read(cx).wot().read(cx);
+            if wot.is_loaded() {
+                wot.mutuals(&self.public_key)
+            } else {
+                self.mutual_contacts.clone()
+            }
+        };
+
+        let mutuals = mutual_contacts.len();
         let mutuals_str = format!("You have {} mutual contacts with this person.", mutuals);
 
         v_flex()
@@ -365,7 +398,7 @@ impl Render for Screening {
                                 Button::new("njump")
                                     .icon(IconName::Link)
                                     .label("njump.me")
-                                    .secondary()
+                                    .ghost_alt()
                                     .small()
                                     .rounded()
                                     .on_click(cx.listener(move |this, _e, window, cx| {
@@ -376,7 +409,6 @@ impl Render for Screening {
                                 Button::new("report")
                                     .tooltip("Report as a scam or impostor")
                                     .icon(IconName::Warning)
-                                    .small()
                                     .warning()
                                     .rounded()
                                     .on_click(cx.listener(move |this, _e, window, cx| {
@@ -515,7 +547,11 @@ impl Render for Screening {
                                             .rounded()
                                             .disabled(mutuals == 0)
                                             .on_click(cx.listener(move |this, _, window, cx| {
-                                                this.mutual_contacts(window, cx);
+                                                this.mutual_contacts(
+                                                    mutual_contacts.clone(),
+                                                    window,
+                                                    cx,
+                                                );
                                             })),
                                     ),
                             ),

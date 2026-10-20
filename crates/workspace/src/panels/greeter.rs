@@ -10,6 +10,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, div, px, svg,
 };
 use nostr_sdk::prelude::*;
+use person::PersonRegistry;
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, StateEvent};
 use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius};
@@ -57,13 +58,14 @@ pub struct GreeterPanel {
     /// The coalesced reload scheduled after registry updates
     refresh_task: Option<Task<Result<(), Error>>>,
     /// Event subscriptions
-    _subscriptions: SmallVec<[Subscription; 2]>,
+    _subscriptions: SmallVec<[Subscription; 3]>,
 }
 
 impl GreeterPanel {
     fn new(dock: WeakEntity<DockArea>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let chat = ChatRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
+        let wot = PersonRegistry::global(cx).read(cx).wot();
 
         let mut subscriptions = smallvec![];
 
@@ -73,6 +75,13 @@ impl GreeterPanel {
                 if let StateEvent::SignerChanged = event {
                     this.load(cx);
                 }
+            }),
+        );
+
+        subscriptions.push(
+            // Redraw when the web of trust loads or changes
+            cx.subscribe(&wot, |_, _, _, cx| {
+                cx.notify();
             }),
         );
 
@@ -176,120 +185,137 @@ impl GreeterPanel {
         }));
     }
 
-    fn render_requests(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        if self.requests.is_empty() {
-            return None;
-        }
+    fn render_requests(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        // Spam requests stay out of the greeter entirely
+        let requests: Vec<_> = self
+            .requests
+            .iter()
+            .filter(|(room, _)| !room.read(cx).is_spam(cx))
+            .cloned()
+            .collect();
 
         let dock = self.dock.clone();
 
-        let rows: Vec<AnyElement> = self
-            .requests
-            .iter()
-            .take(SECTION_SIZE)
-            .enumerate()
-            .map(|(index, (room, preview))| {
-                let room = room.clone();
-                let dock = dock.clone();
-                let name = room.read(cx).display_name(cx);
-                let picture = room.read(cx).display_image(cx);
-                let seed = room.read(cx).display_image_seed(cx);
-                let created_at = room.read(cx).created_at.to_ago();
-                let preview = preview.clone();
-
+        let rows: Vec<AnyElement> = if requests.is_empty() {
+            vec![
                 h_flex()
-                    .id(format!("request-{index}"))
-                    .group("")
+                    .h_16()
                     .w_full()
-                    .h_9()
-                    .px_1p5()
-                    .gap_2()
+                    .justify_center()
+                    .border_1()
+                    .border_dashed()
+                    .border_color(cx.theme().border)
                     .rounded(px(button_radius()))
-                    .cursor_pointer()
-                    .hover(|this| this.bg(cx.theme().element_hover))
-                    .on_click({
-                        let room = room.clone();
-                        let dock = dock.clone();
-                        move |_, window, cx| {
-                            open_room(&room, &dock, window, cx);
-                        }
-                    })
-                    .child(
-                        Avatar::from_source(picture)
-                            .seed(seed)
-                            .small()
-                            .flex_shrink_0(),
-                    )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_style(TextStyle::Callout)
-                            .child(name),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .truncate()
-                            .text_style(TextStyle::Callout)
-                            .text_color(cx.theme().text_muted)
-                            .italic()
-                            .child(preview),
-                    )
-                    .child(
-                        div()
-                            .relative()
-                            .flex_shrink_0()
-                            .h_6()
-                            .flex()
-                            .items_center()
-                            .justify_end()
-                            .child(
-                                div()
-                                    .absolute()
-                                    .left_0()
-                                    .right_0()
-                                    .top_0()
-                                    .bottom_0()
-                                    .group_hover("", |this| this.invisible())
-                                    .child(
-                                        div()
-                                            .text_align(gpui::TextAlign::Right)
-                                            .text_style(TextStyle::Caption)
-                                            .text_color(cx.theme().text_faint)
-                                            .child(created_at),
-                                    ),
-                            )
-                            .child(
-                                Button::new(format!("response-{index}"))
-                                    .label("Response")
-                                    .xsmall()
-                                    .ghost()
-                                    .invisible()
-                                    .group_hover("", |this| this.visible())
-                                    .on_click({
-                                        let room = room.clone();
-                                        let dock = dock.clone();
-                                        move |_, window, cx| {
-                                            cx.stop_propagation();
-                                            open_room(&room, &dock, window, cx);
-                                        }
-                                    }),
-                            ),
-                    )
-                    .into_any_element()
-            })
-            .collect();
+                    .text_style(TextStyle::Caption)
+                    .text_color(cx.theme().text_faint)
+                    .child("No chat requests")
+                    .into_any_element(),
+            ]
+        } else {
+            requests
+                .iter()
+                .enumerate()
+                .map(|(index, (room, preview))| {
+                    let room = room.clone();
+                    let dock = dock.clone();
+                    let name = room.read(cx).display_name(cx);
+                    let picture = room.read(cx).display_image(cx);
+                    let seed = room.read(cx).display_image_seed(cx);
+                    let created_at = room.read(cx).created_at.to_ago();
+                    let preview = preview.clone();
 
-        Some(
-            GroupBox::new()
-                .id("requests")
-                .title("Requests")
-                .fill()
-                .child(v_flex().gap_0().w_full().children(rows))
-                .into_any_element(),
-        )
+                    h_flex()
+                        .id(format!("request-{index}"))
+                        .group("")
+                        .w_full()
+                        .h_9()
+                        .px_1p5()
+                        .gap_2()
+                        .rounded(px(button_radius()))
+                        .cursor_pointer()
+                        .hover(|this| this.bg(cx.theme().element_hover))
+                        .on_click({
+                            let room = room.clone();
+                            let dock = dock.clone();
+                            move |_, window, cx| {
+                                open_room(&room, &dock, window, cx);
+                            }
+                        })
+                        .child(
+                            Avatar::from_source(picture)
+                                .seed(seed)
+                                .small()
+                                .flex_shrink_0(),
+                        )
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .text_style(TextStyle::Callout)
+                                .child(name),
+                        )
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .truncate()
+                                .text_style(TextStyle::Callout)
+                                .text_color(cx.theme().text_muted)
+                                .italic()
+                                .child(preview),
+                        )
+                        .child(
+                            div()
+                                .relative()
+                                .flex_shrink_0()
+                                .h_6()
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .right_0()
+                                        .top_0()
+                                        .bottom_0()
+                                        .group_hover("", |this| this.invisible())
+                                        .child(
+                                            div()
+                                                .text_align(gpui::TextAlign::Right)
+                                                .text_style(TextStyle::Caption)
+                                                .text_color(cx.theme().text_faint)
+                                                .child(created_at),
+                                        ),
+                                )
+                                .child(
+                                    Button::new(format!("response-{index}"))
+                                        .label("Response")
+                                        .xsmall()
+                                        .ghost()
+                                        .invisible()
+                                        .group_hover("", |this| this.visible())
+                                        .on_click({
+                                            let room = room.clone();
+                                            let dock = dock.clone();
+                                            move |_, window, cx| {
+                                                cx.stop_propagation();
+                                                open_room(&room, &dock, window, cx);
+                                            }
+                                        }),
+                                ),
+                        )
+                        .into_any_element()
+                })
+                .collect()
+        };
+
+        GroupBox::new()
+            .id("requests")
+            .title("Requests")
+            .fill()
+            .child(v_flex().gap_0().w_full().children(rows))
+            .into_any_element()
     }
 
     fn render_follow_ups(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -503,7 +529,7 @@ impl Render for GreeterPanel {
                         .size_full()
                         .p_2()
                         .gap_6()
-                        .children(self.render_requests(cx))
+                        .child(self.render_requests(cx))
                         .children(self.render_follow_ups(cx))
                         .child(self.render_find_friends(cx)),
                 )

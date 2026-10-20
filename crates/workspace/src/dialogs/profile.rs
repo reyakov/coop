@@ -459,9 +459,24 @@ impl Render for ProfileDialog {
                     .filter(|website| !website.trim().is_empty())
                     .map(SharedString::from);
 
+                let score = {
+                    let wot = PersonRegistry::global(cx).read(cx).wot().read(cx);
+                    wot.is_loaded().then(|| wot.score(&self.public_key))
+                }
+                .map(|score| {
+                    SharedString::from(format!(
+                        "{} mutual {}",
+                        score,
+                        if score == 1 { "contact" } else { "contacts" }
+                    ))
+                });
+
                 this.child(field("Name", name, "Unknown", cx))
                     .child(field("About", about, "No bio", cx))
                     .child(field("Website", website, "No website", cx))
+                    .when(!self.is_current_user, |this| {
+                        this.child(field("Web of Trust", score, "Not loaded yet", cx))
+                    })
             })
             .child(
                 h_flex()

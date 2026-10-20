@@ -118,7 +118,7 @@ impl Sidebar {
                             .label(label)
                             .text_style(TextStyle::Caption)
                             .font_semibold()
-                            .text_color(cx.theme().text_faint)
+                            .text_color(cx.theme().text_muted)
                             .into_any_element()
                     }
                     SidebarRow::Empty(text) => v_flex()
@@ -136,17 +136,20 @@ impl Sidebar {
                                 .border_color(cx.theme().border)
                                 .rounded(px(button_radius()))
                                 .text_style(TextStyle::Caption)
-                                .text_color(cx.theme().text_faint)
+                                .text_color(cx.theme().text_muted)
                                 .child(*text),
                         )
                         .into_any_element(),
                     SidebarRow::Room { room } => {
+                        let id = room.read(cx).id;
                         let name = room.read(cx).display_name(cx);
                         let picture = room.read(cx).display_image(cx);
                         let seed = room.read(cx).display_image_seed(cx);
                         let created_at = room.read(cx).created_at.to_ago();
-                        let id = room.read(cx).id;
                         let member = room.read(cx).members().first().copied();
+                        let spam =
+                            room.read(cx).is_spam(cx) && room.read(cx).kind == RoomKind::Request;
+
                         let pinned = AppSettings::global(cx).read(cx).pinned_room(id, cx);
                         let dock = self.dock.clone();
                         let room = room.clone();
@@ -163,11 +166,28 @@ impl Sidebar {
                                 )
                             })
                             .suffix(
-                                div()
-                                    .font_normal()
-                                    .text_style(TextStyle::Caption)
-                                    .text_color(cx.theme().text_faint)
-                                    .child(created_at),
+                                h_flex()
+                                    .gap_1()
+                                    .when(spam, |this| {
+                                        this.child(
+                                            div()
+                                                .px_1()
+                                                .rounded(px(button_radius()))
+                                                .bg(cx.theme().danger.opacity(0.15))
+                                                .text_size(px(8.0))
+                                                .text_color(cx.theme().danger)
+                                                .child("SPAM"),
+                                        )
+                                    })
+                                    .when(!spam, |this| {
+                                        this.child(
+                                            div()
+                                                .font_normal()
+                                                .text_style(TextStyle::Caption)
+                                                .text_color(cx.theme().text_faint)
+                                                .child(created_at),
+                                        )
+                                    }),
                             )
                             .on_click(move |_event, window, cx| {
                                 open_room(&room, &dock, window, cx);

@@ -8,8 +8,8 @@ use instant::Duration;
 use itertools::Itertools;
 use nip4e::DeviceRegistry;
 use nostr_sdk::prelude::*;
-use person::{Directory, Person};
-use settings::{RoomConfig, SignerKind};
+use person::{Directory, Person, PersonRegistry};
+use settings::{AppSettings, RoomConfig, SignerKind};
 use state::{NostrRegistry, TIMEOUT, UniversalSigner};
 
 use crate::{FileAttachment, KIND_FILE_MESSAGE, NewMessage};
@@ -181,6 +181,61 @@ impl Room {
     pub fn kind(mut self, kind: RoomKind) -> Self {
         self.kind = kind;
         self
+    }
+
+    /// Whether the auto-trust setting promotes this room out of the requests:
+    /// everyone other than the current user is inside the web of trust
+    pub fn auto_trusted(&self, me: PublicKey, cx: &App) -> bool {
+        if !AppSettings::get_wot_auto_trust(cx) {
+            return false;
+        }
+
+        let wot = PersonRegistry::global(cx).read(cx).wot().read(cx);
+
+        Self::trusted_by(&self.members, me, |key| wot.is_in_network(key))
+    }
+
+    /// Whether the room looks like spam: the web of trust is loaded and
+    /// everyone other than the current user is outside of it
+    pub fn is_spam(&self, cx: &App) -> bool {
+        let person = PersonRegistry::global(cx);
+        let nostr = NostrRegistry::global(cx);
+
+        let Some(me) = nostr.read(cx).current_user() else {
+            return false;
+        };
+
+        let wot = person.read(cx).wot().read(cx);
+
+        // An unloaded graph cannot classify anything as spam
+        if !wot.is_loaded() {
+            return false;
+        }
+
+        Self::trusted_by(&self.members, me, |key| wot.is_outside(key))
+    }
+
+    /// Whether every member other than `me` passes the check
+    fn trusted_by(
+        members: &[PublicKey],
+        me: PublicKey,
+        check: impl Fn(&PublicKey) -> bool,
+    ) -> bool {
+        let mut others = false;
+
+        for key in members {
+            if *key == me {
+                continue;
+            }
+
+            others = true;
+
+            if !check(key) {
+                return false;
+            }
+        }
+
+        others
     }
 
     /// Sets this room is ongoing conversation

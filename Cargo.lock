@@ -933,9 +933,9 @@ dependencies = [
 
 [[package]]
 name = "cc"
-version = "1.8.0"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6651c9ed80effdc7db0ff72512157f901af5e3549e341e24b1dd4887d836d838"
+checksum = "877bf67ac8e52449eb2f9e98a344ea163beb70dd1f9eebe3cc5357dcfeaee4df"
 dependencies = [
  "find-msvc-tools",
  "jobserver",
@@ -1066,7 +1066,7 @@ checksum = "e8cf2a2c93cd704877c0858356ed03480ff301ee950b43f1cbe4573b088bfa6c"
 dependencies = [
  "block-buffer 0.12.1",
  "crypto-common 0.2.2",
- "inout 0.2.4",
+ "inout 0.2.5",
 ]
 
 [[package]]
@@ -2013,9 +2013,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
+checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "flatbuffers"
@@ -2696,7 +2696,7 @@ dependencies = [
  "log",
  "rustls",
  "rustls-platform-verifier",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -3392,7 +3392,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -3616,9 +3616,9 @@ dependencies = [
 
 [[package]]
 name = "inout"
-version = "0.2.4"
+version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ce983bb6fb399067d101fbfc9e74174e07e9f29a2bc679efefeb8c645819c3f"
+checksum = "3b5cf4372d022092674a83b8febf5865f7a573cc0c5baec5e49c879b6a20978f"
 dependencies = [
  "hybrid-array",
 ]
@@ -4352,7 +4352,7 @@ checksum = "0676bb32a98c1a483ce53e500a81ad9c3d5b3f7c920c28c24e9cb0980d0b5bc8"
 [[package]]
 name = "nostr"
 version = "0.45.5"
-source = "git+https://github.com/rust-nostr/nostr#de3031aa99986eb29b3f34580355f9a099e4c927"
+source = "git+https://github.com/rust-nostr/nostr#20096765b95f4840dd3df66cad49db35e9634462"
 dependencies = [
  "aes",
  "base64 0.22.1",
@@ -4378,7 +4378,7 @@ dependencies = [
 [[package]]
 name = "nostr-blossom"
 version = "0.45.1"
-source = "git+https://github.com/rust-nostr/nostr#de3031aa99986eb29b3f34580355f9a099e4c927"
+source = "git+https://github.com/rust-nostr/nostr#20096765b95f4840dd3df66cad49db35e9634462"
 dependencies = [
  "base64 0.22.1",
  "bitcoin_hashes 1.2.0",
@@ -4391,10 +4391,9 @@ dependencies = [
 [[package]]
 name = "nostr-connect"
 version = "0.45.2"
-source = "git+https://github.com/rust-nostr/nostr#de3031aa99986eb29b3f34580355f9a099e4c927"
+source = "git+https://github.com/rust-nostr/nostr#20096765b95f4840dd3df66cad49db35e9634462"
 dependencies = [
  "async-utility",
- "futures-core",
  "nostr",
  "nostr-sdk",
  "opaquerr 0.2.0",
@@ -4405,7 +4404,7 @@ dependencies = [
 [[package]]
 name = "nostr-database"
 version = "0.45.2"
-source = "git+https://github.com/rust-nostr/nostr#de3031aa99986eb29b3f34580355f9a099e4c927"
+source = "git+https://github.com/rust-nostr/nostr#20096765b95f4840dd3df66cad49db35e9634462"
 dependencies = [
  "nostr",
  "opaquerr 0.2.0",
@@ -4414,7 +4413,7 @@ dependencies = [
 [[package]]
 name = "nostr-gossip"
 version = "0.45.1"
-source = "git+https://github.com/rust-nostr/nostr#de3031aa99986eb29b3f34580355f9a099e4c927"
+source = "git+https://github.com/rust-nostr/nostr#20096765b95f4840dd3df66cad49db35e9634462"
 dependencies = [
  "nostr",
  "opaquerr 0.2.0",
@@ -4423,7 +4422,7 @@ dependencies = [
 [[package]]
 name = "nostr-gossip-memory"
 version = "0.45.1"
-source = "git+https://github.com/rust-nostr/nostr#de3031aa99986eb29b3f34580355f9a099e4c927"
+source = "git+https://github.com/rust-nostr/nostr#20096765b95f4840dd3df66cad49db35e9634462"
 dependencies = [
  "indexmap",
  "lru",
@@ -4435,7 +4434,7 @@ dependencies = [
 [[package]]
 name = "nostr-lmdb"
 version = "0.45.3"
-source = "git+https://github.com/rust-nostr/nostr#de3031aa99986eb29b3f34580355f9a099e4c927"
+source = "git+https://github.com/rust-nostr/nostr#20096765b95f4840dd3df66cad49db35e9634462"
 dependencies = [
  "async-utility",
  "flatbuffers",
@@ -4450,7 +4449,7 @@ dependencies = [
 [[package]]
 name = "nostr-memory"
 version = "0.45.2"
-source = "git+https://github.com/rust-nostr/nostr#de3031aa99986eb29b3f34580355f9a099e4c927"
+source = "git+https://github.com/rust-nostr/nostr#20096765b95f4840dd3df66cad49db35e9634462"
 dependencies = [
  "btreecap",
  "nostr",
@@ -4461,7 +4460,7 @@ dependencies = [
 [[package]]
 name = "nostr-sdk"
 version = "0.45.4"
-source = "git+https://github.com/rust-nostr/nostr#de3031aa99986eb29b3f34580355f9a099e4c927"
+source = "git+https://github.com/rust-nostr/nostr#20096765b95f4840dd3df66cad49db35e9634462"
 dependencies = [
  "async-utility",
  "async-wsocket",
@@ -5943,7 +5942,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
@@ -7164,9 +7163,9 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tokio"
-version = "1.53.3"
+version = "1.54.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce3335fa71841cda333a58d7615b03901380ecf09d59b3296d21f8bbac0dde4e"
+checksum = "a0c168a474b95bfecfe908a65d4bdffc523144b649a74c09c286afb35d53e0bc"
 dependencies = [
  "bytes",
  "libc",
@@ -7656,14 +7655,14 @@ dependencies = [
  "serde_json",
  "ureq-proto",
  "utf8-zero",
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
 name = "ureq-proto"
-version = "0.6.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f86fd172ccca569e458f61b6bdd6220965a9ef36e672a6852953b51a0e1583be"
+checksum = "841583fc36089d7d59419568ae157f43a5a03a2e5a81ba87c77d1596ef46e922"
 dependencies = [
  "base64 0.23.1",
  "http",
@@ -8043,9 +8042,9 @@ dependencies = [
 
 [[package]]
 name = "webpki-root-certs"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
+checksum = "58ec80e73fd8baf57bf0d9615554c75348bda990d6d5bbeab964dd068319fecb"
 dependencies = [
  "rustls-pki-types",
 ]
@@ -8056,14 +8055,14 @@ version = "0.26.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
 dependencies = [
- "webpki-roots 1.0.9",
+ "webpki-roots 1.0.10",
 ]
 
 [[package]]
 name = "webpki-roots"
-version = "1.0.9"
+version = "1.0.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dcd9d09a39985f5344844e66b0c530a33843579125f23e21e9f0f220850f22a"
+checksum = "1c1c8e20c8a38fc7d65abfe74eb7280e4aa667e8eec8bc84996d2874810748d9"
 dependencies = [
  "rustls-pki-types",
 ]

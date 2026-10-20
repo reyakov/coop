@@ -14,6 +14,7 @@ use gpui::{
 use instant::Duration;
 use nip4e::{DeviceEvent, DeviceRegistry};
 use nostr_sdk::prelude::*;
+use person::PersonRegistry;
 use smallvec::{SmallVec, smallvec};
 use state::{DEVICE_GIFTWRAP, NostrRegistry, USER_GIFTWRAP};
 
@@ -139,12 +140,12 @@ impl ChatRegistry {
     /// Create a new chat registry instance
     fn new(cx: &mut Context<Self>) -> Self {
         let nostr = NostrRegistry::global(cx);
+        let device = DeviceRegistry::global(cx);
+        let wot = PersonRegistry::global(cx).read(cx).wot();
         let entity = cx.entity().downgrade();
 
         let (tx, rx) = flume::unbounded::<Signal>();
         let mut subscriptions = smallvec![];
-
-        let device = DeviceRegistry::global(cx);
 
         subscriptions.push(cx.subscribe(&nostr, |this, _nostr, event, cx| {
             if event.signer_changed() {
@@ -161,6 +162,10 @@ impl ChatRegistry {
                 this.get_messages(cx);
                 this.reprocess_trash(cx);
             }
+        }));
+
+        subscriptions.push(cx.subscribe(&wot, |this, _wot, _event, cx| {
+            this.promote_trusted(cx);
         }));
 
         cx.defer(move |cx| {
@@ -567,7 +572,23 @@ impl ChatRegistry {
             .unwrap_or_default()
     }
 
-    /// Add a new room to the start of list.
+    /// Promote request rooms whose senders are inside the web of trust
+    fn promote_trusted(&mut self, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let Some(me) = nostr.read(cx).current_user() else {
+            return;
+        };
+
+        for room in &self.rooms {
+            room.update(cx, |room, cx| {
+                if room.kind == RoomKind::Request && room.auto_trusted(me, cx) {
+                    room.set_ongoing(cx);
+                }
+            });
+        }
+    }
+
+    /// Promote a room to ongoing when its latest message is from the current user
     pub(crate) fn add_room<I>(&mut self, room: I, cx: &mut Context<Self>)
     where
         I: Into<Room>,
@@ -577,7 +598,12 @@ impl ChatRegistry {
             return;
         };
 
-        let room: Room = room.into().organize(&public_key);
+        let mut room: Room = room.into().organize(&public_key);
+
+        if room.auto_trusted(public_key, cx) {
+            room.kind = RoomKind::Ongoing;
+        }
+
         let room_id = room.id;
         let entity = cx.new(|_| room);
         entity.update(cx, |room, cx| room.ensure_directory(cx));
@@ -652,6 +678,11 @@ impl ChatRegistry {
 
     /// Extend the registry with new rooms.
     fn extend_rooms(&mut self, rooms: HashSet<Room>, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let Some(me) = nostr.read(cx).current_user() else {
+            return;
+        };
+
         let mut room_map: HashMap<u64, usize> = self
             .rooms
             .iter()
@@ -660,6 +691,13 @@ impl ChatRegistry {
             .collect();
 
         for new_room in rooms.into_iter() {
+            // Auto-trust also applies to rooms loaded from the database
+            let new_room = if new_room.kind == RoomKind::Request && new_room.auto_trusted(me, cx) {
+                new_room.kind(RoomKind::Ongoing)
+            } else {
+                new_room
+            };
+
             // Check if we already have a room with this ID
             if let Some(&index) = room_map.get(&new_room.id) {
                 self.rooms[index].update(cx, |this, cx| {
@@ -789,7 +827,9 @@ impl ChatRegistry {
         match self.room_index.get(&message.room).cloned() {
             Some(room) => {
                 room.update(cx, |this, cx| {
-                    if this.kind == RoomKind::Request && message.rumor.pubkey == public_key {
+                    if this.kind == RoomKind::Request
+                        && (message.rumor.pubkey == public_key || this.auto_trusted(public_key, cx))
+                    {
                         this.set_ongoing(cx);
                     }
                     this.push_message(message, cx);

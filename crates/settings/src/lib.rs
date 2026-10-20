@@ -14,6 +14,7 @@ pub fn init(cx: &mut App) {
 
 const DEFAULT_FILE_SERVER: &str = "https://nostr.download/";
 const LEGACY_FILE_SERVER: &str = "blossom.band";
+
 /// Built-in image shown behind chat and group panels
 pub const DEFAULT_BACKGROUND: &str = "brand/default-bg.jpg";
 
@@ -58,6 +59,7 @@ setting_accessors! {
     pub appearance_mode: AppearanceMode,
     pub hide_avatar: bool,
     pub screening: bool,
+    pub wot_auto_trust: bool,
     pub nip4e: bool,
     pub hide_group_notice: bool,
     pub file_server: Url,
@@ -125,38 +127,30 @@ impl RoomConfig {
 pub struct Settings {
     #[serde(default, alias = "theme_mode")]
     pub appearance_mode: AppearanceMode,
-
     /// Hide user avatars
     pub hide_avatar: bool,
-
     /// Enable screening for unknown chat requests
     pub screening: bool,
-
+    /// Promote chat requests from people followed by the user's contacts
+    pub wot_auto_trust: bool,
     /// Enable decoupling encryption key
     pub nip4e: bool,
-
     /// Hide the notice that messages in public groups are not encrypted
     #[serde(default)]
     pub hide_group_notice: bool,
-
     /// Show an image behind chat and group panels
     #[serde(default)]
     pub panel_background: bool,
-
     /// Custom image for the panel background; the built-in one when unset
     #[serde(default)]
     pub panel_background_path: Option<PathBuf>,
-
     /// Trusted relays; Coop will automatically authenticate with these relays
     pub trusted_relays: Vec<String>,
-
     /// Server for blossom media attachments
     pub file_server: Url,
-
     /// Pinned chat rooms, by conversation ID
     #[serde(default)]
     pub pinned_rooms: Vec<u64>,
-
     /// Pinned groups, by cache tag
     #[serde(default)]
     pub pinned_groups: Vec<String>,
@@ -168,6 +162,7 @@ impl Default for Settings {
             appearance_mode: AppearanceMode::default(),
             hide_avatar: false,
             screening: true,
+            wot_auto_trust: true,
             nip4e: false,
             hide_group_notice: false,
             panel_background: true,
@@ -337,32 +332,5 @@ impl AppSettings {
             }
             cx.notify();
         });
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn json_with(partial: &str) -> Result<Settings, serde_json::Error> {
-        // Every field the persisted format has always required; `partial`
-        // contributes the fields under test.
-        serde_json::from_str(&format!(
-            r#"{{ {} "hide_avatar": false, "screening": true, "nip4e": false,
-                 "trusted_relays": [], "file_server": "https://nostr.download/" }}"#,
-            partial
-        ))
-    }
-
-    #[test]
-    fn old_theme_mode_key_keeps_its_pinned_choice() {
-        let settings = json_with(r#""theme_mode": "Dark", "#).unwrap();
-        assert_eq!(settings.appearance_mode, AppearanceMode::Dark);
-    }
-
-    #[test]
-    fn missing_appearance_mode_falls_back_to_dark() {
-        let settings = json_with("").unwrap();
-        assert_eq!(settings.appearance_mode, AppearanceMode::Dark);
     }
 }

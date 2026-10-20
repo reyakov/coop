@@ -11,9 +11,11 @@ use state::{Announcement, BOOTSTRAP_RELAYS, NostrRegistry, TIMEOUT};
 
 mod directory;
 mod person;
+mod wot;
 
 pub use directory::*;
 pub use person::*;
+pub use wot::*;
 
 pub fn init(cx: &mut App) {
     PersonRegistry::set_global(cx.new(PersonRegistry::new), cx);
@@ -60,6 +62,8 @@ enum Dispatch {
 pub struct PersonRegistry {
     /// Public keys with a metadata request in flight
     in_flight: RwLock<HashSet<PublicKey>>,
+    /// Web of trust graph of the signed-in user
+    wot: Entity<WebOfTrust>,
     sender: flume::Sender<PublicKey>,
     tasks: SmallVec<[Task<()>; 4]>,
     _subscriptions: SmallVec<[Subscription; 1]>,
@@ -80,6 +84,7 @@ impl PersonRegistry {
     fn new(cx: &mut Context<Self>) -> Self {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
+        let wot = cx.new(WebOfTrust::new);
 
         // Channel for communication between nostr and gpui
         let (tx, rx) = flume::bounded::<Dispatch>(100);
@@ -122,15 +127,26 @@ impl PersonRegistry {
         let subscription = cx.subscribe(&nostr, |this, _nostr, event, cx| {
             if event.signer_changed() {
                 this.get_emojis(cx);
+
+                this.wot.update(cx, |wot, cx| {
+                    wot.reset(cx);
+                    wot.hydrate(cx);
+                });
             }
         });
 
         Self {
             in_flight: RwLock::new(HashSet::new()),
+            wot,
             sender: metadata_tx,
             tasks,
             _subscriptions: smallvec![subscription],
         }
+    }
+
+    /// The web of trust graph of the signed-in user
+    pub fn wot(&self) -> Entity<WebOfTrust> {
+        self.wot.clone()
     }
 
     /// Handle nostr notifications

@@ -83,12 +83,14 @@ impl Preferences {
 impl Render for Preferences {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         const SCREENING: &str = "Show an screening dialog to verify the unknown sender.";
+        const WOT: &str = "Treat people followed by your contacts as known senders.";
         const AVATAR: &str = "Hide all avatar pictures to improve performance.";
         const MODE: &str = "Follow the OS, or always use light or dark.";
         const NIP4E: &str = "Use a dedicated key to encrypt and decrypt messages.";
         const BACKGROUND: &str = "Show an image behind chat and group panels.";
 
         let screening = AppSettings::get_screening(cx);
+        let wot_auto_trust = AppSettings::get_wot_auto_trust(cx);
         let hide_avatar = AppSettings::get_hide_avatar(cx);
         let nip4e = AppSettings::get_nip4e(cx);
         let appearance_mode = AppSettings::get_appearance_mode(cx);
@@ -114,6 +116,15 @@ impl Render for Preferences {
                             .checked(screening)
                             .on_click(move |_, _window, cx| {
                                 AppSettings::update_screening(!screening, cx);
+                            }),
+                    )
+                    .child(
+                        Switch::new("wot-auto-trust")
+                            .label("Web of Trust")
+                            .description(WOT)
+                            .checked(wot_auto_trust)
+                            .on_click(move |_, _window, cx| {
+                                AppSettings::update_wot_auto_trust(!wot_auto_trust, cx);
                             }),
                     )
                     .child(
