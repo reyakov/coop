@@ -59,6 +59,7 @@ setting_accessors! {
     pub hide_avatar: bool,
     pub screening: bool,
     pub nip4e: bool,
+    pub hide_group_notice: bool,
     pub file_server: Url,
     pub panel_background: bool,
     pub panel_background_path: Option<PathBuf>,
@@ -134,6 +135,10 @@ pub struct Settings {
     /// Enable decoupling encryption key
     pub nip4e: bool,
 
+    /// Hide the notice that messages in public groups are not encrypted
+    #[serde(default)]
+    pub hide_group_notice: bool,
+
     /// Show an image behind chat and group panels
     #[serde(default)]
     pub panel_background: bool,
@@ -164,6 +169,7 @@ impl Default for Settings {
             hide_avatar: false,
             screening: true,
             nip4e: false,
+            hide_group_notice: false,
             panel_background: true,
             panel_background_path: None,
             trusted_relays: vec![],

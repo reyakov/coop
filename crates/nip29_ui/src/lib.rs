@@ -320,6 +320,8 @@ pub struct GroupPanel {
     attachments: Vec<Url>,
     /// Whether an upload is in flight.
     uploading: bool,
+    /// Whether the user closed the encryption notice this visit
+    notice_dismissed: bool,
     tasks: SmallVec<[Task<Result<()>>; 4]>,
     _subscriptions: SmallVec<[Subscription; 3]>,
 }
@@ -388,6 +390,7 @@ impl GroupPanel {
             list_state: ListState::new(count + 2, ListAlignment::Bottom, px(1024.)),
             head,
             reply_to: None,
+            notice_dismissed: false,
             rendered_texts_by_id: BTreeMap::new(),
             input,
             attachments: Vec::new(),
@@ -737,6 +740,63 @@ impl GroupPanel {
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.request_join(moved.clone(), cx);
                     })),
+            )
+            .into_any_element()
+    }
+
+    /// Notice shown while viewing a public group, where messages are plaintext
+    fn render_encryption_notice(&self, cx: &mut Context<Self>) -> AnyElement {
+        let is_public = self
+            .group
+            .upgrade()
+            .and_then(|group| group.read(cx).metadata().map(|metadata| !metadata.private))
+            .unwrap_or(false);
+
+        if !is_public || self.notice_dismissed || AppSettings::get_hide_group_notice(cx) {
+            return div().into_any_element();
+        }
+
+        h_flex()
+            .flex_shrink_0()
+            .w_full()
+            .gap(px(theme::SPACE))
+            .px_3()
+            .py_2()
+            .text_style(TextStyle::Callout)
+            .bg(cx.theme().surface_raised)
+            .child(
+                Icon::new(IconName::Info)
+                    .small()
+                    .text_color(cx.theme().warning),
+            )
+            .child(div().flex_1().min_w_0().child(
+                "This group is public. Messages are not encrypted and can be read by anyone.",
+            ))
+            .child(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        Button::new("hide")
+                            .label("Don't show again")
+                            .xsmall()
+                            .secondary()
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                AppSettings::update_hide_group_notice(true, cx);
+                                this.notice_dismissed = true;
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        Button::new("dismiss")
+                            .icon(IconName::Close)
+                            .small()
+                            .ghost()
+                            .tooltip("Close")
+                            .on_click(cx.listener(|this, _event, _window, cx| {
+                                this.notice_dismissed = true;
+                                cx.notify();
+                            })),
+                    ),
             )
             .into_any_element()
     }
@@ -1218,6 +1278,7 @@ impl Render for GroupPanel {
         v_flex()
             .size_full()
             .min_w_0()
+            .child(self.render_encryption_notice(cx))
             .child(self.render_banner(cx))
             .child(self.render_pins(cx))
             .child(
