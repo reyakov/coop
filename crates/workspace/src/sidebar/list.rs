@@ -29,7 +29,7 @@ impl ListSection {
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Pins => "Pinned",
-            Self::Groups => "Groups",
+            Self::Groups => "Public Groups",
             Self::Chats => "Chats",
         }
     }

@@ -84,18 +84,23 @@ impl Sidebar {
                     .ghost()
                     .small()
                     .dropdown_menu(|menu, _window, _cx| {
-                        menu.menu_with_icon(
-                            "New Group",
-                            IconName::Group,
-                            Box::new(Command::NewGroup),
-                        )
-                        .menu_with_icon("Join Group", IconName::Door, Box::new(Command::JoinGroup))
-                        .separator()
-                        .menu_with_icon(
-                            "New Chat",
-                            IconName::Message,
-                            Box::new(Command::NewChat),
-                        )
+                        menu.label("Public Group")
+                            .menu_with_icon(
+                                "New Group",
+                                IconName::Group,
+                                Box::new(Command::NewGroup),
+                            )
+                            .menu_with_icon(
+                                "Join Group",
+                                IconName::Door,
+                                Box::new(Command::JoinGroup),
+                            )
+                            .separator()
+                            .menu_with_icon(
+                                "New Chat",
+                                IconName::Message,
+                                Box::new(Command::NewChat),
+                            )
                     }),
             )
             .when(self.group_open, |this| {

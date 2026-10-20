@@ -660,14 +660,19 @@ impl PopupMenu {
                 .border_color(cx.theme().border_faint)
                 .disabled(true),
             PopupMenuItem::Label(label) => this.disabled(true).cursor_default().child(
-                h_flex().cursor_default().items_center().gap_x_1().child(
-                    div()
-                        .flex_1()
-                        .text_style(TextStyle::Callout)
-                        .font_semibold()
-                        .text_color(cx.theme().text_muted)
-                        .child(label.clone()),
-                ),
+                h_flex()
+                    .cursor_default()
+                    .items_center()
+                    .gap_x_1()
+                    .h_6()
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_style(TextStyle::Footnote)
+                            .font_semibold()
+                            .text_color(cx.theme().text_muted)
+                            .child(label.clone()),
+                    ),
             ),
             PopupMenuItem::Item {
                 icon,

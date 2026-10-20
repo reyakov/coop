@@ -428,7 +428,7 @@ impl GreeterPanel {
                                     .small()
                                     .text_color(cx.theme().text_faint),
                             )
-                            .label("Browse Group")
+                            .label("Browse Public Groups")
                             .text_style(TextStyle::Callout)
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let panel = browse::init(this.dock.clone(), window, cx);

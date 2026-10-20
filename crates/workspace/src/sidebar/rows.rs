@@ -93,10 +93,10 @@ impl Sidebar {
 
                         Nav::new(label)
                             .label(label)
-                            .suffix(Icon::new(icon).small().text_color(cx.theme().text_faint))
+                            .suffix(Icon::new(icon).small().text_color(cx.theme().text_muted))
                             .text_style(TextStyle::Caption)
                             .font_semibold()
-                            .text_color(cx.theme().text_faint)
+                            .text_color(cx.theme().text_muted)
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 match section {
                                     ListSection::Pins => this.pins_open = !this.pins_open,

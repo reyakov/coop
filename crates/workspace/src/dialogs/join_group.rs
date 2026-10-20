@@ -35,7 +35,7 @@ pub fn open(window: &mut Window, cx: &mut App) {
 
     window.open_dialog(cx, move |this, _window, _cx| {
         this.width(px(380.))
-            .title("Join Group")
+            .title("Join Public Group")
             .on_ok({
                 let join = join.clone();
                 move |event, window, cx| join(event, window, cx)
