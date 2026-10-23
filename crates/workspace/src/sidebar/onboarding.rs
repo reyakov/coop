@@ -1,8 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, img};
-use ui::button::{Button, ButtonCustomVariant, ButtonVariants};
-use ui::{Sizable, StyledExt, v_flex};
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::v_flex;
 
 use crate::dialogs::import;
 
@@ -16,11 +16,12 @@ pub(super) fn pick_banner() -> SharedString {
         .map(|elapsed| elapsed.subsec_nanos())
         .unwrap_or_default();
     let index = nanos as usize % SIGNED_OUT_BANNERS.len();
+
     SIGNED_OUT_BANNERS[index].into()
 }
 
 /// The headline and identity import shown while signed out.
-pub(super) fn render_signed_out(window: &mut Window, cx: &mut App) -> AnyElement {
+pub(super) fn render_signed_out(_window: &mut Window, _cx: &mut App) -> AnyElement {
     v_flex()
         .size_full()
         .justify_end()
@@ -30,15 +31,7 @@ pub(super) fn render_signed_out(window: &mut Window, cx: &mut App) -> AnyElement
         .child(
             Button::new("import")
                 .label("Import Identity")
-                .custom(
-                    ButtonCustomVariant::new(window, cx)
-                        .color(gpui::white())
-                        .foreground(gpui::black())
-                        .hover(gpui::white().opacity(0.9))
-                        .active(gpui::white().opacity(0.8)),
-                )
-                .large()
-                .font_semibold()
+                .primary()
                 .on_click(|_, window, cx| {
                     import::open(window, cx);
                 }),

@@ -6,10 +6,51 @@ use gpui::{App, AppContext, Context, Entity, Global, ImageSource, Subscription, 
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use smallvec::{SmallVec, smallvec};
-use theme::{AppExt as _, AppearanceMode};
+
+/// The user's appearance preference, persisted with the rest of the settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum AppearanceMode {
+    /// Follow the OS.
+    System,
+    Light,
+    /// Paint dark regardless of the OS.
+    #[default]
+    Dark,
+}
+
+impl AppearanceMode {
+    pub const ALL: [Self; 3] = [Self::System, Self::Light, Self::Dark];
+
+    /// Menu/label text.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::System => "System",
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+        }
+    }
+}
 
 pub fn init(cx: &mut App) {
     AppSettings::set_global(cx.new(AppSettings::new), cx)
+}
+
+/// Read the persisted appearance mode synchronously.
+///
+/// The async load fills the global settings later; the native theme must be
+/// applied before the first window opens, so boot reads the mode straight
+/// from the settings file instead.
+pub fn persisted_appearance_mode() -> AppearanceMode {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let path = config_dir().join(".settings");
+        if let Ok(content) = std::fs::read_to_string(path)
+            && let Ok(settings) = serde_json::from_str::<Settings>(&content)
+        {
+            return settings.appearance_mode;
+        }
+    }
+    AppearanceMode::default()
 }
 
 const DEFAULT_FILE_SERVER: &str = "https://nostr.download/";
@@ -276,8 +317,15 @@ impl AppSettings {
 
     /// Apply the persisted appearance mode to the app
     pub fn apply_theme(&mut self, cx: &mut Context<Self>) {
+        use gpui_kit::component::Theme;
+
         let mode = self.inner.read(cx).appearance_mode;
-        cx.set_appearance_mode(mode);
+        match mode {
+            AppearanceMode::System => Theme::sync_system_appearance(None, cx),
+            AppearanceMode::Light => Theme::change(gpui_kit::component::ThemeMode::Light, None, cx),
+            AppearanceMode::Dark => Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx),
+        }
+        cx.refresh_windows();
     }
 
     /// Check if decoupling encryption key is enabled

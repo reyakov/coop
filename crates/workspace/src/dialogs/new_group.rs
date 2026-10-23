@@ -3,29 +3,30 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement,
     ParentElement, PathPromptOptions, Render, SharedString, StatefulInteractiveElement as _,
-    Styled, Subscription, Task, WeakEntity, Window, div, px, rems,
+    StyleRefinement, Styled, Subscription, Task, WeakEntity, Window, div, px, rems,
 };
 use gpui_base::{Popup, Select};
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dock::{DockArea, DockPlacement, PanelHandle};
+use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::separator::Separator;
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, WindowExt, h_flex, v_flex};
 use nip29::{GroupCreateOptions, GroupKey, GroupsEvent, GroupsRegistry};
 use nostr_sdk::prelude::*;
 use settings::AppSettings;
 use state::upload;
-use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius, control_radius};
-use ui::avatar::Avatar;
-use ui::button::{Button, ButtonVariants};
-use ui::dock::{DockArea, DockPlacement, PanelHandle};
-use ui::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use ui::switch::Switch;
-use ui::{
-    Disableable, Icon, IconName, Sizable, StyledExt, WindowExtension, divider, h_flex, v_flex,
-};
+use ui::{Avatar, settings_row};
 
 const DEFAULT_RELAYS: [&str; 2] = ["wss://relay.ditto.net", "wss://chat.wisp.talk"];
 const PRIVATE_DESC: &str = "Only members can read group messages";
 const CLOSED_DESC: &str = "Join requests are ignored (invite-only)";
 const RESTRICTED_DESC: &str = "Only members can post messages";
 const HIDDEN_DESC: &str = "Hidden from non-members, not discoverable";
-const LIST_PRIVATE_DESC: &str = "Kept encrypted in your group list so others can't see you joined";
+const LIST_PRIVATE_DESC: &str = "Kept encrypted in your group list so others can't see";
 
 pub fn open(dock: WeakEntity<DockArea>, window: &mut Window, cx: &mut App) {
     open_with(dock, None, window, cx);
@@ -257,7 +258,7 @@ impl NewGroup {
         let registry = GroupsRegistry::global(cx);
         let group = registry.update(cx, |registry, cx| registry.open(key, cx));
 
-        ui::dock::add_panel_to(
+        crate::dock::add_panel_to(
             &self.dock,
             PanelHandle::new(nip29_ui::init(group, window, cx)),
             DockPlacement::Center,
@@ -347,8 +348,8 @@ impl NewGroup {
         if let Some(parent) = &self.parent {
             return v_flex().gap_1p5().child(field_label("Relay", cx)).child(
                 div()
-                    .text_style(TextStyle::Caption)
-                    .text_color(cx.theme().text_muted)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
                     .child(format!(
                         "Created on {} (same relay as the parent group).",
                         relay_label(parent.relay())
@@ -365,17 +366,17 @@ impl NewGroup {
             .w_full()
             .h_8()
             .px_3()
-            .rounded(px(button_radius()))
-            .text_style(TextStyle::Callout)
+            .rounded(cx.theme().radius)
+            .text_xs()
             .cursor_default()
             .bg(if open {
-                cx.theme().element_active
+                cx.theme().list_active
             } else {
-                cx.theme().surface_raised
+                cx.theme().secondary
             })
             .when(!open, |this| {
-                this.hover(|this| this.bg(cx.theme().element_hover))
-                    .active(|this| this.bg(cx.theme().element_active))
+                this.hover(|this| this.bg(cx.theme().primary))
+                    .active(|this| this.bg(cx.theme().list_active))
             })
             .on_click(cx.listener(move |this, _, _window, cx| {
                 this.relay_select_open = !open;
@@ -385,7 +386,7 @@ impl NewGroup {
             .child(
                 Icon::new(IconName::ChevronDown)
                     .small()
-                    .text_color(cx.theme().text_muted),
+                    .text_color(cx.theme().muted_foreground),
             );
 
         let select = Select::new("relay-select")
@@ -412,36 +413,40 @@ impl NewGroup {
             .on_mouse_down_out(cx.listener(|this, _, _, cx| {
                 this.set_relay_select_open(false, cx);
             }))
-            .popover_style(cx)
+            .bg(cx.theme().popover)
+            .border_1()
+            .border_color(cx.theme().border)
+            .shadow_md()
+            .rounded(cx.theme().radius_lg)
             .p_1()
             .gap_y_1()
             .min_w(rems(8.))
-            .text_color(cx.theme().text)
+            .text_color(cx.theme().foreground)
             .children(self.relays.iter().enumerate().map(|(index, relay)| {
                 h_flex()
                     .id(SharedString::from(format!("option-{relay}")))
                     .px_1p5()
                     .py_1()
-                    .rounded(px(button_radius()))
-                    .text_style(TextStyle::Callout)
+                    .rounded(cx.theme().radius)
+                    .text_xs()
                     .cursor_default()
-                    .hover(|this| this.bg(cx.theme().element_hover))
+                    .hover(|this| this.bg(cx.theme().primary))
                     .child(relay_label(relay))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.activate_relay_option(index, cx);
                     }))
             }))
-            .child(divider(cx))
+            .child(Separator::horizontal())
             .child(
                 h_flex()
                     .id("relay-add")
                     .px_1p5()
                     .py_1()
-                    .rounded(px(button_radius()))
-                    .text_style(TextStyle::Callout)
+                    .rounded(cx.theme().radius)
+                    .text_xs()
                     .cursor_default()
                     .child("Custom relay")
-                    .hover(|this| this.bg(cx.theme().element_hover))
+                    .hover(|this| this.bg(cx.theme().primary))
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.activate_relay_option(this.relays.len(), cx);
                     })),
@@ -457,65 +462,72 @@ impl NewGroup {
     }
 
     fn render_access(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let private = Switch::new("private")
-            .label("Private")
-            .description(PRIVATE_DESC)
-            .checked(self.private)
-            .on_click(cx.listener(|this, checked: &bool, _window, cx| {
-                this.private = *checked;
-                cx.notify();
-            }));
-
-        let closed = Switch::new("closed")
-            .label("Closed")
-            .description(CLOSED_DESC)
-            .checked(self.closed)
-            .on_click(cx.listener(|this, checked: &bool, _window, cx| {
-                this.closed = *checked;
-                cx.notify();
-            }));
-
-        let restricted = Switch::new("restricted")
-            .label("Restricted")
-            .description(RESTRICTED_DESC)
-            .checked(self.restricted)
-            .on_click(cx.listener(|this, checked: &bool, _window, cx| {
-                this.restricted = *checked;
-                cx.notify();
-            }));
-
-        let hidden = Switch::new("hidden")
-            .label("Hidden")
-            .description(HIDDEN_DESC)
-            .checked(self.hidden)
-            .on_click(cx.listener(|this, checked: &bool, _window, cx| {
-                this.hidden = *checked;
-                cx.notify();
-            }));
-
-        v_flex()
-            .gap_2()
-            .child(field_label("Access settings", cx))
-            .child(switch_row(private, cx))
-            .child(switch_row(closed, cx))
-            .child(switch_row(restricted, cx))
-            .child(switch_row(hidden, cx))
+        GroupBox::new()
+            .fill()
+            .title("Access settings")
+            .title_style(group_box_title_style(cx))
+            .child(settings_row(
+                "Private",
+                PRIVATE_DESC,
+                Switch::new("private")
+                    .checked(self.private)
+                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                        this.private = *checked;
+                        cx.notify();
+                    })),
+                cx,
+            ))
+            .child(settings_row(
+                "Closed",
+                CLOSED_DESC,
+                Switch::new("closed")
+                    .checked(self.closed)
+                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                        this.closed = *checked;
+                        cx.notify();
+                    })),
+                cx,
+            ))
+            .child(settings_row(
+                "Restricted",
+                RESTRICTED_DESC,
+                Switch::new("restricted")
+                    .checked(self.restricted)
+                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                        this.restricted = *checked;
+                        cx.notify();
+                    })),
+                cx,
+            ))
+            .child(settings_row(
+                "Hidden",
+                HIDDEN_DESC,
+                Switch::new("hidden")
+                    .checked(self.hidden)
+                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                        this.hidden = *checked;
+                        cx.notify();
+                    })),
+                cx,
+            ))
     }
 
     fn render_list_setting(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let list_private = Switch::new("list-private")
-            .label("Private on my list")
-            .description(LIST_PRIVATE_DESC)
-            .checked(self.list_private)
-            .on_click(cx.listener(|this, checked: &bool, _window, cx| {
-                this.list_private = *checked;
-                cx.notify();
-            }));
-
-        v_flex()
-            .gap_2()
-            .child(field_label("List", cx))
-            .child(switch_row(list_private, cx))
+        GroupBox::new()
+            .fill()
+            .title("List")
+            .title_style(group_box_title_style(cx))
+            .child(settings_row(
+                "Private on my list",
+                LIST_PRIVATE_DESC,
+                Switch::new("list-private")
+                    .checked(self.list_private)
+                    .on_click(cx.listener(|this, checked: &bool, _window, cx| {
+                        this.list_private = *checked;
+                        cx.notify();
+                    })),
+                cx,
+            ))
     }
 
     fn render_error(
@@ -530,7 +542,7 @@ impl NewGroup {
             .child(
                 div()
                     .flex_1()
-                    .text_style(TextStyle::Caption)
+                    .text_xs()
                     .text_color(cx.theme().danger)
                     .child(error.to_owned()),
             )
@@ -541,7 +553,7 @@ impl NewGroup {
                         .cursor_pointer()
                         .flex_shrink_0()
                         .underline()
-                        .text_style(TextStyle::Caption)
+                        .text_xs()
                         .text_color(cx.theme().danger)
                         .child("Open relay website")
                         .on_click({
@@ -560,14 +572,6 @@ impl NewGroup {
 
 impl Render for NewGroup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let name = self.name_input.read(cx).value().trim().to_owned();
-
-        let seed: String = if name.is_empty() {
-            "group".to_owned()
-        } else {
-            name
-        };
-
         let selected = self
             .selected_relay
             .as_ref()
@@ -593,7 +597,11 @@ impl Render for NewGroup {
                         h_flex()
                             .items_center()
                             .gap_3()
-                            .child(Avatar::new(self.picture.clone()).seed(seed).large())
+                            .child(
+                                Avatar::new(self.picture.clone())
+                                    .seed(self.name_input.read(cx).value().trim().to_owned())
+                                    .large(),
+                            )
                             .child(
                                 Button::new("upload-picture")
                                     .label(if self.picture.is_some() {
@@ -610,9 +618,9 @@ impl Render for NewGroup {
                                     })),
                             ),
                     )
-                    .child(field("Name", Input::new(&self.name_input), cx))
+                    .child(input_field("Name", Input::new(&self.name_input), cx))
                     .child(self.render_relay(&selected, cx))
-                    .child(field("About", Textarea::new(&self.about_input), cx))
+                    .child(input_field("About", Textarea::new(&self.about_input), cx))
                     .child(self.render_access(cx))
                     .child(self.render_list_setting(cx))
                     .overflow_y_scroll(),
@@ -635,7 +643,6 @@ impl Render for NewGroup {
                                 "Create Group"
                             })
                             .primary()
-                            .font_semibold()
                             .loading(self.creating)
                             .disabled(self.creating || self.uploading)
                             .on_click(cx.listener(|this, _event, _window, cx| this.create(cx))),
@@ -644,25 +651,24 @@ impl Render for NewGroup {
     }
 }
 
-fn field(text: &'static str, input: impl IntoElement, cx: &App) -> Div {
+fn input_field(text: &'static str, input: impl IntoElement, cx: &App) -> Div {
     v_flex().gap_1p5().child(field_label(text, cx)).child(input)
 }
 
 fn field_label(text: &'static str, cx: &App) -> Div {
     div()
-        .text_style(TextStyle::Caption)
-        .text_color(cx.theme().text_muted)
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
         .font_semibold()
         .child(text)
 }
 
-fn switch_row(switch: impl IntoElement, cx: &App) -> Div {
-    div()
-        .w_full()
-        .p_2()
-        .rounded(px(control_radius()))
-        .bg(cx.theme().surface_raised)
-        .child(switch)
+/// Match [`field_label`]'s design for GroupBox titles.
+fn group_box_title_style(cx: &App) -> StyleRefinement {
+    StyleRefinement::default()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .font_semibold()
 }
 
 fn relay_label(relay: &RelayUrl) -> SharedString {

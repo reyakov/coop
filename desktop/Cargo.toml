@@ -30,7 +30,6 @@ icons = [
 assets = { path = "../crates/assets" }
 workspace = { path = "../crates/workspace" }
 ui = { path = "../crates/ui" }
-theme = { path = "../crates/theme" }
 state = { path = "../crates/state" }
 nip4e = { path = "../crates/nip4e" }
 chat = { path = "../crates/chat" }
@@ -41,9 +40,13 @@ person = { path = "../crates/person" }
 
 gpui.workspace = true
 gpui_platform.workspace = true
+gpui-kit.workspace = true
 gpui_linux.workspace = true
 gpui_windows.workspace = true
 gpui_macos.workspace = true
+native-theme.workspace = true
+native-theme-gpui.workspace = true
+flume.workspace = true
 reqwest_client.workspace = true
 
 log.workspace = true

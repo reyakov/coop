@@ -9,17 +9,19 @@ use gpui::{
     Render, SharedString, StatefulInteractiveElement as _, Styled, Subscription, Task, WeakEntity,
     Window, div, px, uniform_list,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dock::{DockArea, DockPlacement, PanelHandle};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use nostr_sdk::prelude::*;
 use person::Directory;
 use settings::AppSettings;
 use state::NostrRegistry;
-use theme::{ActiveTheme, TextStyle, Typeset as _};
-use ui::avatar::Avatar;
-use ui::button::{Button, ButtonVariants, IconPosition};
-use ui::dock::{DockArea, DockPlacement, PanelHandle};
-use ui::input::{Input, InputEvent, InputState};
-use ui::nav::Nav;
-use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::Avatar;
+
+use crate::nav::Nav;
 
 /// Maximum number of members a chat can have.
 const MAX_MEMBERS: usize = 3;
@@ -301,7 +303,7 @@ impl NewChat {
             room
         });
 
-        ui::dock::add_panel_to(
+        crate::dock::add_panel_to(
             &self.dock,
             PanelHandle::new(chat_ui::init(room.downgrade(), window, cx)),
             DockPlacement::Center,
@@ -336,13 +338,12 @@ impl NewChat {
 
                 Nav::new(start + offset)
                     .label(profile.name())
-                    .text_style(TextStyle::Callout)
+                    .text_sm()
                     .when(!AppSettings::get_hide_avatar(cx), |this| {
                         this.prefix(
-                            Avatar::from_source(profile.avatar())
+                            Avatar::new(profile.avatar())
                                 .seed(profile.avatar_seed())
-                                .small()
-                                .flex_shrink_0(),
+                                .small(),
                         )
                     })
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -367,14 +368,14 @@ impl NewChat {
                     .gap_1()
                     .p_0p5()
                     .rounded_full()
-                    .bg(cx.theme().surface_raised)
-                    .text_style(TextStyle::Caption2)
-                    .hover(|this| this.bg(cx.theme().element_hover))
+                    .bg(cx.theme().secondary)
+                    .text_xs()
+                    .font_medium()
+                    .hover(|this| this.bg(cx.theme().primary))
                     .child(
-                        Avatar::from_source(profile.avatar())
+                        Avatar::new(profile.avatar())
                             .seed(profile.avatar_seed())
-                            .xsmall()
-                            .flex_shrink_0(),
+                            .xsmall(),
                     )
                     .child(div().max_w_32().truncate().child(profile.name()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -414,17 +415,12 @@ impl Render for NewChat {
             })
             .map(|this| {
                 if let Some(error) = self.error.clone() {
-                    this.child(
-                        div()
-                            .text_style(TextStyle::Caption)
-                            .text_color(cx.theme().danger)
-                            .child(error),
-                    )
+                    this.child(div().text_xs().text_color(cx.theme().danger).child(error))
                 } else {
                     this.child(
                         div()
-                            .text_style(TextStyle::Caption)
-                            .text_color(cx.theme().text_faint)
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
                             .child(notice),
                     )
                 }
@@ -452,10 +448,8 @@ impl Render for NewChat {
                     .child(
                         Button::new("start")
                             .icon(IconName::ArrowRight)
-                            .icon_position(IconPosition::End)
                             .label("Start")
                             .primary()
-                            .font_semibold()
                             .on_click(cx.listener(move |this, _event, window, cx| {
                                 if this.start_chat(window, cx) {
                                     window.close_dialog(cx);

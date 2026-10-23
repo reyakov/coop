@@ -3,22 +3,23 @@ use std::collections::HashSet;
 use anyhow::Error;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    Task, TextAlign, Window, div, px, rems, retain_all,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, TextAlign,
+    Window, div, rems, retain_all,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dock::{Panel, PanelEvent};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::Directory;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
-use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius, panel_radius};
-use ui::avatar::Avatar;
-use ui::button::{Button, ButtonVariants};
-use ui::dock::{Panel, PanelEvent};
-use ui::input::{Input, InputEvent, InputState};
-use ui::scroll::ScrollableElement;
-use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::Avatar;
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<ContactListPanel> {
     cx.new(|cx| ContactListPanel::new(window, cx))
@@ -241,12 +242,12 @@ impl ContactListPanel {
                     .h_8()
                     .px_2()
                     .justify_between()
-                    .rounded(px(button_radius()))
-                    .hover(|this| this.bg(cx.theme().element_hover))
+                    .rounded(cx.theme().radius)
+                    .hover(|this| this.bg(cx.theme().primary))
                     .child(
                         h_flex()
-                            .gap(px(theme::SPACE))
-                            .text_style(TextStyle::Callout)
+                            .gap_2()
+                            .text_xs()
                             .child(
                                 Avatar::new(profile.avatar())
                                     .seed(profile.avatar_seed())
@@ -256,7 +257,7 @@ impl ContactListPanel {
                     )
                     .child(
                         Button::new("remove_{ix}")
-                            .icon(IconName::Close)
+                            .icon(IconName::X)
                             .xsmall()
                             .ghost()
                             .invisible()
@@ -281,20 +282,22 @@ impl ContactListPanel {
             .border_2()
             .border_dashed()
             .border_color(cx.theme().border)
-            .rounded(px(panel_radius()))
-            .text_style(TextStyle::Callout)
+            .rounded(cx.theme().radius_lg)
+            .text_xs()
             .text_align(TextAlign::Center)
             .child(SharedString::from("Please add some relays."))
     }
 }
 
-impl Panel for ContactListPanel {
-    fn panel_id(&self) -> SharedString {
-        self.name.clone()
+impl gpui_kit::component::dock::BasePanel for ContactListPanel {
+    fn panel_name(&self) -> &'static str {
+        "Contacts"
     }
+}
 
-    fn title(&self, _cx: &App) -> AnyElement {
-        self.name.clone().into_any_element()
+impl Panel for ContactListPanel {
+    fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        self.name.clone()
     }
 }
 
@@ -316,15 +319,15 @@ impl Render for ContactListPanel {
             .overflow_y_scrollbar()
             .child(
                 v_flex()
-                    .gap(px(theme::SPACE))
+                    .gap_2()
                     .flex_1()
                     .w_full()
-                    .text_style(TextStyle::Callout)
+                    .text_xs()
                     .child(
                         div()
-                            .text_style(TextStyle::Caption)
+                            .text_xs()
                             .font_semibold()
-                            .text_color(cx.theme().text_muted)
+                            .text_color(cx.theme().muted_foreground)
                             .child("New contact:"),
                     )
                     .child(
@@ -350,7 +353,7 @@ impl Render for ContactListPanel {
                                 this.child(
                                     div()
                                         .italic()
-                                        .text_style(TextStyle::Caption)
+                                        .text_xs()
                                         .text_color(cx.theme().danger)
                                         .child(error.clone()),
                                 )
@@ -371,10 +374,9 @@ impl Render for ContactListPanel {
                     })
                     .child(
                         Button::new("submit")
-                            .icon(IconName::CheckCircle)
+                            .icon(IconName::CircleCheck)
                             .label("Update")
                             .primary()
-                            .font_semibold()
                             .loading(self.updating)
                             .disabled(self.updating)
                             .on_click(cx.listener(move |this, _ev, window, cx| {

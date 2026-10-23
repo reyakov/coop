@@ -8,18 +8,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{Context as AnyhowContext, Error, anyhow};
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, Global, IntoElement, ParentElement,
-    SharedString, Styled, Subscription, Task, Window, div, px, relative,
+    SharedString, Styled, Subscription, Task, Window, div, relative,
 };
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::notification::{Notification, NotificationType};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use nostr_sdk::prelude::*;
 use person::Directory;
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
 use state::{Announcement, CLIENT_NAME, NostrRegistry, UniversalSigner};
-use theme::{ActiveTheme, TextStyle, Typeset as _, control_radius};
-use ui::avatar::Avatar;
-use ui::button::Button;
-use ui::notification::{Notification, NotificationKind};
-use ui::{Disableable, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::Avatar;
 
 const IDENTIFIER: &str = "coop:device";
 
@@ -599,7 +599,6 @@ impl DeviceRegistry {
 
         // Get user's write relays
         let event = event.clone();
-        let id: SharedString = event.id.to_hex().into();
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             // Get device keys
@@ -645,7 +644,7 @@ impl DeviceRegistry {
                     })?;
 
                     cx.update(|window, cx| {
-                        window.clear_notification_by_id::<DeviceNotification>(id, cx);
+                        window.remove_notification::<DeviceNotification>(cx);
                     })
                     .ok();
                 }
@@ -718,37 +717,36 @@ impl DeviceRegistry {
 
         let entity = cx.entity().downgrade();
         let loading = Rc::new(Cell::new(false));
-        let key = SharedString::from(event.id.to_hex());
 
         Ok(Notification::new()
-            .type_id::<DeviceNotification>(key)
+            .id::<DeviceNotification>()
             .autohide(false)
-            .with_kind(NotificationKind::Info)
+            .with_type(NotificationType::Info)
             .title("Encryption Key Request")
             .content(move |_this, _window, cx| {
                 let profile = directory.read(cx).person(&requester, cx);
 
                 v_flex()
-                    .gap(px(theme::SPACE))
-                    .text_style(TextStyle::Callout)
+                    .gap_2()
+                    .text_xs()
                     .child(
                         div()
-                            .text_style(TextStyle::Callout)
+                            .text_xs()
                             .line_height(relative(1.25))
                             .child(SharedString::from(MSG)),
                     )
                     .child(
                         v_flex()
-                            .gap(px(theme::SPACE))
+                            .gap_2()
                             .child(
                                 v_flex()
                                     .gap_1()
-                                    .text_style(TextStyle::Callout)
+                                    .text_xs()
                                     .child(
                                         div()
                                             .font_semibold()
-                                            .text_style(TextStyle::Caption)
-                                            .text_color(cx.theme().text_muted)
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
                                             .child(SharedString::from("From:")),
                                     )
                                     .child(
@@ -756,11 +754,11 @@ impl DeviceRegistry {
                                             .h_8()
                                             .w_full()
                                             .px_2()
-                                            .rounded(px(control_radius()))
-                                            .bg(cx.theme().surface_card)
+                                            .rounded(cx.theme().radius)
+                                            .bg(cx.theme().muted)
                                             .child(
                                                 h_flex()
-                                                    .gap(px(theme::SPACE))
+                                                    .gap_2()
                                                     .child(
                                                         Avatar::new(profile.avatar())
                                                             .seed(profile.avatar_seed())
@@ -773,12 +771,12 @@ impl DeviceRegistry {
                             .child(
                                 v_flex()
                                     .gap_1()
-                                    .text_style(TextStyle::Callout)
+                                    .text_xs()
                                     .child(
                                         div()
                                             .font_semibold()
-                                            .text_style(TextStyle::Caption)
-                                            .text_color(cx.theme().text_muted)
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
                                             .child(SharedString::from("Code:")),
                                     )
                                     .child(
@@ -786,8 +784,8 @@ impl DeviceRegistry {
                                             .h_8()
                                             .w_full()
                                             .px_2()
-                                            .rounded(px(control_radius()))
-                                            .bg(cx.theme().surface_card)
+                                            .rounded(cx.theme().radius)
+                                            .bg(cx.theme().muted)
                                             .child(code_label.clone()),
                                     ),
                             ),

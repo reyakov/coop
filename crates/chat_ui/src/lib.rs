@@ -9,12 +9,21 @@ use common::{TimestampExt, emojis_from_tags};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, ImageSource, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState,
-    MouseButton, ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, SharedUri,
+    Focusable, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, MouseButton,
+    ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, SharedUri,
     StatefulInteractiveElement, Styled, StyledImage, Subscription, SystemNotification,
     SystemNotificationAction, Task, WeakEntity, Window, div, img, list, px, red, relative,
     retain_all, svg, white,
 };
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dock::{Panel, PanelEvent};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::menu::DropdownMenu;
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::scroll::Scrollbar;
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, WindowExt, h_flex, v_flex};
 use itertools::Itertools;
 use nostr_sdk::prelude::*;
 use person::{Directory, Person};
@@ -24,25 +33,13 @@ use smallvec::{SmallVec, smallvec};
 use state::{
     FileAttachment, NostrRegistry, download_and_decrypt_to_file, upload, upload_encrypted,
 };
-use theme::{ActiveTheme, TextStyle, Typeset as _};
-use ui::avatar::Avatar;
-use ui::button::{Button, ButtonVariants};
-use ui::dock::{Panel, PanelEvent};
-use ui::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use ui::menu::DropdownMenu;
-use ui::message::{
-    MessageMedia, MessageRow, ReactionBar, ReplyPreview, WelcomeMessage, group_reactions, opens_run,
+use ui::{
+    Avatar, COMPACT_REACTION_EMOJIS, IconName, MessageActions, MessageMedia, MessageRow,
+    REACTION_EMOJIS, ReactionBar, RenderedText, ReplyPreview, WelcomeMessage, group_reactions,
+    opens_run, rendered_text,
 };
-use ui::notification::Notification;
-use ui::scroll::Scrollbar;
-use ui::tooltip::Tooltip;
-use ui::{Disableable, Icon, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 use crate::file::*;
-use crate::text::RenderedText;
-
-const REACTION_EMOJIS: &[&str] = &["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
-const COMPACT_REACTION_EMOJIS: &[&str] = &["👍", "❤️", "👀"];
 
 /// Notice shown when a conversation has no messages, and above the message list.
 const PRIVATE_NOTICE: &str =
@@ -59,7 +56,6 @@ static CUSTOM_EMOJI_RE: LazyLock<Regex> =
 
 mod actions;
 mod file;
-pub mod text;
 
 pub fn init(room: WeakEntity<Room>, window: &mut Window, cx: &mut App) -> Entity<ChatPanel> {
     cx.new(|cx| ChatPanel::new(room, window, cx))
@@ -126,6 +122,11 @@ pub struct ChatPanel {
 }
 
 impl ChatPanel {
+    /// The room this panel displays, used to dedupe open tabs.
+    pub fn room_id(&self) -> &SharedString {
+        &self.id
+    }
+
     pub fn new(room: WeakEntity<Room>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Define attachments and replies_to entities
         let attachments = cx.new(|_| vec![]);
@@ -916,7 +917,7 @@ impl ChatPanel {
         let seen_on = chat.read(cx).rumor_seen_on(id);
 
         window.open_dialog(cx, move |this, _window, cx| {
-            this.title("Seen on").show_close(true).child(
+            this.title("Seen on").close_button(true).child(
                 v_flex()
                     .gap_1()
                     .when_none(&seen_on, |this| {
@@ -924,9 +925,9 @@ impl ChatPanel {
                             h_flex()
                                 .h_10()
                                 .justify_center()
-                                .text_style(TextStyle::Callout)
-                                .bg(cx.theme().surface_raised)
-                                .rounded(px(theme::panel_radius()))
+                                .text_xs()
+                                .bg(cx.theme().secondary)
+                                .rounded(cx.theme().radius_lg)
                                 .child("Message isn't traced yet"),
                         )
                     })
@@ -939,10 +940,10 @@ impl ChatPanel {
                                     h_flex()
                                         .h_7()
                                         .px_2()
-                                        .gap(px(theme::SPACE))
-                                        .bg(cx.theme().surface_raised)
-                                        .rounded(px(theme::control_radius()))
-                                        .text_style(TextStyle::Callout)
+                                        .gap_2()
+                                        .bg(cx.theme().secondary)
+                                        .rounded(cx.theme().radius)
+                                        .text_xs()
                                         .child(div().size_1p5().rounded_full().bg(gpui::green()))
                                         .child(SharedString::from(url.to_string())),
                                 );
@@ -962,7 +963,7 @@ impl ChatPanel {
             let relays = profile.messaging_relays();
 
             this.title("Messaging Relays")
-                .show_close(true)
+                .close_button(true)
                 .child(v_flex().gap_1().children({
                     let mut items = vec![];
 
@@ -971,10 +972,10 @@ impl ChatPanel {
                             h_flex()
                                 .h_7()
                                 .px_2()
-                                .gap(px(theme::SPACE))
-                                .bg(cx.theme().surface_raised)
-                                .rounded(px(theme::control_radius()))
-                                .text_style(TextStyle::Callout)
+                                .gap_2()
+                                .bg(cx.theme().secondary)
+                                .rounded(cx.theme().radius)
+                                .text_xs()
                                 .child(div().size_1p5().rounded_full().bg(gpui::green()))
                                 .child(SharedString::from(url.to_string())),
                         );
@@ -996,7 +997,7 @@ impl ChatPanel {
                 svg()
                     .path("brand/coop.svg")
                     .size_12()
-                    .text_color(cx.theme().surface_raised),
+                    .text_color(cx.theme().secondary),
             )
             .message(PRIVATE_NOTICE)
             .into_any_element()
@@ -1011,14 +1012,14 @@ impl ChatPanel {
             .items_center()
             .justify_center()
             .text_center()
-            .text_style(TextStyle::Caption)
-            .text_color(cx.theme().text_faint)
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
             .line_height(relative(1.3))
             .child(
                 svg()
                     .path("brand/coop.svg")
                     .size_12()
-                    .text_color(cx.theme().element_active),
+                    .text_color(cx.theme().list_active),
             )
             .child(PRIVATE_NOTICE)
             .into_any_element()
@@ -1034,14 +1035,14 @@ impl ChatPanel {
                 h_flex()
                     .w_full()
                     .gap_3()
-                    .text_style(TextStyle::Callout)
+                    .text_xs()
                     .child(
                         h_flex()
                             .flex_shrink_0()
                             .size_8()
                             .justify_center()
                             .rounded_full()
-                            .bg(cx.theme().warning_muted)
+                            .bg(cx.theme().warning.opacity(0.15))
                             .text_color(cx.theme().warning)
                             .child(Icon::new(IconName::Warning).small()),
                     )
@@ -1101,9 +1102,12 @@ impl ChatPanel {
                 .rendered_texts_by_id
                 .entry(message.id)
                 .or_insert_with(|| {
-                    text::rendered_text(
+                    rendered_text(
                         &message.content,
-                        &message.mentions,
+                        message
+                            .mentions
+                            .iter()
+                            .map(|mention| (mention.range.clone(), mention.public_key)),
                         &message.emojis,
                         &directory,
                         cx,
@@ -1148,6 +1152,7 @@ impl ChatPanel {
             .avatar(
                 Avatar::new(author.avatar())
                     .seed(author.avatar_seed())
+                    .small()
                     .flex_shrink_0()
                     .relative()
                     .dropdown_menu(move |this, _window, _cx| {
@@ -1173,7 +1178,7 @@ impl ChatPanel {
             .when(has_reactions, |this| this.child(reactions))
             .overlay(
                 div()
-                    .group_hover("", |this| this.bg(cx.theme().element_active))
+                    .group_hover("", |this| this.bg(cx.theme().list_active))
                     .absolute()
                     .left_0()
                     .top_0()
@@ -1247,7 +1252,7 @@ impl ChatPanel {
         div()
             .id(SharedString::from(id.to_hex()))
             .child(label)
-            .when(failed, |this| this.text_color(cx.theme().danger_muted))
+            .when(failed, |this| this.text_color(cx.theme().danger))
             .when_some(reports, |this, reports| {
                 this.when(!pending, |this| {
                     this.on_click(move |_e, window, cx| {
@@ -1265,7 +1270,7 @@ impl ChatPanel {
                                 .unwrap_or_default();
 
                             this.title(SharedString::from("Sent Reports"))
-                                .show_close(true)
+                                .close_button(true)
                                 .child(v_flex().gap_4().children(items))
                         });
                     })
@@ -1279,12 +1284,12 @@ impl ChatPanel {
         let avatar = profile.avatar();
 
         v_flex()
-            .gap(px(theme::SPACE))
+            .gap_2()
             .w_full()
             .child(
                 h_flex()
-                    .gap(px(theme::SPACE))
-                    .text_style(TextStyle::Callout)
+                    .gap_2()
+                    .text_xs()
                     .child(SharedString::from("Sent to:"))
                     .child(
                         h_flex()
@@ -1302,9 +1307,9 @@ impl ChatPanel {
                         .p_1()
                         .h_16()
                         .w_full()
-                        .text_style(TextStyle::Callout)
-                        .rounded(px(theme::surface_radius()))
-                        .bg(cx.theme().warning_muted)
+                        .text_xs()
+                        .rounded(cx.theme().radius_lg)
+                        .bg(cx.theme().warning.opacity(0.15))
                         .text_color(cx.theme().warning)
                         .child(div().flex_1().w_full().text_center().child(error)),
                 )
@@ -1312,7 +1317,7 @@ impl ChatPanel {
             .when_some(report.output().cloned(), |this, output| {
                 this.child(
                     v_flex()
-                        .gap(px(theme::SPACE))
+                        .gap_2()
                         .w_full()
                         .children({
                             let mut items = Vec::with_capacity(output.failed.len());
@@ -1323,19 +1328,19 @@ impl ChatPanel {
                                         .gap_0p5()
                                         .p_1()
                                         .w_full()
-                                        .rounded(px(theme::surface_radius()))
+                                        .rounded(cx.theme().radius_lg)
                                         .bg(cx.theme().danger.opacity(0.06))
                                         .child(
                                             div()
-                                                .text_style(TextStyle::Caption)
+                                                .text_xs()
                                                 .font_semibold()
                                                 .line_height(relative(1.25))
                                                 .child(SharedString::from(url.to_string())),
                                         )
                                         .child(
                                             div()
-                                                .text_style(TextStyle::Caption)
-                                                .text_color(cx.theme().danger_muted.opacity(0.9))
+                                                .text_xs()
+                                                .text_color(cx.theme().danger.opacity(0.9))
                                                 .line_height(relative(1.25))
                                                 .child(SharedString::from(msg.to_string())),
                                         ),
@@ -1353,18 +1358,18 @@ impl ChatPanel {
                                         .gap_0p5()
                                         .p_1()
                                         .w_full()
-                                        .rounded(px(theme::surface_radius()))
-                                        .bg(cx.theme().surface_card)
+                                        .rounded(cx.theme().radius_lg)
+                                        .bg(cx.theme().muted)
                                         .child(
                                             div()
-                                                .text_style(TextStyle::Caption)
+                                                .text_xs()
                                                 .font_semibold()
                                                 .line_height(relative(1.25))
                                                 .child(SharedString::from(url.0.to_string())),
                                         )
                                         .child(
                                             div()
-                                                .text_style(TextStyle::Caption)
+                                                .text_xs()
                                                 .line_height(relative(1.25))
                                                 .child(SharedString::from("Successfully")),
                                         ),
@@ -1384,83 +1389,34 @@ impl ChatPanel {
         public_key: &PublicKey,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        h_flex()
-            .p_0p5()
-            .gap_1()
-            .invisible()
-            .absolute()
-            .right_4()
-            .top_neg_2()
-            .when(cx.theme().shadow, |this| this.shadow_sm())
-            .rounded(px(theme::surface_radius()))
-            .border_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().bg)
-            .children({
-                let mut items = vec![];
+        let mut actions = MessageActions::new();
 
-                for emoji in COMPACT_REACTION_EMOJIS {
-                    items.push(
-                        Button::new(*emoji)
-                            .label(*emoji)
-                            .tooltip(*emoji)
-                            .small()
-                            .ghost()
-                            .on_click({
-                                let emoji = *emoji;
-                                let id = *id;
-                                cx.listener(move |this, _event, window, cx| {
-                                    this.send_reaction(emoji, &id, window, cx);
-                                })
-                            }),
-                    );
-                }
+        for emoji in COMPACT_REACTION_EMOJIS {
+            let id = *id;
+            actions = actions.reaction(
+                emoji,
+                cx.listener(move |this, _event, window, cx| {
+                    this.send_reaction(emoji, &id, window, cx);
+                }),
+            );
+        }
 
-                items
+        let reply_id = *id;
+        let copy_id = *id;
+        let dropdown_id = *id;
+        let public_key = *public_key;
+
+        actions
+            .reply(cx.listener(move |this, _event, _window, cx| {
+                this.reply_to(&reply_id, cx);
+            }))
+            .copy(cx.listener(move |this, _event, _window, cx| {
+                this.copy_message(&copy_id, cx);
+            }))
+            .dropdown(move |menu, _window, _cx| {
+                menu.menu("Copy author", Box::new(Command::Copy(public_key)))
+                    .menu("Seen on", Box::new(Command::Trace(dropdown_id)))
             })
-            .child(div().flex_shrink_0().h_4().w_px().bg(cx.theme().border))
-            .child(
-                Button::new("reply")
-                    .icon(IconName::Reply)
-                    .tooltip("Reply")
-                    .small()
-                    .ghost()
-                    .on_click({
-                        let id = id.to_owned();
-                        cx.listener(move |this, _event, _window, cx| {
-                            this.reply_to(&id, cx);
-                        })
-                    }),
-            )
-            .child(
-                Button::new("copy")
-                    .icon(IconName::Copy)
-                    .tooltip("Copy")
-                    .small()
-                    .ghost()
-                    .on_click({
-                        let id = id.to_owned();
-                        cx.listener(move |this, _event, _window, cx| {
-                            this.copy_message(&id, cx);
-                        })
-                    }),
-            )
-            .child(div().flex_shrink_0().h_4().w_px().bg(cx.theme().border))
-            .child(
-                Button::new("advance")
-                    .icon(IconName::Ellipsis)
-                    .small()
-                    .ghost()
-                    .dropdown_menu({
-                        let public_key = *public_key;
-                        let id = *id;
-                        move |this, _window, _cx| {
-                            this.menu("Copy author", Box::new(Command::Copy(public_key)))
-                                .menu("Seen on", Box::new(Command::Trace(id)))
-                        }
-                    }),
-            )
-            .group_hover("", |this| this.visible())
     }
 
     fn render_attachment(&self, url: &Url, cx: &Context<Self>) -> impl IntoElement {
@@ -1472,7 +1428,7 @@ impl ChatPanel {
                 img(url.as_str())
                     .size_16()
                     .when(cx.theme().shadow, |this| this.shadow_lg())
-                    .rounded(px(theme::control_radius()))
+                    .rounded(cx.theme().radius)
                     .object_fit(ObjectFit::Cover),
             )
             .child(
@@ -1530,10 +1486,10 @@ impl ChatPanel {
                 .child(
                     img(path.clone())
                         .border_1()
-                        .border_color(cx.theme().border_faint)
+                        .border_color(cx.theme().border)
                         .h(px(250.))
                         .object_fit(ObjectFit::Cover)
-                        .rounded(px(theme::bubble_radius())),
+                        .rounded(cx.theme().radius_lg),
                 )
                 .into_any_element();
         }
@@ -1561,22 +1517,22 @@ impl ChatPanel {
             .self_start()
             .items_start()
             .min_w_0()
-            .gap(px(theme::SPACE))
+            .gap_2()
             .p_2()
             .border_1()
-            .border_color(cx.theme().border_faint)
-            .rounded(px(theme::control_radius()))
-            .child(Icon::new(IconName::Lock).text_color(cx.theme().accent))
+            .border_color(cx.theme().border)
+            .rounded(cx.theme().radius)
+            .child(Icon::new(IconName::Lock).text_color(cx.theme().primary))
             .child(
                 v_flex()
                     .min_w_0()
                     .overflow_hidden()
-                    .text_style(TextStyle::Callout)
+                    .text_xs()
                     .child(div().line_height(relative(1.2)).child(file.display_name()))
                     .child(
                         div()
-                            .text_style(TextStyle::Caption)
-                            .text_color(cx.theme().text_faint)
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
                             .child(label),
                     ),
             )
@@ -1600,14 +1556,14 @@ impl ChatPanel {
             .id(SharedString::from(file.url.to_string()))
             .relative()
             .w_16()
-            .tooltip(move |window, cx| Tooltip::new(label.clone(), window, cx).into())
+            .tooltip(move |window, cx| Tooltip::new(label.clone()).build(window, cx))
             .map(|this| {
                 if file.is_image() {
                     this.child(
                         img(pending.path.clone())
                             .size_16()
                             .when(cx.theme().shadow, |this| this.shadow_sm())
-                            .rounded(px(theme::control_radius()))
+                            .rounded(cx.theme().radius)
                             .object_fit(ObjectFit::Cover),
                     )
                 } else {
@@ -1617,11 +1573,11 @@ impl ChatPanel {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(px(theme::control_radius()))
+                            .rounded(cx.theme().radius)
                             .border_1()
-                            .border_color(cx.theme().border_faint)
-                            .bg(cx.theme().surface)
-                            .text_style(TextStyle::Caption)
+                            .border_color(cx.theme().border)
+                            .bg(cx.theme().sidebar)
+                            .text_xs()
                             .text_center()
                             .child("Preview not available"),
                     )
@@ -1637,7 +1593,7 @@ impl ChatPanel {
                     .justify_center()
                     .rounded_full()
                     .border_1()
-                    .border_color(cx.theme().border_faint)
+                    .border_color(cx.theme().border)
                     .bg(gpui::green())
                     .child(Icon::new(IconName::Lock).size_2().text_color(gpui::white())),
             )
@@ -1671,7 +1627,7 @@ impl ChatPanel {
                 .w_full()
                 .pl_2()
                 .border_l_2()
-                .border_color(cx.theme().element_active)
+                .border_color(cx.theme().list_active)
                 .child(
                     h_flex()
                         .justify_between()
@@ -1680,10 +1636,10 @@ impl ChatPanel {
                                 .flex()
                                 .items_baseline()
                                 .gap_1()
-                                .text_style(TextStyle::Caption)
-                                .text_color(cx.theme().text_muted)
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
                                 .child("Replying to:")
-                                .child(div().text_color(cx.theme().accent).child(profile.name())),
+                                .child(div().text_color(cx.theme().primary).child(profile.name())),
                         )
                         .child(
                             Button::new("remove-reply")
@@ -1701,7 +1657,7 @@ impl ChatPanel {
                 .child(
                     div()
                         .w_full()
-                        .text_style(TextStyle::Callout)
+                        .text_xs()
                         .text_ellipsis()
                         .line_clamp(1)
                         .child(text.preview()),
@@ -1738,7 +1694,6 @@ impl ChatPanel {
             .icon(IconName::Settings2)
             .tooltip("Configuration")
             .ghost()
-            .large()
             .dropdown_menu(move |this, _window, _cx| {
                 let auto = matches!(signer_kind, SignerKind::Auto);
                 let encryption = matches!(signer_kind, SignerKind::Encryption);
@@ -1786,13 +1741,10 @@ impl ChatPanel {
         Button::new("emoji")
             .icon(IconName::Emoji)
             .ghost()
-            .large()
             .dropdown_menu_with_anchor(gpui::Anchor::BottomLeft, move |this, _window, _cx| {
-                let menu = REACTION_EMOJIS
-                    .iter()
-                    .fold(this.horizontal(), |this, emoji| {
-                        this.menu(*emoji, Box::new(Command::Insert(emoji.to_string())))
-                    });
+                let menu = REACTION_EMOJIS.iter().fold(this, |this, emoji| {
+                    this.menu(*emoji, Box::new(Command::Insert(emoji.to_string())))
+                });
 
                 emojis.iter().fold(menu, |this, (shortcode, _)| {
                     let label = format!(":{shortcode}:");
@@ -1802,37 +1754,37 @@ impl ChatPanel {
     }
 }
 
-impl Panel for ChatPanel {
-    fn panel_id(&self) -> SharedString {
-        self.id.clone()
+impl gpui_kit::component::dock::BasePanel for ChatPanel {
+    fn panel_name(&self) -> &'static str {
+        "ChatPanel"
     }
+}
 
-    fn title(&self, cx: &App) -> AnyElement {
+impl Panel for ChatPanel {
+    fn title(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.room
             .read_with(cx, |this, cx| {
                 let label = this.display_name(cx);
-                let picture = this.display_image(cx);
                 let seed = this.display_image_seed(cx);
 
                 h_flex()
                     .gap_1()
-                    .text_style(TextStyle::Caption)
-                    .child(Avatar::new(picture).seed(seed).xsmall())
+                    .text_xs()
+                    .child(Avatar::new(this.display_image(cx)).seed(seed).xsmall())
                     .child(label)
                     .into_any_element()
             })
-            .unwrap_or(
-                div()
-                    .text_style(TextStyle::Caption)
-                    .child("Unknown")
-                    .into_any_element(),
-            )
+            .unwrap_or(div().text_xs().child("Unknown").into_any_element())
     }
 
-    fn toolbar_buttons(&self, _window: &Window, _cx: &App) -> Vec<Button> {
+    fn toolbar_buttons(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Vec<Button>> {
         let subject_bar = self.subject_bar.clone();
 
-        vec![
+        Some(vec![
             Button::new("subject")
                 .icon(IconName::Input)
                 .tooltip("Change subject")
@@ -1844,11 +1796,7 @@ impl Panel for ChatPanel {
                         cx.notify();
                     });
                 }),
-        ]
-    }
-
-    fn background(&self, cx: &App) -> Option<ImageSource> {
-        AppSettings::panel_background_source(cx)
+        ])
     }
 }
 
@@ -1877,7 +1825,7 @@ impl Render for ChatPanel {
                         .h_12()
                         .w_full()
                         .px_2()
-                        .gap(px(theme::SPACE))
+                        .gap_2()
                         .border_b_1()
                         .border_color(cx.theme().border)
                         .child(Input::new(&self.subject_input).small())
@@ -1933,7 +1881,7 @@ impl Render for ChatPanel {
                         this.child(
                             div()
                                 .px_1()
-                                .text_style(TextStyle::Caption)
+                                .text_xs()
                                 .text_color(cx.theme().warning)
                                 .child(WARNING),
                         )
@@ -1948,7 +1896,6 @@ impl Render for ChatPanel {
                                     .loading(self.uploading)
                                     .disabled(self.uploading)
                                     .ghost()
-                                    .large()
                                     .on_click(cx.listener(move |this, _ev, window, cx| {
                                         this.upload(window, cx);
                                     })),
@@ -1965,7 +1912,6 @@ impl Render for ChatPanel {
                                             .icon(IconName::PaperPlaneFill)
                                             .disabled(self.uploading)
                                             .ghost()
-                                            .large()
                                             .on_click(cx.listener(move |this, _ev, window, cx| {
                                                 this.send_text_message(window, cx);
                                             })),

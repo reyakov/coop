@@ -9,18 +9,19 @@ use gpui::{
     size, transparent_black,
 };
 use gpui_base::{VirtualListScrollHandle, v_virtual_list};
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelHandle};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::scroll::Scrollbar;
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, WindowExt, h_flex, v_flex};
 use nip29::{Discovery, GroupCandidate, GroupKey, GroupsEvent, GroupsRegistry, Membership};
 use nostr_sdk::prelude::{RelayUrl, Timestamp};
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
-use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius, panel_radius};
-use ui::avatar::Avatar;
-use ui::button::{Button, ButtonVariants};
-use ui::dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelHandle};
-use ui::input::{Input, InputEvent, InputState};
-use ui::notification::Notification;
-use ui::scroll::Scrollbar;
-use ui::{Icon, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::Avatar;
 
 const TITLE: &str = "Browse";
 const INPUT_PLACEHOLDER: &str = "wss://relay.example.com";
@@ -228,7 +229,7 @@ impl BrowsePanel {
         let registry = GroupsRegistry::global(cx);
         let group = registry.update(cx, |registry, cx| registry.open(key, cx));
 
-        ui::dock::add_panel_to(
+        crate::dock::add_panel_to(
             dock,
             PanelHandle::new(nip29_ui::init(group, window, cx)),
             DockPlacement::Center,
@@ -268,7 +269,7 @@ impl BrowsePanel {
                     .min_w_0()
                     .child(
                         div()
-                            .text_style(TextStyle::Callout)
+                            .text_xs()
                             .font_semibold()
                             .line_height(relative(1.2))
                             .child("Public Groups"),
@@ -276,8 +277,8 @@ impl BrowsePanel {
                     .child(
                         div()
                             .truncate()
-                            .text_style(TextStyle::Caption)
-                            .text_color(cx.theme().text_muted)
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
                             .map(|this| match &self.relay {
                                 Some(relay) => {
                                     this.child(SharedString::from(relay.as_str().to_owned()))
@@ -294,14 +295,9 @@ impl BrowsePanel {
                     .w_full()
                     .max_w_64()
                     .px_1()
-                    .rounded(px(button_radius()))
-                    .bg(cx.theme().surface)
-                    .child(
-                        Input::new(&self.input)
-                            .appearance(false)
-                            .small()
-                            .flex_1(),
-                    )
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().sidebar)
+                    .child(Input::new(&self.input).appearance(false).flex_1())
                     .child(
                         Button::new("relay-browse")
                             .icon(IconName::ArrowRight)
@@ -313,6 +309,7 @@ impl BrowsePanel {
                             })),
                     ),
             )
+            .flex_shrink_0()
             .into_any_element()
     }
 
@@ -341,8 +338,9 @@ impl BrowsePanel {
                         .children(pair.first().map(|card| self.render_card(card, cx)))
                         .child(match pair.get(1) {
                             Some(card) => self.render_card(card, cx),
-                            None => div().flex_1().into_any_element(),
+                            None => div().flex_1().flex_shrink_0().into_any_element(),
                         })
+                        .flex_shrink_0()
                         .into_any_element()
                 }
             })
@@ -374,28 +372,28 @@ impl BrowsePanel {
             .min_w_0()
             .h_full()
             .overflow_hidden()
-            .rounded(px(panel_radius()))
+            .rounded(cx.theme().radius_lg)
             .cursor_pointer()
             .border_1()
             .border_color(transparent_black())
-            .bg(cx.theme().surface)
+            .bg(cx.theme().sidebar)
             .hover(|this| {
-                this.bg(cx.theme().surface_raised)
-                    .border_color(cx.theme().border_strong)
+                this.bg(cx.theme().secondary)
+                    .border_color(cx.theme().border)
             })
             .child(
                 v_flex()
                     .flex_1()
                     .min_h_0()
                     .p_2()
-                    .gap(px(theme::SPACE))
+                    .gap_2()
                     .child(
                         h_flex()
                             .w_full()
                             .items_center()
-                            .gap(px(theme::SPACE))
+                            .gap_2()
                             .when(!hide_avatar, |this| {
-                                this.child(Avatar::from_source(picture).seed(seed).flex_shrink_0())
+                                this.child(Avatar::new(picture).seed(seed).flex_shrink_0())
                             })
                             .child(
                                 v_flex()
@@ -403,7 +401,7 @@ impl BrowsePanel {
                                     .min_w_0()
                                     .child(
                                         div()
-                                            .text_style(TextStyle::Callout)
+                                            .text_xs()
                                             .truncate()
                                             .font_semibold()
                                             .line_height(relative(1.2))
@@ -412,8 +410,8 @@ impl BrowsePanel {
                                     .child(
                                         div()
                                             .truncate()
-                                            .text_style(TextStyle::Caption)
-                                            .text_color(cx.theme().text_faint)
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
                                             .child(relay),
                                     ),
                             ),
@@ -421,8 +419,8 @@ impl BrowsePanel {
                     .child(
                         div()
                             .min_w_0()
-                            .text_style(TextStyle::Callout)
-                            .text_color(cx.theme().text_muted)
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
                             .text_ellipsis()
                             .line_clamp(2)
                             .map(|this| {
@@ -438,11 +436,11 @@ impl BrowsePanel {
                         h_flex()
                             .w_full()
                             .gap_1p5()
-                            .text_color(cx.theme().text_muted)
+                            .text_color(cx.theme().muted_foreground)
                             .child(Icon::new(IconName::Book))
                             .child(
                                 div()
-                                    .text_style(TextStyle::Callout)
+                                    .text_xs()
                                     .child(SharedString::from(format!("{members} members"))),
                             ),
                     ),
@@ -454,19 +452,21 @@ impl BrowsePanel {
     }
 }
 
-impl Panel for BrowsePanel {
-    fn panel_id(&self) -> SharedString {
-        TITLE.into()
+impl gpui_kit::component::dock::BasePanel for BrowsePanel {
+    fn panel_name(&self) -> &'static str {
+        "Browse"
     }
+}
 
-    fn title(&self, cx: &App) -> AnyElement {
+impl Panel for BrowsePanel {
+    fn title(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .gap_1()
-            .text_style(TextStyle::Caption)
+            .text_xs()
             .child(
                 Icon::new(IconName::Compass)
                     .small()
-                    .text_color(cx.theme().text_faint),
+                    .text_color(cx.theme().muted_foreground),
             )
             .child(TITLE)
             .into_any_element()
@@ -542,8 +542,8 @@ fn notice(text: &'static str, cx: &App) -> AnyElement {
     h_flex()
         .size_full()
         .justify_center()
-        .text_style(TextStyle::Callout)
-        .text_color(cx.theme().text_muted)
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
         .child(text)
         .into_any_element()
 }

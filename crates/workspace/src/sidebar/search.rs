@@ -4,16 +4,15 @@ use std::rc::Rc;
 use chat::{ChatRegistry, Room};
 use gpui::{
     AnyElement, App, Context, Entity, IntoElement, ParentElement, SharedString, Styled, Task,
-    Window, div, px, uniform_list,
+    Window, div, uniform_list,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::Input;
+use gpui_kit::component::{ActiveTheme, Selectable, Sizable, h_flex, v_flex};
 use nip29::{Group, GroupsRegistry};
 use nostr_sdk::prelude::*;
 use state::{FIND_LIMIT, NostrRegistry};
-use theme::{ActiveTheme, button_radius};
-use ui::button::{Button, ButtonVariants};
-use ui::input::Input;
-use ui::scroll::Scrollbar;
-use ui::{IconName, Selectable, Sizable, h_flex, v_flex};
 
 use super::Sidebar;
 use super::rows::SidebarRow;
@@ -206,6 +205,7 @@ impl Sidebar {
 
     pub(super) fn render_find(&self, cx: &mut Context<Self>) -> AnyElement {
         h_flex()
+            .mb_2()
             .px_2()
             .flex_shrink_0()
             .w_full()
@@ -214,9 +214,9 @@ impl Sidebar {
                     .px_1p5()
                     .gap_1()
                     .w_full()
-                    .rounded(px(button_radius()))
-                    .bg(cx.theme().surface_raised)
-                    .child(Input::new(&self.find_input).appearance(false).small())
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().input_background())
+                    .child(Input::new(&self.find_input).appearance(false))
                     .child(
                         Button::new("sidebar-global")
                             .icon(IconName::Compass)
@@ -225,7 +225,7 @@ impl Sidebar {
                             } else {
                                 "Enable global search"
                             })
-                            .small()
+                            .xsmall()
                             .ghost()
                             .selected(self.global_open)
                             .loading(self.global_finding)
@@ -245,22 +245,17 @@ impl Sidebar {
             .min_h_0()
             .relative()
             .child(
-                div()
-                    .min_h_0()
-                    .flex_1()
-                    .child(
-                        uniform_list(
-                            "sidebar-search",
-                            rows.len(),
-                            cx.processor(move |this, range, _window, cx| {
-                                this.render_rows(range, rows.as_slice(), cx)
-                            }),
-                        )
-                        .track_scroll(&self.search_scroll)
-                        .h_full()
-                        .px_2(),
+                div().min_h_0().flex_1().child(
+                    uniform_list(
+                        "sidebar-search",
+                        rows.len(),
+                        cx.processor(move |this, range, _window, cx| {
+                            this.render_rows(range, rows.as_slice(), cx)
+                        }),
                     )
-                    .child(Scrollbar::vertical(&self.search_scroll)),
+                    .h_full()
+                    .px_2(),
+                ),
             )
             .into_any_element()
     }

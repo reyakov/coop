@@ -5,20 +5,21 @@ use chat::{ChatRegistry, Room, RoomKind};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, ClipboardItem, Context, Div, Entity, IntoElement, ParentElement,
-    PathPromptOptions, Render, SharedString, Styled, Task, Window, div, px, retain_all,
+    PathPromptOptions, Render, SharedString, Styled, Task, Window, div, retain_all,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dock::DockPlacement;
+use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::{Directory, Person, PersonRegistry, shorten_pubkey};
 use settings::AppSettings;
 use state::{NostrRegistry, upload};
-use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius};
-use ui::avatar::Avatar;
-use ui::button::{Button, ButtonVariants, IconPosition};
-use ui::dock::DockPlacement;
-use ui::input::{Input, InputState, Textarea, TextareaState};
-use ui::notification::Notification;
-use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::Avatar;
 
 use crate::Workspace;
 
@@ -372,17 +373,15 @@ impl Render for ProfileDialog {
                     .w_full()
                     .items_center()
                     .justify_center()
-                    .bg(cx.theme().surface)
+                    .bg(cx.theme().sidebar)
                     .child(Avatar::new(avatar).seed(profile.avatar_seed()).large())
                     .when(self.editing, |this| {
                         this.child(
                             Button::new("upload")
                                 .icon(IconName::ArrowRight)
-                                .icon_position(IconPosition::End)
                                 .label("Add an avatar")
                                 .xsmall()
                                 .ghost()
-                                .rounded()
                                 .disabled(self.uploading)
                                 .loading(self.uploading)
                                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -398,15 +397,15 @@ impl Render for ProfileDialog {
                         .w_full()
                         .justify_center()
                         .gap_3()
-                        .rounded(px(button_radius()))
-                        .bg(cx.theme().surface)
-                        .text_style(TextStyle::Callout)
+                        .rounded(cx.theme().radius)
+                        .bg(cx.theme().sidebar)
+                        .text_xs()
                         .child(shorten_pkey)
                         .child(
                             Button::new("copy")
                                 .icon({
                                     if self.copied {
-                                        IconName::CheckCircle
+                                        IconName::CircleCheck
                                     } else {
                                         IconName::Copy
                                     }
@@ -485,11 +484,9 @@ impl Render for ProfileDialog {
                     .when(self.is_current_user && !self.editing, |this| {
                         this.child(
                             Button::new("update")
-                                .icon(IconName::Edit)
-                                .icon_position(IconPosition::End)
+                                .icon(IconName::SquarePen)
                                 .label("Update")
                                 .primary()
-                                .font_semibold()
                                 .on_click(cx.listener(move |this, _ev, window, cx| {
                                     this.toggle_edit(window, cx);
                                 })),
@@ -498,11 +495,9 @@ impl Render for ProfileDialog {
                     .when(!self.is_current_user, |this| {
                         this.child(
                             Button::new("message")
-                                .icon(IconName::Message)
-                                .icon_position(IconPosition::End)
+                                .icon(IconName::MessageSquare)
                                 .label("Message")
                                 .primary()
-                                .font_semibold()
                                 .on_click(cx.listener(move |this, _ev, window, cx| {
                                     this.message(window, cx);
                                 })),
@@ -520,11 +515,9 @@ impl Render for ProfileDialog {
                         )
                         .child(
                             Button::new("save")
-                                .icon(IconName::CheckCircle)
-                                .icon_position(IconPosition::End)
+                                .icon(IconName::CircleCheck)
                                 .label("Save")
                                 .primary()
-                                .font_semibold()
                                 .loading(self.updating)
                                 .disabled(self.updating)
                                 .on_click(cx.listener(move |this, _ev, window, cx| {
@@ -538,8 +531,8 @@ impl Render for ProfileDialog {
 
 fn label(label: &'static str, cx: &App) -> Div {
     div()
-        .text_style(TextStyle::Caption)
-        .text_color(cx.theme().text_muted)
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
         .font_semibold()
         .child(label)
 }
@@ -551,14 +544,12 @@ fn field(
     cx: &App,
 ) -> Div {
     let (content, color) = match value {
-        Some(value) => (value, cx.theme().text),
-        None => (SharedString::from(placeholder), cx.theme().text_muted),
+        Some(value) => (value, cx.theme().foreground),
+        None => (SharedString::from(placeholder), cx.theme().muted_foreground),
     };
 
-    v_flex().gap_1p5().child(label(text, cx)).child(
-        div()
-            .text_style(TextStyle::Callout)
-            .text_color(color)
-            .child(content),
-    )
+    v_flex()
+        .gap_1p5()
+        .child(label(text, cx))
+        .child(div().text_xs().text_color(color).child(content))
 }

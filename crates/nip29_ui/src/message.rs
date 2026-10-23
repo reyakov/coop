@@ -3,22 +3,23 @@ use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, Entity, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
-    WeakEntity, div, px,
+    WeakEntity, div,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex};
 use nip29::{Activity, Group, Reaction};
 use nostr_sdk::prelude::{EventId, Kind};
 use person::Directory;
 use settings::AppSettings;
 use state::NostrRegistry;
-use theme::{ActiveTheme, TextStyle, Typeset as _};
-use ui::avatar::Avatar;
-use ui::menu::{ContextMenu, PopupMenu, PopupMenuItem};
-use ui::message::{MessageMedia, MessageRow, ReactionBar, ReplyPreview, group_reactions};
-use ui::{Icon, IconName, Sizable, StyledExt, h_flex};
+use ui::{
+    Avatar, MessageMedia, MessageRow, REACTION_EMOJIS, ReactionBar, ReplyPreview, group_reactions,
+    react_menu,
+};
 
 use crate::GroupPanel;
-
-const REACTIONS: [&str; 6] = ["👍", "❤️", "😂", "🎉", "😮", "😢"];
 
 pub(crate) struct Actions {
     pub group: WeakEntity<Group>,
@@ -60,6 +61,7 @@ pub(crate) fn render(
         .avatar(
             Avatar::new(author.avatar())
                 .seed(author.avatar_seed())
+                .small()
                 .flex_shrink_0(),
         )
         .author(author.name())
@@ -79,8 +81,7 @@ pub(crate) fn render(
         })
         .when(!reaction_groups.is_empty(), |this| {
             this.child(ReactionBar::new(reaction_groups))
-        })
-        .into_any_element();
+        });
 
     let id = message.id;
     let admin = actions.admin;
@@ -88,10 +89,27 @@ pub(crate) fn render(
     let group = actions.group;
     let panel = actions.panel;
 
-    ContextMenu::new(
-        format!("message-menu-{}", id.to_hex()),
-        row,
-        move |menu, window, cx| {
+    // Reading the panel here would re-enter its ongoing update, so resolve
+    // the current user's custom emojis through the shared person directory.
+    let custom = nostr
+        .read(cx)
+        .current_user()
+        .map(|current_user| {
+            persons
+                .read(cx)
+                .person(&current_user, cx)
+                .emojis()
+                .iter()
+                .map(|(shortcode, _)| format!(":{shortcode}:"))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let row = div()
+        .id(SharedString::from(format!("message-menu-{}", id.to_hex())))
+        .w_full()
+        .child(row)
+        .context_menu(move |menu, window, cx| {
             let menu = menu
                 .item({
                     let panel = panel.clone();
@@ -105,8 +123,20 @@ pub(crate) fn render(
                 .submenu("React", window, cx, {
                     let group = group.clone();
                     let panel = panel.clone();
+                    let custom = custom.clone();
 
-                    move |menu, _window, cx| react_menu(menu, group.clone(), panel.clone(), id, cx)
+                    move |menu, _window, _cx| {
+                        let group = group.clone();
+                        let panel = panel.clone();
+
+                        react_menu(menu, REACTION_EMOJIS, &custom, move |emoji, _window, cx| {
+                            if let Err(error) = panel.update_in(cx, |panel, window, cx| {
+                                panel.react(group.clone(), id, emoji.to_owned(), window, cx);
+                            }) {
+                                log::warn!("nip29: sending a reaction failed: {error}");
+                            }
+                        })
+                    }
                 });
 
             if !admin {
@@ -136,70 +166,9 @@ pub(crate) fn render(
                         });
                     })
                 })
-        },
-    )
-    .into_any_element()
-}
+        });
 
-fn react_menu(
-    menu: PopupMenu,
-    group: WeakEntity<Group>,
-    panel: WeakEntity<GroupPanel>,
-    id: EventId,
-    cx: &App,
-) -> PopupMenu {
-    let menu = REACTIONS.iter().fold(menu, |menu, emoji| {
-        let emoji = *emoji;
-        let group = group.clone();
-        let panel = panel.clone();
-
-        menu.item(
-            PopupMenuItem::new(emoji).on_click(move |_event, _window, cx| {
-                if let Err(error) = panel.update_in(cx, |panel, window, cx| {
-                    panel.react(group.clone(), id, emoji.to_owned(), window, cx);
-                }) {
-                    log::warn!("nip29: sending a reaction failed: {error}");
-                }
-            }),
-        )
-    });
-
-    let emojis = panel
-        .upgrade()
-        .and_then(|panel| {
-            let current_user = NostrRegistry::global(cx).read(cx).current_user()?;
-            Some(
-                panel
-                    .read(cx)
-                    .directory
-                    .read(cx)
-                    .person(&current_user, cx)
-                    .emojis()
-                    .to_vec(),
-            )
-        })
-        .unwrap_or_default();
-
-    if emojis.is_empty() {
-        return menu;
-    }
-
-    let menu = menu.separator();
-    emojis.into_iter().fold(menu, |menu, (shortcode, _)| {
-        let emoji = format!(":{shortcode}:");
-        let group = group.clone();
-        let panel = panel.clone();
-
-        menu.item(
-            PopupMenuItem::new(emoji.clone()).on_click(move |_event, _window, cx| {
-                if let Err(error) = panel.update_in(cx, |panel, window, cx| {
-                    panel.react(group.clone(), id, emoji.clone(), window, cx);
-                }) {
-                    log::warn!("nip29: sending a reaction failed: {error}");
-                }
-            }),
-        )
-    })
+    row.into_any_element()
 }
 
 pub(crate) fn render_activity(
@@ -214,10 +183,10 @@ pub(crate) fn render_activity(
     h_flex()
         .id(ix)
         .w_full()
-        .gap(px(theme::SPACE))
+        .gap_2()
         .py_1()
         .px_3()
-        .hover(|this| this.bg(cx.theme().element_hover))
+        .hover(|this| this.bg(cx.theme().list_hover))
         .child(badge(activity, cx))
         .when(!hide_avatar, |this| {
             this.child(
@@ -231,7 +200,7 @@ pub(crate) fn render_activity(
             div()
                 .min_w_0()
                 .truncate()
-                .text_style(TextStyle::Callout)
+                .text_xs()
                 .font_semibold()
                 .child(subject.name()),
         )
@@ -239,16 +208,16 @@ pub(crate) fn render_activity(
             div()
                 .min_w_0()
                 .truncate()
-                .text_style(TextStyle::Callout)
-                .text_color(cx.theme().text_faint)
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
                 .child(SharedString::from(action(activity))),
         )
         .child(
             div()
                 .flex_shrink_0()
                 .ml_1()
-                .text_style(TextStyle::Caption)
-                .text_color(cx.theme().text_faint)
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
                 .child(activity.created_at.to_ago()),
         )
         .into_any_element()
@@ -256,11 +225,11 @@ pub(crate) fn render_activity(
 
 fn badge(activity: &Activity, cx: &App) -> AnyElement {
     let (icon, color) = match activity.kind {
-        Kind::GroupJoinRequest => (IconName::Login, cx.theme().accent),
-        Kind::GroupPutUser => (IconName::Login, cx.theme().accent),
-        Kind::GroupLeaveRequest => (IconName::Logout, cx.theme().danger),
+        Kind::GroupJoinRequest => (IconName::LogIn, cx.theme().primary),
+        Kind::GroupPutUser => (IconName::LogIn, cx.theme().primary),
+        Kind::GroupLeaveRequest => (IconName::LogOut, cx.theme().danger),
         Kind::GroupRemoveUser => (IconName::Ban, cx.theme().danger),
-        _ => (IconName::Info, cx.theme().text_faint),
+        _ => (IconName::Info, cx.theme().muted_foreground),
     };
 
     h_flex()

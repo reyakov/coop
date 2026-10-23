@@ -10,7 +10,6 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 workspace = { path = "../crates/workspace" }
 ui = { path = "../crates/ui" }
-theme = { path = "../crates/theme" }
 state = { path = "../crates/state" }
 nip4e = { path = "../crates/nip4e" }
 chat = { path = "../crates/chat" }
@@ -21,6 +20,7 @@ person = { path = "../crates/person" }
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui_web.workspace = true
+gpui-kit.workspace = true
 
 log.workspace = true
 instant = { workspace = true, features = ["wasm-bindgen"] }

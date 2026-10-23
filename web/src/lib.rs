@@ -1,5 +1,4 @@
 use gpui::*;
-use ui::Root;
 use universal_time::{Instant, MonotonicClock, SystemTime, WallClock, define_time_provider};
 use wasm_bindgen::prelude::*;
 
@@ -47,11 +46,8 @@ pub fn run() -> Result<(), JsValue> {
     };
 
     app.run(|cx| {
-        // Initialize components
-        ui::init(cx);
-
-        // Initialize theme
-        theme::init(cx);
+        // Initialize the framework before anything renders
+        gpui_kit::init(cx);
 
         // Initialize settings
         settings::init(cx);
@@ -73,8 +69,8 @@ pub fn run() -> Result<(), JsValue> {
         // Initialize groups registry
         nip29::init(cx);
 
-        cx.open_window(WindowOptions::default(), |window, cx| {
-            cx.new(|cx| Root::new(workspace::init(window, cx).into(), window, cx))
+        gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+            workspace::init(window, cx)
         })
         .expect("Failed to open window. Please restart the application.");
 

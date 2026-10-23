@@ -1,24 +1,24 @@
 use std::sync::Arc;
 
+use ::settings::{AppSettings, AppearanceMode};
 use anyhow::Error;
 use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry};
 use common::download_dir;
 use gpui::{
     Action, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Render, SharedString, Styled, Subscription, Task, Window, div, px,
+    Pixels, Render, SharedString, Styled, Subscription, Task, Window, div, px,
 };
+use gpui_kit::component::button::Button;
+use gpui_kit::component::dock::{DockArea, DockLayout, DockPlacement, Panel, PanelHandle};
+use gpui_kit::component::notification::{Notification, NotificationType};
+use gpui_kit::component::{ActiveTheme, Theme, WindowExt, v_flex};
 use nip4e::{DeviceEvent, DeviceRegistry};
 use nip29::{GroupId, GroupKey};
 use nostr_sdk::prelude::*;
 use serde::Deserialize;
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, StateEvent};
-use theme::{ActiveTheme, SIDEBAR_WIDTH, TextStyle, Theme, Typeset as _};
-use ui::button::Button;
-use ui::dock::{self, DockArea, DockLayout, DockPlacement, Panel, PanelHandle};
-use ui::notification::{Notification, NotificationKind};
-use ui::{Root, WindowExtension, v_flex};
 
 use crate::dialogs::restore::RestoreEncryption;
 use crate::dialogs::{import, join_group, new_chat, new_group, profile, relays, settings};
@@ -26,8 +26,15 @@ use crate::panels::{backup, browse, contact_list, greeter, inbox};
 use crate::sidebar::Sidebar;
 
 mod dialogs;
+mod dock;
+mod nav;
 mod panels;
 mod sidebar;
+
+pub use dock::TAB_BAR_HEIGHT;
+
+/// Default sidebar width.
+const SIDEBAR_WIDTH: Pixels = px(240.);
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Workspace> {
     cx.new(|cx| Workspace::new(window, cx))
@@ -72,19 +79,21 @@ impl Workspace {
         let device = DeviceRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
 
-        let dock = dock::dock_area("coop", window, cx);
+        let dock = cx.new(|cx| {
+            let skin = dock::CoopDockSkin::new(cx);
+            gpui_kit::component::dock::DockArea::new("coop", None, window, cx).with_renderer(skin)
+        });
         let sidebar = cx.new(|cx| Sidebar::new(window, dock.downgrade(), cx));
         let left_sidebar = sidebar.clone();
 
         let workspace = cx.entity().downgrade();
         let mut subscriptions = smallvec![];
 
-        subscriptions.push(
-            // Observe system appearance and update theme
-            cx.observe_window_appearance(window, |_this, window, cx| {
+        if AppSettings::get_appearance_mode(cx) == AppearanceMode::System {
+            subscriptions.push(cx.observe_window_appearance(window, |_this, window, cx| {
                 Theme::sync_system_appearance(Some(window), cx);
-            }),
-        );
+            }));
+        }
 
         subscriptions.push(
             // Subscribe to the nostr events
@@ -109,7 +118,7 @@ impl Workspace {
                             .autohide(false)
                             .title(format!("Wait for approval · {code}"))
                             .message(MSG)
-                            .with_kind(NotificationKind::Info);
+                            .with_type(NotificationType::Info);
 
                         window.push_notification(note, cx);
                     }
@@ -121,7 +130,7 @@ impl Workspace {
                         let note = Notification::new()
                             .id::<DeviceNotifcation>()
                             .message(MSG)
-                            .with_kind(NotificationKind::Info)
+                            .with_type(NotificationType::Info)
                             .action(|_this, _window, _cx| {
                                 Button::new("retry").label("Retry").on_click(
                                     move |_this, window, cx| {
@@ -129,7 +138,7 @@ impl Workspace {
                                         device.update(cx, |this, cx| {
                                             this.get_announcement(cx);
                                         });
-                                        window.clear_notification::<DeviceNotifcation>(cx);
+                                        window.remove_notification::<DeviceNotifcation>(cx);
                                     },
                                 )
                             });
@@ -140,7 +149,7 @@ impl Workspace {
                         let note = Notification::new()
                             .id::<DeviceNotifcation>()
                             .message("Encryption Key has been set")
-                            .with_kind(NotificationKind::Success);
+                            .with_type(NotificationType::Success);
 
                         window.push_notification(note, cx);
                     }
@@ -169,7 +178,7 @@ impl Workspace {
                                             chat.update(cx, |this, cx| {
                                                 this.get_metadata(cx);
                                             });
-                                            window.clear_notification::<MsgRelayNotification>(cx);
+                                            window.remove_notification::<MsgRelayNotification>(cx);
                                         },
                                     )
                                 }),
@@ -230,20 +239,20 @@ impl Workspace {
         }
     }
 
-    /// Add a panel to the dock, from anywhere that has the window but not the workspace.
+    /// Add a panel to the workspace dock from anywhere that has the window.
+    /// The workspace is the window's root view, so it is reachable directly.
     pub fn add_panel<P: Panel>(
         panel: Entity<P>,
         placement: DockPlacement,
         window: &mut Window,
         cx: &mut App,
     ) {
-        if let Some(root) = window.root::<Root>().flatten()
-            && let Ok(workspace) = root.read(cx).view().clone().downcast::<Self>()
-        {
-            workspace.update(cx, |this, cx| {
-                this.add_panel_to_dock(panel, placement, window, cx)
-            });
-        }
+        let Some(root) = window.root::<Self>().flatten() else {
+            return;
+        };
+        root.update(cx, |this, cx| {
+            this.add_panel_to_dock(panel, placement, window, cx)
+        });
     }
 
     /// Add a panel to the dock, or focus it if it is already docked.
@@ -255,7 +264,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.dock.update(cx, |area, cx| {
-            ui::dock::add_panel(area, PanelHandle::new(panel), placement, window, cx)
+            crate::dock::add_panel(area, PanelHandle::new(panel), placement, window, cx)
         });
     }
 
@@ -267,7 +276,7 @@ impl Workspace {
 
                 window.open_dialog(cx, move |this, _window, _cx| {
                     this.width(px(520.))
-                        .show_close(true)
+                        .close_button(true)
                         .pb_2()
                         .title("Preferences")
                         .child(view.clone())
@@ -426,16 +435,16 @@ impl Workspace {
         let device = DeviceRegistry::global(cx);
         let ent = device.downgrade();
 
-        window.open_dialog(cx, move |this, _window, cx| {
+        window.open_alert_dialog(cx, move |alert, _window, cx| {
             let ent = ent.clone();
 
-            this.confirm()
-                .show_close(true)
+            alert
+                .confirm()
                 .title("Reset Encryption Key")
-                .child(
+                .description(
                     v_flex()
                         .gap_1()
-                        .text_style(TextStyle::Callout)
+                        .text_xs()
                         .child(SharedString::from(ENC_MSG))
                         .child(
                             div()
@@ -466,10 +475,9 @@ impl Workspace {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let dialog_layer = Root::render_dialog_layer(window, cx);
-        let notification_layer = Root::render_notification_layer(window, cx);
-
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Dialog, notification and tooltip layers are owned by the framework
+        // Root that gpui_kit::open_window installed for this window.
         div()
             .id("workspace")
             .on_action(cx.listener(Self::on_command))
@@ -477,9 +485,5 @@ impl Render for Workspace {
             .relative()
             .size_full()
             .child(self.dock.clone())
-            // Notifications
-            .children(notification_layer)
-            // Dialogs
-            .children(dialog_layer)
     }
 }

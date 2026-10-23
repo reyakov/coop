@@ -4,13 +4,13 @@ use gpui::{
     AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
     Subscription, Task, Window, div,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
 use instant::Duration;
 use nip4e::DeviceRegistry;
 use nostr_sdk::prelude::*;
-use theme::{ActiveTheme, TextStyle, Typeset as _};
-use ui::button::{Button, ButtonVariants, IconPosition};
-use ui::input::{Input, InputEvent, InputState};
-use ui::{IconName, StyledExt, WindowExtension, h_flex, v_flex};
 
 #[derive(Debug)]
 pub struct RestoreEncryption {
@@ -100,12 +100,12 @@ impl Render for RestoreEncryption {
         v_flex()
             .size_full()
             .gap_3()
-            .text_style(TextStyle::Callout)
+            .text_xs()
             .child(
                 v_flex()
                     .gap_1()
-                    .text_style(TextStyle::Callout)
-                    .text_color(cx.theme().text_muted)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
                     .child("Secret Key")
                     .child(Input::new(&self.key_input)),
             )
@@ -113,10 +113,8 @@ impl Render for RestoreEncryption {
                 h_flex().gap_1().justify_end().child(
                     Button::new("restore")
                         .icon(IconName::ArrowRight)
-                        .icon_position(IconPosition::End)
                         .label("Restore")
                         .primary()
-                        .font_semibold()
                         .on_click(cx.listener(move |this, _, window, cx| {
                             this.restore(window, cx);
                         })),
@@ -125,7 +123,7 @@ impl Render for RestoreEncryption {
             .when_some(self.error.read(cx).as_ref(), |this, error| {
                 this.child(
                     div()
-                        .text_style(TextStyle::Caption)
+                        .text_xs()
                         .text_center()
                         .text_color(cx.theme().danger)
                         .child(error.clone()),

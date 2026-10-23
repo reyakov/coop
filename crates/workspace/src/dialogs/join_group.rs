@@ -1,11 +1,12 @@
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{WindowExt, h_flex, v_flex};
 use std::rc::Rc;
 
 use gpui::{App, AppContext, ClickEvent, ParentElement, Styled, Window, px};
 use nip29::{GroupReference, GroupsRegistry};
-use ui::button::{Button, ButtonVariants, IconPosition};
-use ui::input::{Input, InputState};
-use ui::notification::Notification;
-use ui::{IconName, StyledExt, WindowExtension, h_flex, v_flex};
 
 type SubmitFn = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool>;
 
@@ -57,10 +58,8 @@ pub fn open(window: &mut Window, cx: &mut App) {
                             .child(
                                 Button::new("join")
                                     .icon(IconName::ArrowRight)
-                                    .icon_position(IconPosition::End)
                                     .label("Join")
                                     .primary()
-                                    .font_semibold()
                                     .on_click({
                                         let join = join.clone();
                                         move |event, window, cx| {

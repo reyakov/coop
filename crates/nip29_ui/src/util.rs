@@ -1,11 +1,10 @@
 use anyhow::Result;
 use gpui::{App, Div, Entity, ParentElement, SharedString, Styled, Task, Window};
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{ActiveTheme, WindowExt, v_flex};
 use nip29::{Group, Pin, Row};
 use nostr_sdk::prelude::Url;
-use theme::{ActiveTheme, TextStyle, Typeset as _};
-use ui::input::{Input, InputState};
-use ui::notification::Notification;
-use ui::{WindowExtension, v_flex};
 
 pub(crate) fn display_name(group: &Group) -> SharedString {
     group
@@ -36,7 +35,7 @@ pub(crate) fn opens_run(rows: &[Row], index: usize) -> bool {
     };
 
     match (current, previous) {
-        (Row::Message(current), Row::Message(previous)) => ui::message::opens_run(
+        (Row::Message(current), Row::Message(previous)) => ui::opens_run(
             Some((previous.author, previous.created_at.as_secs())),
             (current.author, current.created_at.as_secs()),
         ),
@@ -47,8 +46,8 @@ pub(crate) fn opens_run(rows: &[Row], index: usize) -> bool {
 pub(crate) fn field(label: &'static str, input: &Entity<InputState>, cx: &App) -> Div {
     v_flex()
         .gap_1()
-        .text_style(TextStyle::Callout)
-        .text_color(cx.theme().text_muted)
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
         .child(label)
         .child(Input::new(input))
 }

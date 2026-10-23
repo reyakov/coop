@@ -1,3 +1,11 @@
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use std::collections::HashSet;
 
 use anyhow::{Error, anyhow};
@@ -5,20 +13,12 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, ClickEvent, Context, Div, Entity, InteractiveElement, IntoElement,
     ParentElement, Render, SharedString, Stateful, Styled, Subscription, Task, TextAlign,
-    WeakEntity, Window, div, px, rems,
+    WeakEntity, Window, div, rems,
 };
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
 use state::NostrRegistry;
-use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius, panel_radius};
-use ui::button::{Button, ButtonVariants, IconPosition};
-use ui::input::{Input, InputEvent, InputState};
-use ui::menu::{DropdownMenu, PopupMenuItem};
-use ui::scroll::ScrollableElement;
-use ui::tab::Tab;
-use ui::tab::tab_bar::TabBar;
-use ui::{Disableable, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
 
 const GOSSIP_MSG: &str = "Gossip Relays are the relays where you publish all your events and discover events from others.";
 const INBOX_MSG: &str = "Messaging Relays host your private messages. Others find these relays and send you messages there.";
@@ -108,11 +108,11 @@ impl RelayManager {
         let manager = cx.entity().downgrade();
 
         v_flex()
-            .gap(px(theme::SPACE))
+            .gap_2()
             .child(
                 div()
-                    .text_style(TextStyle::Caption)
-                    .text_color(cx.theme().text_muted)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
                     .child(SharedString::from(GOSSIP_MSG)),
             )
             .child(
@@ -132,7 +132,7 @@ impl RelayManager {
                             .tooltip("Relay metadata")
                             .ghost()
                             .h(rems(2.))
-                            .text_style(TextStyle::Caption)
+                            .text_xs()
                             .dropdown_menu(move |menu, _window, _cx| {
                                 menu.item(metadata_item(&manager, RelayMetadata::Read))
                                     .item(metadata_item(&manager, RelayMetadata::Write))
@@ -153,7 +153,7 @@ impl RelayManager {
                 this.child(
                     div()
                         .italic()
-                        .text_style(TextStyle::Caption)
+                        .text_xs()
                         .text_color(cx.theme().danger)
                         .child(error.clone()),
                 )
@@ -197,11 +197,11 @@ impl RelayManager {
 
     fn render_inbox(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
-            .gap(px(theme::SPACE))
+            .gap_2()
             .child(
                 div()
-                    .text_style(TextStyle::Caption)
-                    .text_color(cx.theme().text_muted)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
                     .child(SharedString::from(INBOX_MSG)),
             )
             .child(
@@ -224,7 +224,7 @@ impl RelayManager {
                 this.child(
                     div()
                         .italic()
-                        .text_style(TextStyle::Caption)
+                        .text_xs()
                         .text_color(cx.theme().danger)
                         .child(error.clone()),
                 )
@@ -264,7 +264,7 @@ impl RelayManager {
 
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         TabBar::new("relays-tabs")
-            .segmented(true)
+            .segmented()
             .selected_index(self.active_tab)
             .on_click(cx.listener(|this, ix: &usize, _window, cx| {
                 this.active_tab = *ix;
@@ -284,10 +284,8 @@ impl RelayManager {
         h_flex().gap_1().justify_end().child(
             Button::new("update")
                 .icon(IconName::ArrowRight)
-                .icon_position(IconPosition::End)
                 .label("Update")
                 .primary()
-                .font_semibold()
                 .loading(updating)
                 .disabled(updating)
                 .on_click(cx.listener(move |this, _ev, window, cx| {
@@ -608,7 +606,7 @@ impl Render for RelayManager {
 
         v_flex()
             .gap_4()
-            .text_style(TextStyle::Callout)
+            .text_xs()
             .child(self.render_tab_bar(cx))
             .child(content)
             .child(self.render_actions(cx))
@@ -647,26 +645,27 @@ fn relay_row(
         .h_8()
         .px_2()
         .justify_between()
-        .rounded(px(button_radius()))
-        .bg(cx.theme().surface)
+        .rounded(cx.theme().radius)
+        .bg(cx.theme().sidebar)
         .child(
             h_flex()
                 .gap_1()
-                .text_style(TextStyle::Callout)
+                .text_xs()
                 .child(label)
                 .when_some(badge, |this, badge| {
                     this.child(
                         div()
                             .p_0p5()
                             .rounded_xs()
-                            .text_style(TextStyle::Caption2)
+                            .text_xs()
+                            .font_medium()
                             .child(badge),
                     )
                 }),
         )
         .child(
             Button::new("remove")
-                .icon(IconName::Close)
+                .icon(IconName::X)
                 .xsmall()
                 .ghost()
                 .invisible()
@@ -682,8 +681,8 @@ fn empty_relays(cx: &App) -> impl IntoElement {
         .border_2()
         .border_dashed()
         .border_color(cx.theme().border)
-        .rounded(px(panel_radius()))
-        .text_style(TextStyle::Callout)
+        .rounded(cx.theme().radius_lg)
+        .text_xs()
         .text_align(TextAlign::Center)
         .child(SharedString::from("Please add some relays."))
 }

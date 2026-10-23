@@ -1,18 +1,22 @@
 use std::sync::{Arc, Mutex};
 
-use assets::Assets;
 use gpui::{
-    App, AppContext, Bounds, KeyBinding, Menu, MenuItem, SharedString, TitlebarOptions,
+    App, Bounds, Global, KeyBinding, Menu, MenuItem, SharedString, TitlebarOptions,
     WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowKind, WindowOptions,
     actions, point, px, size,
 };
+use gpui_kit::component::{Theme, ThemeMode};
 use gpui_platform::application;
+use native_theme::watch::ThemeSubscription;
+use native_theme_gpui::apply_system_theme;
 use nostr_sdk::prelude::SecretKey;
+use settings::{AppSettings, AppearanceMode};
 use state::{APP_ID, CLIENT_NAME};
-use theme::TABBAR_HEIGHT;
-use ui::Root;
+use workspace::TAB_BAR_HEIGHT;
 
 actions!(coop, [Quit]);
+
+const BASE_FONT_SIZE: f32 = 16.0;
 
 fn main() {
     // Initialize logging
@@ -28,14 +32,11 @@ fn main() {
 
     // Run application
     application()
-        .with_assets(Assets)
+        .with_assets(assets::CombinedAssets)
         .with_http_client(Arc::new(reqwest_client::ReqwestClient::new()))
         .run(move |cx| {
-            // Initialize components
-            ui::init(cx);
-
-            // Initialize theme
-            theme::init(cx);
+            // Initialize the framework before anything renders
+            gpui_kit::init(cx);
 
             // Load embedded fonts in assets/fonts
             load_embedded_fonts(cx);
@@ -63,6 +64,15 @@ fn main() {
 
             // Initialize settings
             settings::init(cx);
+
+            let appearance = settings::persisted_appearance_mode();
+            match apply_native_theme(appearance, cx) {
+                Ok(()) => start_theme_watcher(appearance, cx),
+                Err(error) => {
+                    log::warn!("native theme unavailable ({error})");
+                    apply_appearance(appearance, cx);
+                }
+            }
 
             // Initialize the nostr client
             state::init(cx, cli_key);
@@ -98,7 +108,7 @@ fn main() {
                     title: Some(SharedString::new_static(CLIENT_NAME)),
                     traffic_light_position: Some(point(
                         px(9.0),
-                        px(TABBAR_HEIGHT / px(2.) - 14. / 2.),
+                        px(TAB_BAR_HEIGHT / px(2.) - 14. / 2.),
                     )),
                     appears_transparent: true,
                 }),
@@ -106,10 +116,8 @@ fn main() {
                 ..Default::default()
             };
 
-            cx.open_window(opts, |window, cx| {
-                cx.new(|cx| Root::new(workspace::init(window, cx).into(), window, cx))
-            })
-            .expect("Failed to open window. Please restart the application.");
+            gpui_kit::open_window(opts, cx, workspace::init)
+                .expect("Failed to open window. Please restart the application.");
 
             cx.activate(true);
         });
@@ -161,4 +169,73 @@ fn parse_cli_key() -> Result<Option<SecretKey>, String> {
 fn quit(_ev: &Quit, cx: &mut App) {
     log::info!("Gracefully quitting the application . . .");
     cx.quit();
+}
+
+/// Apply the native theme to the app, and then apply the persisted appearance mode
+fn apply_native_theme(appearance: AppearanceMode, cx: &mut App) -> native_theme::Result<()> {
+    let mut system = native_theme_gpui::SystemTheme::from_system()?;
+    let native = system.light.defaults.font.size;
+
+    if native > 0.0 {
+        system.accessibility.text_scaling_factor *= BASE_FONT_SIZE / native;
+    }
+
+    apply_system_theme(&system, cx);
+    apply_appearance(appearance, cx);
+
+    Ok(())
+}
+
+/// Honor the appearance mode against the installed (native) palettes.
+fn apply_appearance(appearance: AppearanceMode, cx: &mut App) {
+    match appearance {
+        AppearanceMode::System => Theme::sync_system_appearance(None, cx),
+        AppearanceMode::Light => Theme::change(ThemeMode::Light, None, cx),
+        AppearanceMode::Dark => Theme::change(ThemeMode::Dark, None, cx),
+    }
+
+    // Like signed, inputs show only their tinted border when focused.
+    Theme::global_mut(cx).focus_ring = false;
+}
+
+/// Holds the watcher subscription so it lives as long as the app.
+struct ThemeWatcher {
+    _subscription: ThemeSubscription,
+    /// The appearance mode the observer in `workspace` was registered with.
+    appearance: std::cell::Cell<AppearanceMode>,
+}
+
+impl Global for ThemeWatcher {}
+
+/// Start a background task to watch for OS theme changes and re-apply the native theme.
+fn start_theme_watcher(initial_appearance: AppearanceMode, cx: &mut App) {
+    let (sender, receiver) = flume::unbounded();
+    match native_theme::watch::on_theme_change(move |event| {
+        if let Err(error) = sender.send(event) {
+            log::warn!("theme change dropped ({error})");
+        }
+    }) {
+        Ok(subscription) => {
+            cx.set_global(ThemeWatcher {
+                _subscription: subscription,
+                appearance: std::cell::Cell::new(initial_appearance),
+            });
+            cx.spawn(async move |cx| {
+                while receiver.recv_async().await.is_ok() {
+                    log::info!("OS theme changed; re-applying");
+                    cx.update(|cx| {
+                        let appearance = AppSettings::get_appearance_mode(cx);
+                        if let Some(watcher) = cx.try_global::<ThemeWatcher>() {
+                            watcher.appearance.set(appearance);
+                        }
+                        if let Err(error) = apply_native_theme(appearance, cx) {
+                            log::warn!("failed to apply updated OS theme ({error})");
+                        }
+                    });
+                }
+            })
+            .detach();
+        }
+        Err(error) => log::warn!("OS theme watching unavailable ({error})"),
+    }
 }

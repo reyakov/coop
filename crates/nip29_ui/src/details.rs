@@ -2,15 +2,15 @@ use gpui::{
     AnyElement, App, IntoElement, ParentElement, SharedString, Styled, WeakEntity, Window, div, px,
     relative,
 };
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
 use nip29::{Group, GroupMetadata};
-use theme::{ActiveTheme, TextStyle, Typeset as _, control_radius};
-use ui::avatar::Avatar;
-use ui::{Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::Avatar;
 
 pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, move |this, _window, cx| {
         this.max_h(px(600.))
-            .show_close(true)
+            .close_button(true)
             .title("About Group")
             .child(body(&group, cx))
     });
@@ -22,13 +22,13 @@ fn body(group: &WeakEntity<Group>, cx: &App) -> AnyElement {
     };
 
     let group = entity.read(cx);
-    let mut body = v_flex().gap_3().text_style(TextStyle::Callout).child(header(group, cx));
+    let mut body = v_flex().gap_3().text_xs().child(header(group, cx));
 
     if let Some(metadata) = group.metadata() {
         if let Some(about) = metadata.about.as_ref() {
             body = body.child(
                 div()
-                    .text_color(cx.theme().text_muted)
+                    .text_color(cx.theme().muted_foreground)
                     .child(SharedString::from(about.clone())),
             );
         }
@@ -76,7 +76,7 @@ fn body(group: &WeakEntity<Group>, cx: &App) -> AnyElement {
                 "Supported kinds",
                 if items.is_empty() {
                     div()
-                        .text_color(cx.theme().text_faint)
+                        .text_color(cx.theme().muted_foreground)
                         .child("None")
                         .into_any_element()
                 } else {
@@ -107,7 +107,7 @@ fn body(group: &WeakEntity<Group>, cx: &App) -> AnyElement {
                         .map(|pin| {
                             div()
                                 .truncate()
-                                .text_color(cx.theme().text_muted)
+                                .text_color(cx.theme().muted_foreground)
                                 .child(crate::util::pin_label(group, pin))
                                 .into_any_element()
                         })
@@ -128,7 +128,7 @@ fn header(group: &Group, cx: &App) -> AnyElement {
         .gap_3()
         .items_center()
         .child(
-            Avatar::from_source(group.display_image())
+            Avatar::new(group.display_image())
                 .seed(key.cache_tag())
                 .large(),
         )
@@ -137,15 +137,15 @@ fn header(group: &Group, cx: &App) -> AnyElement {
                 .min_w_0()
                 .child(
                     div()
-                        .text_style(TextStyle::Body)
+                        .text_sm()
                         .font_semibold()
                         .truncate()
                         .child(group.display_name()),
                 )
                 .child(
                     div()
-                        .text_style(TextStyle::Caption)
-                        .text_color(cx.theme().text_faint)
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
                         .truncate()
                         .child(SharedString::from(format!(
                             "{} · {}",
@@ -162,9 +162,9 @@ fn section(label: &'static str, content: AnyElement, cx: &App) -> AnyElement {
         .gap_1()
         .child(
             div()
-                .text_style(TextStyle::Caption)
+                .text_xs()
                 .font_medium()
-                .text_color(cx.theme().text_muted)
+                .text_color(cx.theme().muted_foreground)
                 .child(label),
         )
         .child(content)
@@ -183,10 +183,10 @@ fn chip(label: impl Into<SharedString>, cx: &App) -> AnyElement {
     div()
         .px_2()
         .py_1()
-        .rounded(px(control_radius()))
-        .bg(cx.theme().surface_raised)
-        .text_color(cx.theme().text)
-        .text_style(TextStyle::Caption)
+        .rounded(cx.theme().radius)
+        .bg(cx.theme().secondary)
+        .text_color(cx.theme().foreground)
+        .text_xs()
         .line_height(relative(1.))
         .child(label.into())
         .into_any_element()

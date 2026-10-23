@@ -1,62 +1,122 @@
 use gpui::{
-    AbsoluteLength, AnyElement, App, Bounds, Div, Hsla, ImageSource, InteractiveElement,
-    Interactivity, IntoElement, ObjectFit, ParentElement, PathBuilder, Pixels, Point, RenderOnce,
-    SharedString, StyleRefinement, Styled, StyledImage, Window, canvas, div, img, point, px,
+    App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
+    SharedString, StyleRefinement, Styled, Window, div, px,
 };
-use theme::ActiveTheme;
+use gpui_base::AvatarImage;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::menu::DropdownMenu;
+use gpui_kit::component::{ActiveTheme, Selectable, Sizable, Size};
 
-use crate::{Selectable, Sizable, Size, StyledExt};
-
-/// Number of rows and columns in the generated pixel grid.
-const PIXEL_GRID: usize = 8;
+/// Number of rows and columns in the pixel grid.
+const GRID_SIZE: usize = 8;
 /// Empty cells kept between the pattern and the avatar edge.
 const MARGIN: usize = 1;
 /// Probability that a cell in the left half of the pattern area is filled.
 const FILL_PROBABILITY: f32 = 0.42;
 /// Probability that a filled cell uses the accent shade instead of the main color.
 const ACCENT_PROBABILITY: f32 = 0.25;
-/// Minimum number of filled left-half cells, so a pattern never reads as empty.
+/// Minimum number of filled left-half cells.
 const MIN_FILLED: usize = 5;
-/// Fallback seed for an avatar that has neither a picture nor a seed of its own.
+/// Seed for an avatar that has neither a picture nor a seed of its own.
 const FALLBACK_SEED: &str = "coop";
-/// Number of segments used to approximate the avatar circle.
-const CIRCLE_SEGMENTS: usize = 32;
 
-/// Returns the size of the avatar based on the given [`Size`].
-fn avatar_size(size: Size) -> AbsoluteLength {
-    match size {
-        Size::Large => px(64.).into(),
-        Size::Medium => px(32.).into(),
-        Size::Small => px(24.).into(),
-        Size::XSmall => px(18.).into(),
-        Size::Size(size) => size.into(),
-    }
-}
-
-/// A deterministic, offline pixel-art avatar derived from a seed.
+/// An avatar for a user or other entity.
 #[derive(IntoElement)]
-struct PixelAvatar {
-    seed: u64,
+pub struct Avatar {
+    base: Div,
+    picture: Option<SharedString>,
+    seed: Option<String>,
     size: Size,
+    selected: bool,
     style: StyleRefinement,
 }
 
-impl PixelAvatar {
-    /// Creates a pixel avatar from `seed`.
-    fn new(seed: impl AsRef<str>) -> Self {
+impl Avatar {
+    /// Create an avatar showing `picture`, falling back to pixel art seeded by [`Avatar::seed`].
+    pub fn new(picture: Option<SharedString>) -> Self {
         Self {
-            seed: fnv1a(seed.as_ref().as_bytes()),
+            base: div(),
+            picture,
+            seed: None,
             size: Size::Medium,
+            selected: false,
             style: StyleRefinement::default(),
         }
     }
+
+    /// The seed for the generated pixel avatar.
+    pub fn seed(mut self, seed: impl Into<String>) -> Self {
+        self.seed = Some(seed.into());
+        self
+    }
 }
 
-impl Sizable for PixelAvatar {
+impl Selectable for Avatar {
+    fn selected(mut self, selected: bool) -> Self {
+        self.selected = selected;
+        self
+    }
+
+    fn is_selected(&self) -> bool {
+        self.selected
+    }
+}
+
+impl Sizable for Avatar {
     fn with_size(mut self, size: impl Into<Size>) -> Self {
         self.size = size.into();
         self
     }
+}
+
+impl Styled for Avatar {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl InteractiveElement for Avatar {
+    fn interactivity(&mut self) -> &mut gpui::Interactivity {
+        self.base.interactivity()
+    }
+}
+
+impl DropdownMenu for Avatar {}
+
+impl RenderOnce for Avatar {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let side = side_length(self.size);
+
+        let content = match self.picture {
+            Some(url) => div()
+                .size_full()
+                .child(AvatarImage::new(url).size_full().rounded_full())
+                .into_any_element(),
+            None => PixelAvatar {
+                seed: fnv1a(self.seed.unwrap_or_else(|| FALLBACK_SEED.into()).as_bytes()),
+                side,
+                style: StyleRefinement::default(),
+            }
+            .into_any_element(),
+        };
+
+        self.base
+            .size(side)
+            .flex_shrink_0()
+            .rounded_full()
+            .overflow_hidden()
+            .bg(cx.theme().secondary)
+            .child(content)
+            .refine_style(&self.style)
+    }
+}
+
+/// A deterministic, offline pixel-art avatar.
+#[derive(IntoElement)]
+struct PixelAvatar {
+    seed: u64,
+    side: Pixels,
+    style: StyleRefinement,
 }
 
 impl Styled for PixelAvatar {
@@ -66,75 +126,89 @@ impl Styled for PixelAvatar {
 }
 
 impl RenderOnce for PixelAvatar {
-    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let side = avatar_size(self.size).to_pixels(window.rem_size());
-        let seed = self.seed;
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let theme = cx.theme();
+        let pattern = pattern(self.seed);
+        let mut cells = Vec::new();
 
-        canvas(
-            move |_bounds, _window, _cx| seed,
-            move |bounds, seed, window, cx| {
-                let theme = cx.theme();
-                let main = Hsla {
-                    h: seed as f32 / u64::MAX as f32,
-                    s: 0.6,
-                    l: if theme.is_dark() { 0.6 } else { 0.45 },
-                    a: 1.,
-                };
-                let shade = if theme.is_dark() {
-                    Hsla {
-                        l: (main.l * 1.6).min(0.95),
-                        ..main
-                    }
-                } else {
-                    Hsla {
-                        l: (main.l * 0.45).max(0.18),
-                        ..main
-                    }
-                };
+        let main = Hsla {
+            h: self.seed as f32 / u64::MAX as f32,
+            s: 0.6,
+            l: if theme.is_dark() { 0.6 } else { 0.45 },
+            a: 1.,
+        };
 
-                let circle = circle_polygon(bounds.center(), bounds.size.width.as_f32() / 2.);
-                paint_polygons(window, std::iter::once(&circle), main.opacity(0.16));
+        let shade = if theme.is_dark() {
+            Hsla {
+                l: (main.l * 1.6).min(0.95),
+                ..main
+            }
+        } else {
+            Hsla {
+                l: (main.l * 0.45).max(0.18),
+                ..main
+            }
+        };
 
-                let pattern = pixel_pattern(seed);
-                let mut cells = Vec::new();
-
-                for (value, color) in [(1u8, main), (2u8, shade)] {
-                    cells.clear();
-
-                    for row in 0..PIXEL_GRID {
-                        for col in 0..PIXEL_GRID {
-                            if pattern[row * PIXEL_GRID + col] != value {
-                                continue;
-                            }
-
-                            let cell = clip_polygon(&cell_polygon(&bounds, row, col), &circle);
-                            if cell.len() >= 3 {
-                                cells.push(cell);
-                            }
-                        }
-                    }
-
-                    paint_polygons(window, cells.iter(), color);
+        for row in 0..GRID_SIZE {
+            for col in 0..GRID_SIZE {
+                let value = pattern[row * GRID_SIZE + col];
+                if value != 0 {
+                    let color = if value == 2 { shade } else { main };
+                    cells.push(
+                        div()
+                            .row_start(row as i16 + 1)
+                            .row_end(row as i16 + 2)
+                            .col_start(col as i16 + 1)
+                            .col_end(col as i16 + 2)
+                            .bg(color),
+                    );
                 }
-            },
-        )
-        .refine_style(&self.style)
-        .size(side)
-        .flex_shrink_0()
+            }
+        }
+
+        // Pad the grid so the art stays clear of the circular edge, keeping the
+        // inset look of signed's rounded-square frame.
+        let inset = self.side / (GRID_SIZE as f32 * 2.);
+
+        div()
+            .grid()
+            .grid_cols(GRID_SIZE as u16)
+            .grid_rows(GRID_SIZE as u16)
+            .size(self.side)
+            .p(inset)
+            .flex_shrink_0()
+            .rounded_full()
+            .overflow_hidden()
+            .bg(main.opacity(0.16))
+            .children(cells)
+            .refine_style(&self.style)
     }
 }
 
-/// Builds the mirrored fill pattern for `seed`.
-fn pixel_pattern(seed: u64) -> [u8; PIXEL_GRID * PIXEL_GRID] {
+/// The rendered side length of an avatar at `size`.
+fn side_length(size: Size) -> Pixels {
+    match size {
+        Size::XSmall => px(16.),
+        Size::Small => px(24.),
+        Size::Medium => px(48.),
+        Size::Large => px(80.),
+        Size::Size(size) => size,
+    }
+}
+
+fn pattern(seed: u64) -> [u8; GRID_SIZE * GRID_SIZE] {
     let mut rng = PixelRng::new(seed);
-    let mut pattern = [0u8; PIXEL_GRID * PIXEL_GRID];
+    let mut pattern = [0u8; GRID_SIZE * GRID_SIZE];
     let mut filled = 0usize;
 
-    let art_rows = PIXEL_GRID - 2 * MARGIN;
-    let art_columns = PIXEL_GRID / 2 - MARGIN;
+    // Only the inner rows and the inner left half are candidates; mirroring
+    // then keeps the art within the same inset, leaving the outer ring empty.
+    let art_rows = GRID_SIZE - 2 * MARGIN;
+    let art_columns = GRID_SIZE / 2 - MARGIN;
 
-    for row in MARGIN..PIXEL_GRID - MARGIN {
-        for col in MARGIN..PIXEL_GRID / 2 {
+    for row in MARGIN..GRID_SIZE - MARGIN {
+        for col in MARGIN..GRID_SIZE / 2 {
             if rng.chance(FILL_PROBABILITY) {
                 let accent = rng.chance(ACCENT_PROBABILITY);
                 set_cell(&mut pattern, row, col, if accent { 2 } else { 1 });
@@ -156,7 +230,7 @@ fn pixel_pattern(seed: u64) -> [u8; PIXEL_GRID * PIXEL_GRID] {
             let row = MARGIN + ix / art_columns;
             let col = MARGIN + ix % art_columns;
 
-            if pattern[row * PIXEL_GRID + col] == 0 {
+            if pattern[row * GRID_SIZE + col] == 0 {
                 set_cell(&mut pattern, row, col, 1);
                 filled += 1;
             }
@@ -166,146 +240,10 @@ fn pixel_pattern(seed: u64) -> [u8; PIXEL_GRID * PIXEL_GRID] {
     pattern
 }
 
-/// Paints `polygons` as a single anti-aliased filled path in `color`.
-fn paint_polygons<'a>(
-    window: &mut Window,
-    polygons: impl IntoIterator<Item = &'a Vec<Point<Pixels>>>,
-    color: Hsla,
-) {
-    let mut builder = PathBuilder::fill();
-    let mut painted = false;
-
-    for polygon in polygons {
-        if polygon.len() >= 3 {
-            builder.add_polygon(polygon, true);
-            painted = true;
-        }
-    }
-
-    if painted && let Ok(path) = builder.build() {
-        window.paint_path(path, color);
-    }
-}
-
-/// Approximates the circle of `radius` around `center` as a convex polygon wound left-interior.
-fn circle_polygon(center: Point<Pixels>, radius: f32) -> Vec<Point<Pixels>> {
-    let center_x = center.x.as_f32();
-    let center_y = center.y.as_f32();
-
-    (0..CIRCLE_SEGMENTS)
-        .map(|index| {
-            let angle = std::f32::consts::TAU * index as f32 / CIRCLE_SEGMENTS as f32;
-            point(
-                px(center_x + radius * angle.cos()),
-                px(center_y + radius * angle.sin()),
-            )
-        })
-        .collect()
-}
-
-/// The four corners of cell `(row, col)` of the grid laid out in `bounds`.
-fn cell_polygon(bounds: &Bounds<Pixels>, row: usize, col: usize) -> [Point<Pixels>; 4] {
-    let cell = bounds.size.width.as_f32() / PIXEL_GRID as f32;
-    let left = bounds.origin.x.as_f32() + col as f32 * cell;
-    let top = bounds.origin.y.as_f32() + row as f32 * cell;
-
-    [
-        point(px(left), px(top)),
-        point(px(left + cell), px(top)),
-        point(px(left + cell), px(top + cell)),
-        point(px(left), px(top + cell)),
-    ]
-}
-
-/// Clips `subject` to the convex `clip` polygon, keeping the part inside it.
-fn clip_polygon(subject: &[Point<Pixels>], clip: &[Point<Pixels>]) -> Vec<Point<Pixels>> {
-    let mut current = subject.to_vec();
-    let mut next = Vec::with_capacity(subject.len() + 4);
-
-    for (&start, &end) in clip.iter().zip(clip.iter().cycle().skip(1)) {
-        if current.is_empty() {
-            break;
-        }
-
-        next.clear();
-        let mut previous = match current.last() {
-            Some(&vertex) => vertex,
-            None => break,
-        };
-
-        for &vertex in current.iter() {
-            let previous_inside = is_inside(start, end, previous);
-            let vertex_inside = is_inside(start, end, vertex);
-
-            if vertex_inside {
-                if !previous_inside
-                    && let Some(crossing) = line_intersection(start, end, previous, vertex)
-                {
-                    next.push(crossing);
-                }
-                next.push(vertex);
-            } else if previous_inside
-                && let Some(crossing) = line_intersection(start, end, previous, vertex)
-            {
-                next.push(crossing);
-            }
-
-            previous = vertex;
-        }
-
-        std::mem::swap(&mut current, &mut next);
-    }
-
-    current
-}
-
-/// Whether `vertex` lies on the interior side of the directed edge `start -> end`.
-fn is_inside(start: Point<Pixels>, end: Point<Pixels>, vertex: Point<Pixels>) -> bool {
-    let start_x = start.x.as_f32();
-    let start_y = start.y.as_f32();
-    let edge_x = end.x.as_f32() - start_x;
-    let edge_y = end.y.as_f32() - start_y;
-    let to_vertex_x = vertex.x.as_f32() - start_x;
-    let to_vertex_y = vertex.y.as_f32() - start_y;
-
-    edge_x * to_vertex_y - edge_y * to_vertex_x >= 0.
-}
-
-/// The intersection of segment `from -> to` with the infinite line `start -> end`.
-fn line_intersection(
-    start: Point<Pixels>,
-    end: Point<Pixels>,
-    from: Point<Pixels>,
-    to: Point<Pixels>,
-) -> Option<Point<Pixels>> {
-    let start_x = start.x.as_f32();
-    let start_y = start.y.as_f32();
-    let edge_x = end.x.as_f32() - start_x;
-    let edge_y = end.y.as_f32() - start_y;
-    let from_x = from.x.as_f32();
-    let from_y = from.y.as_f32();
-    let segment_x = to.x.as_f32() - from_x;
-    let segment_y = to.y.as_f32() - from_y;
-    let denominator = edge_x * segment_y - edge_y * segment_x;
-
-    if denominator.abs() < f32::EPSILON {
-        return None;
-    }
-
-    let offset_x = from_x - start_x;
-    let offset_y = from_y - start_y;
-    let t = (edge_y * offset_x - edge_x * offset_y) / denominator;
-
-    Some(point(
-        px(from_x + segment_x * t),
-        px(from_y + segment_y * t),
-    ))
-}
-
-/// Fills `cell (row, col)` and its horizontal mirror.
-fn set_cell(pattern: &mut [u8; PIXEL_GRID * PIXEL_GRID], row: usize, col: usize, value: u8) {
-    pattern[row * PIXEL_GRID + col] = value;
-    pattern[row * PIXEL_GRID + (PIXEL_GRID - 1 - col)] = value;
+/// Fill `cell (row, col)` and its horizontal mirror.
+fn set_cell(pattern: &mut [u8; GRID_SIZE * GRID_SIZE], row: usize, col: usize, value: u8) {
+    pattern[row * GRID_SIZE + col] = value;
+    pattern[row * GRID_SIZE + (GRID_SIZE - 1 - col)] = value;
 }
 
 /// FNV-1a 64-bit hash, stable across platforms and runs.
@@ -337,109 +275,5 @@ impl PixelRng {
 
     fn chance(&mut self, probability: f32) -> bool {
         self.next() as f32 / (u64::MAX as f32) < probability
-    }
-}
-
-/// Renders the generated pixel avatar shown in place of a missing picture.
-fn generated_avatar(seed: Option<&str>, size: Pixels) -> AnyElement {
-    PixelAvatar::new(seed.unwrap_or(FALLBACK_SEED))
-        .with_size(size)
-        .into_any_element()
-}
-
-/// An element that renders a user avatar with customizable appearance options.
-#[derive(IntoElement)]
-pub struct Avatar {
-    base: Div,
-    picture: Option<ImageSource>,
-    seed: Option<String>,
-    style: StyleRefinement,
-    size: Size,
-    selected: bool,
-}
-
-impl Avatar {
-    /// Creates an avatar for an entity whose profile picture may be missing.
-    pub fn new(picture: Option<SharedString>) -> Self {
-        Self::from_source(picture)
-    }
-
-    /// Creates an avatar from an already-resolved source, which may be missing.
-    pub fn from_source(picture: Option<impl Into<ImageSource>>) -> Self {
-        Self::from_picture(picture.map(Into::into))
-    }
-
-    fn from_picture(picture: Option<ImageSource>) -> Self {
-        Avatar {
-            base: div(),
-            picture,
-            seed: None,
-            style: StyleRefinement::default(),
-            size: Size::Medium,
-            selected: false,
-        }
-    }
-
-    /// Sets the seed for the generated pixel avatar.
-    pub fn seed(mut self, seed: impl Into<String>) -> Self {
-        self.seed = Some(seed.into());
-        self
-    }
-}
-
-impl Sizable for Avatar {
-    fn with_size(mut self, size: impl Into<Size>) -> Self {
-        self.size = size.into();
-        self
-    }
-}
-
-impl Styled for Avatar {
-    fn style(&mut self) -> &mut StyleRefinement {
-        &mut self.style
-    }
-}
-
-impl Selectable for Avatar {
-    fn is_selected(&self) -> bool {
-        self.selected
-    }
-
-    fn selected(mut self, selected: bool) -> Self {
-        self.selected = selected;
-        self
-    }
-}
-
-impl InteractiveElement for Avatar {
-    fn interactivity(&mut self) -> &mut Interactivity {
-        self.base.interactivity()
-    }
-}
-
-impl RenderOnce for Avatar {
-    fn render(self, window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let image_size = avatar_size(self.size).to_pixels(window.rem_size());
-
-        let content = match self.picture {
-            Some(picture) => {
-                let seed = self.seed;
-
-                img(picture)
-                    .size(image_size)
-                    .rounded_full()
-                    .object_fit(ObjectFit::Cover)
-                    .with_fallback(move || generated_avatar(seed.as_deref(), image_size))
-                    .into_any_element()
-            }
-            None => generated_avatar(self.seed.as_deref(), image_size),
-        };
-
-        div()
-            .flex_shrink_0()
-            .size(image_size)
-            .rounded_full()
-            .overflow_hidden()
-            .child(content)
     }
 }

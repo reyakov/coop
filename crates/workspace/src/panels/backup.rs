@@ -1,16 +1,18 @@
 use anyhow::Error;
 use gpui::{
-    AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
-    Focusable, IntoElement, ParentElement, Render, SharedString, Styled, Task, Window, div, px,
+    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    IntoElement, ParentElement, Render, SharedString, Styled, Task, Window, div,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dock::{Panel, PanelEvent};
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::separator::Separator;
+use gpui_kit::component::{ActiveTheme, Sizable, v_flex};
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use state::USER_KEYRING;
-use theme::{ActiveTheme, TextStyle, Typeset as _};
-use ui::button::{Button, ButtonVariants};
-use ui::dock::{Panel, PanelEvent};
-use ui::input::{Input, InputState};
-use ui::{IconName, Sizable, StyledExt, divider, v_flex};
 
 const MSG: &str = "Store your account keys in a safe location. \
                    You can restore your account or move to another client anytime you want.";
@@ -106,13 +108,15 @@ impl BackupPanel {
     }
 }
 
-impl Panel for BackupPanel {
-    fn panel_id(&self) -> SharedString {
-        self.name.clone()
+impl gpui_kit::component::dock::BasePanel for BackupPanel {
+    fn panel_name(&self) -> &'static str {
+        "Backup"
     }
+}
 
-    fn title(&self, _cx: &App) -> AnyElement {
-        self.name.clone().into_any_element()
+impl Panel for BackupPanel {
+    fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        self.name.clone()
     }
 }
 
@@ -132,26 +136,26 @@ impl Render for BackupPanel {
             .w_full()
             .child(
                 div()
-                    .text_style(TextStyle::Caption)
-                    .text_color(cx.theme().text_muted)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
                     .child(SharedString::from(MSG)),
             )
-            .child(divider(cx))
+            .child(Separator::horizontal())
             .child(
                 v_flex()
-                    .gap(px(theme::SPACE))
+                    .gap_2()
                     .flex_1()
                     .w_full()
-                    .text_style(TextStyle::Callout)
+                    .text_xs()
                     .child(
                         v_flex()
                             .gap_1p5()
                             .w_full()
                             .child(
                                 div()
-                                    .text_style(TextStyle::Caption)
+                                    .text_xs()
                                     .font_semibold()
-                                    .text_color(cx.theme().text_muted)
+                                    .text_color(cx.theme().muted_foreground)
                                     .child(SharedString::from("Public Key:")),
                             )
                             .child(Input::new(&self.npub_input).small().disabled(true)),
@@ -162,9 +166,9 @@ impl Render for BackupPanel {
                             .w_full()
                             .child(
                                 div()
-                                    .text_style(TextStyle::Caption)
+                                    .text_xs()
                                     .font_semibold()
-                                    .text_color(cx.theme().text_muted)
+                                    .text_color(cx.theme().muted_foreground)
                                     .child(SharedString::from("Secret Key:")),
                             )
                             .child(Input::new(&self.nsec_input).small().disabled(true)),
@@ -181,7 +185,6 @@ impl Render for BackupPanel {
                             })
                             .primary()
                             .small()
-                            .font_semibold()
                             .on_click(cx.listener(move |this, _ev, _window, cx| {
                                 this.copy_secret(cx);
                             })),

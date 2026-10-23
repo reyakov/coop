@@ -12,7 +12,7 @@ nip29 = { path = "../nip29" }
 person = { path = "../person" }
 settings = { path = "../settings" }
 state = { path = "../state" }
-theme = { path = "../theme" }
+gpui-kit.workspace = true
 ui = { path = "../ui" }
 
 gpui.workspace = true

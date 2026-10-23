@@ -4,13 +4,13 @@ use gpui::{
     AnyElement, App, AppContext, Context, IntoElement, ParentElement, SharedString, Styled, Task,
     Window, div,
 };
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dock::{DockPlacement, PanelHandle};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
 use nostr_sdk::prelude::*;
 use state::NostrRegistry;
-use theme::{ActiveTheme, TextStyle, Typeset as _};
-use ui::button::{Button, ButtonVariants};
-use ui::dock::{DockPlacement, PanelHandle};
-use ui::notification::Notification;
-use ui::{StyledExt, WindowExtension, h_flex, v_flex};
 
 use super::Sidebar;
 use super::rows::SidebarRow;
@@ -127,7 +127,7 @@ impl Sidebar {
             })?;
 
             cx.update(|window, cx| {
-                ui::dock::add_panel_to(
+                crate::dock::add_panel_to(
                     &dock,
                     PanelHandle::new(chat_ui::init(room.downgrade(), window, cx)),
                     DockPlacement::Center,
@@ -193,9 +193,8 @@ impl Sidebar {
             .h_20()
             .w_full()
             .px_4()
-            .border_t_1()
-            .border_color(cx.theme().border)
-            .bg(cx.theme().bg)
+            .bg(cx.theme().sidebar)
+            .text_color(cx.theme().sidebar_foreground)
             .child(
                 Button::new("create-chat")
                     .label(if self.selected_contacts.len() > 1 {
@@ -211,9 +210,11 @@ impl Sidebar {
             .child(
                 h_flex()
                     .gap_1()
-                    .text_style(TextStyle::Caption)
-                    .text_color(cx.theme().text_muted)
-                    .child("Selected")
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .text_center()
+                    .justify_center()
+                    .child("Selected:")
                     .child(
                         div()
                             .font_semibold()

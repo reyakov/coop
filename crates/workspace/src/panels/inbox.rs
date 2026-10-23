@@ -1,10 +1,10 @@
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    ParentElement, Render, SharedString, Styled, Window,
 };
-use theme::{ActiveTheme, TextStyle, Typeset as _};
-use ui::dock::{Panel, PanelEvent};
-use ui::{Icon, IconName, Sizable, h_flex};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::dock::{Panel, PanelEvent};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex};
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<InboxPanel> {
     cx.new(|cx| InboxPanel::new(window, cx))
@@ -24,18 +24,20 @@ impl InboxPanel {
     }
 }
 
-impl Panel for InboxPanel {
-    fn panel_id(&self) -> SharedString {
-        self.name.clone()
+impl gpui_kit::component::dock::BasePanel for InboxPanel {
+    fn panel_name(&self) -> &'static str {
+        "Inbox"
     }
+}
 
-    fn title(&self, cx: &App) -> AnyElement {
+impl Panel for InboxPanel {
+    fn title(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .gap_1p5()
             .child(
                 Icon::new(IconName::Inbox)
                     .small()
-                    .text_color(cx.theme().text_faint),
+                    .text_color(cx.theme().muted_foreground),
             )
             .child(self.name.clone())
             .into_any_element()
@@ -55,8 +57,8 @@ impl Render for InboxPanel {
         h_flex()
             .size_full()
             .justify_center()
-            .text_style(TextStyle::Callout)
-            .text_color(cx.theme().text_muted)
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
             .child(self.name.clone())
     }
 }

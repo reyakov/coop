@@ -4,17 +4,17 @@ use gpui::http_client::{AsyncBody, HttpClient};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Entity, IntoElement, ParentElement, SharedString, Styled,
-    WeakEntity, Window, div, px,
+    WeakEntity, Window, div,
 };
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dialog::DialogButtonProps;
+use gpui_kit::component::input::InputState;
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
 use nip29::{Group, GroupId, GroupMetadata};
 use nostr_sdk::prelude::RelayUrl;
-use theme::{ActiveTheme, TextStyle, Typeset as _};
-use ui::button::{Button, ButtonVariants};
-use ui::dialog::DialogButtonProps;
-use ui::input::InputState;
-use ui::notification::Notification;
-use ui::switch::Switch;
-use ui::{Sizable, WindowExtension, h_flex, v_flex};
+use ui::settings_row;
 
 use crate::util::field;
 
@@ -99,12 +99,21 @@ pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) 
         let current = *flags.read(cx);
         let supported = *livekit.read(cx) != Some(false);
 
-        this.confirm()
+        this.close_button(true)
             .title("Edit Group")
             .button_props(
                 DialogButtonProps::default()
                     .cancel_text("Cancel")
                     .ok_text("Save"),
+            )
+            .footer(
+                gpui_kit::component::dialog::DialogFooter::new().child(
+                    gpui_kit::component::dialog::DialogAction::new().child(
+                        gpui_kit::component::button::Button::new("save")
+                            .label("Save")
+                            .primary(),
+                    ),
+                ),
             )
             .child(
                 v_flex()
@@ -116,59 +125,62 @@ pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) 
                     .child(children_section(&children, cx))
                     .child(
                         v_flex()
-                            .gap(px(theme::SPACE))
-                            .child(
+                            .gap_2()
+                            .child(settings_row(
+                                "Private",
+                                "Only members can read group messages",
                                 Switch::new("private")
-                                    .label("Private")
-                                    .description("Only members can read group messages")
                                     .checked(current.private)
                                     .on_click(toggle(&flags, |flags| &mut flags.private)),
-                            )
-                            .child(
+                                cx,
+                            ))
+                            .child(settings_row(
+                                "Restricted",
+                                "Only members can post messages",
                                 Switch::new("restricted")
-                                    .label("Restricted")
-                                    .description("Only members can post messages")
                                     .checked(current.restricted)
                                     .on_click(toggle(&flags, |flags| &mut flags.restricted)),
-                            )
-                            .child(
+                                cx,
+                            ))
+                            .child(settings_row(
+                                "Hidden",
+                                "Hidden from non-members, not discoverable",
                                 Switch::new("hidden")
-                                    .label("Hidden")
-                                    .description("Hidden from non-members, not discoverable")
                                     .checked(current.hidden)
                                     .on_click(toggle(&flags, |flags| &mut flags.hidden)),
-                            )
-                            .child(
+                                cx,
+                            ))
+                            .child(settings_row(
+                                "Closed",
+                                "Join requests are ignored (invite-only)",
                                 Switch::new("closed")
-                                    .label("Closed")
-                                    .description("Join requests are ignored (invite-only)")
                                     .checked(current.closed)
                                     .on_click(toggle(&flags, |flags| &mut flags.closed)),
-                            )
-                            .child(
-                                Switch::new("livekit")
-                                    .label("LiveKit")
-                                    .description(if supported {
-                                        "Announce audio and video support."
-                                    } else {
-                                        "The relay doesn't announce LiveKit support."
-                                    })
-                                    .checked(current.livekit)
-                                    .on_click({
-                                        let flags = flags.clone();
-                                        let livekit = livekit.clone();
+                                cx,
+                            ))
+                            .child(settings_row(
+                                "LiveKit",
+                                if supported {
+                                    "Announce audio and video support."
+                                } else {
+                                    "The relay doesn't announce LiveKit support."
+                                },
+                                Switch::new("livekit").checked(current.livekit).on_click({
+                                    let flags = flags.clone();
+                                    let livekit = livekit.clone();
 
-                                        move |next, _window, cx| {
-                                            if *next && *livekit.read(cx) == Some(false) {
-                                                return;
-                                            }
-                                            flags.update(cx, |flags, cx| {
-                                                flags.livekit = *next;
-                                                cx.notify();
-                                            });
+                                    move |next, _window, cx| {
+                                        if *next && *livekit.read(cx) == Some(false) {
+                                            return;
                                         }
-                                    }),
-                            ),
+                                        flags.update(cx, |flags, cx| {
+                                            flags.livekit = *next;
+                                            cx.notify();
+                                        });
+                                    }
+                                }),
+                                cx,
+                            )),
                     ),
             )
             .on_ok({
@@ -262,15 +274,15 @@ fn children_section(children: &Entity<Vec<GroupId>>, cx: &App) -> AnyElement {
 
     let mut section = v_flex()
         .gap_1()
-        .text_style(TextStyle::Callout)
-        .text_color(cx.theme().text_muted)
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
         .child("Children");
 
     if list.is_empty() {
         return section
             .child(
                 div()
-                    .text_color(cx.theme().text_faint)
+                    .text_color(cx.theme().muted_foreground)
                     .child("No subgroups"),
             )
             .into_any_element();
@@ -295,7 +307,7 @@ fn children_section(children: &Entity<Vec<GroupId>>, cx: &App) -> AnyElement {
                     div()
                         .min_w_0()
                         .truncate()
-                        .text_color(cx.theme().text)
+                        .text_color(cx.theme().foreground)
                         .child(SharedString::from(child.as_str().to_owned())),
                 )
                 .child(order),

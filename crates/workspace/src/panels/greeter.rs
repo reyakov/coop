@@ -7,22 +7,23 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, div, px, svg,
+    StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window, div, svg,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelHandle};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, StateEvent};
-use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius};
-use ui::avatar::Avatar;
-use ui::button::{Button, ButtonVariants};
-use ui::dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelHandle, add_panel_to};
-use ui::group_box::{GroupBox, GroupBoxVariants};
-use ui::nav::Nav;
-use ui::scroll::ScrollableElement;
-use ui::{Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
+use ui::Avatar;
 
 use super::browse;
+use crate::dock::add_panel_to;
+use crate::nav::Nav;
 use crate::sidebar::open_room;
 
 /// How many requests and follow ups to show per section.
@@ -44,7 +45,6 @@ pub fn init(dock: WeakEntity<DockArea>, window: &mut Window, cx: &mut App) -> En
 }
 
 pub struct GreeterPanel {
-    name: SharedString,
     focus_handle: FocusHandle,
     dock: WeakEntity<DockArea>,
 
@@ -98,7 +98,6 @@ impl GreeterPanel {
         });
 
         Self {
-            name: "Onboarding".into(),
             focus_handle: cx.focus_handle(),
             dock,
             requests: vec![],
@@ -205,9 +204,9 @@ impl GreeterPanel {
                     .border_1()
                     .border_dashed()
                     .border_color(cx.theme().border)
-                    .rounded(px(button_radius()))
-                    .text_style(TextStyle::Caption)
-                    .text_color(cx.theme().text_faint)
+                    .rounded(cx.theme().radius)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
                     .child("No chat requests")
                     .into_any_element(),
             ]
@@ -219,7 +218,6 @@ impl GreeterPanel {
                     let room = room.clone();
                     let dock = dock.clone();
                     let name = room.read(cx).display_name(cx);
-                    let picture = room.read(cx).display_image(cx);
                     let seed = room.read(cx).display_image_seed(cx);
                     let created_at = room.read(cx).created_at.to_ago();
                     let preview = preview.clone();
@@ -231,9 +229,9 @@ impl GreeterPanel {
                         .h_9()
                         .px_1p5()
                         .gap_2()
-                        .rounded(px(button_radius()))
+                        .rounded(cx.theme().radius)
                         .cursor_pointer()
-                        .hover(|this| this.bg(cx.theme().element_hover))
+                        .hover(|this| this.bg(cx.theme().list_hover))
                         .on_click({
                             let room = room.clone();
                             let dock = dock.clone();
@@ -242,25 +240,18 @@ impl GreeterPanel {
                             }
                         })
                         .child(
-                            Avatar::from_source(picture)
+                            Avatar::new(room.read(cx).display_image(cx))
                                 .seed(seed)
-                                .small()
-                                .flex_shrink_0(),
+                                .small(),
                         )
-                        .child(
-                            div()
-                                .min_w_0()
-                                .truncate()
-                                .text_style(TextStyle::Callout)
-                                .child(name),
-                        )
+                        .child(div().min_w_0().truncate().text_sm().child(name))
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .truncate()
-                                .text_style(TextStyle::Callout)
-                                .text_color(cx.theme().text_muted)
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
                                 .italic()
                                 .child(preview),
                         )
@@ -283,8 +274,8 @@ impl GreeterPanel {
                                         .child(
                                             div()
                                                 .text_align(gpui::TextAlign::Right)
-                                                .text_style(TextStyle::Caption)
-                                                .text_color(cx.theme().text_faint)
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
                                                 .child(created_at),
                                         ),
                                 )
@@ -310,11 +301,24 @@ impl GreeterPanel {
                 .collect()
         };
 
-        GroupBox::new()
-            .id("requests")
-            .title("Requests")
-            .fill()
-            .child(v_flex().gap_0().w_full().children(rows))
+        v_flex()
+            .gap_2()
+            .child(
+                div()
+                    .text_color(cx.theme().muted_foreground)
+                    .text_xs()
+                    .font_semibold()
+                    .child("Requests"),
+            )
+            .child(
+                v_flex()
+                    .px_2()
+                    .py_1()
+                    .rounded(cx.theme().radius_lg)
+                    .bg(cx.theme().group_box)
+                    .text_color(cx.theme().group_box_foreground)
+                    .children(rows),
+            )
             .into_any_element()
     }
 
@@ -333,7 +337,6 @@ impl GreeterPanel {
                 let room = room.clone();
                 let dock = dock.clone();
                 let name = room.read(cx).display_name(cx);
-                let picture = room.read(cx).display_image(cx);
                 let seed = room.read(cx).display_image_seed(cx);
                 let created_at = room.read(cx).created_at.to_ago();
                 let preview = preview.clone();
@@ -345,9 +348,9 @@ impl GreeterPanel {
                     .h_9()
                     .px_1p5()
                     .gap_2()
-                    .rounded(px(button_radius()))
+                    .rounded(cx.theme().radius)
                     .cursor_pointer()
-                    .hover(|this| this.bg(cx.theme().element_hover))
+                    .hover(|this| this.bg(cx.theme().list_hover))
                     .on_click({
                         let room = room.clone();
                         let dock = dock.clone();
@@ -356,25 +359,18 @@ impl GreeterPanel {
                         }
                     })
                     .child(
-                        Avatar::from_source(picture)
+                        Avatar::new(room.read(cx).display_image(cx))
                             .seed(seed)
-                            .small()
-                            .flex_shrink_0(),
+                            .small(),
                     )
-                    .child(
-                        div()
-                            .min_w_0()
-                            .truncate()
-                            .text_style(TextStyle::Callout)
-                            .child(name),
-                    )
+                    .child(div().min_w_0().truncate().text_sm().child(name))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_style(TextStyle::Callout)
-                            .text_color(cx.theme().text_muted)
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
                             .italic()
                             .child(preview),
                     )
@@ -397,8 +393,8 @@ impl GreeterPanel {
                                     .child(
                                         div()
                                             .text_align(gpui::TextAlign::Right)
-                                            .text_style(TextStyle::Caption)
-                                            .text_color(cx.theme().text_faint)
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
                                             .child(created_at),
                                     ),
                             )
@@ -424,11 +420,24 @@ impl GreeterPanel {
             .collect();
 
         Some(
-            GroupBox::new()
-                .id("follow-ups")
-                .title("Follow ups")
-                .fill()
-                .child(v_flex().gap_0().w_full().children(rows))
+            v_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .text_color(cx.theme().muted_foreground)
+                        .text_xs()
+                        .font_semibold()
+                        .child("Follow ups"),
+                )
+                .child(
+                    v_flex()
+                        .px_2()
+                        .py_1()
+                        .rounded(cx.theme().radius_lg)
+                        .bg(cx.theme().group_box)
+                        .text_color(cx.theme().group_box_foreground)
+                        .children(rows),
+                )
                 .into_any_element(),
         )
     }
@@ -439,8 +448,8 @@ impl GreeterPanel {
             .w_full()
             .child(
                 div()
-                    .text_color(cx.theme().text_muted)
-                    .text_style(TextStyle::Subheadline)
+                    .text_color(cx.theme().muted_foreground)
+                    .text_xs()
                     .font_semibold()
                     .child("Find new friends"),
             )
@@ -449,13 +458,9 @@ impl GreeterPanel {
                     .w_full()
                     .child(
                         Nav::new("browse-group")
-                            .prefix(
-                                Icon::new(IconName::Compass)
-                                    .small()
-                                    .text_color(cx.theme().text_faint),
-                            )
+                            .prefix(Icon::new(IconName::Compass))
                             .label("Browse Public Groups")
-                            .text_style(TextStyle::Callout)
+                            .text_sm()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let panel = browse::init(this.dock.clone(), window, cx);
                                 add_panel_to(
@@ -469,9 +474,9 @@ impl GreeterPanel {
                     )
                     .child(
                         Nav::new("browse-posts")
-                            .prefix(Icon::new(IconName::Link).small())
+                            .prefix(Icon::new(IconName::Link))
                             .label("Browse Nostr via Jumble")
-                            .text_style(TextStyle::Callout)
+                            .text_sm()
                             .on_click(|_, _, cx| {
                                 cx.open_url(JUMBLE_URL);
                             }),
@@ -480,20 +485,22 @@ impl GreeterPanel {
     }
 }
 
-impl Panel for GreeterPanel {
-    fn panel_id(&self) -> SharedString {
-        self.name.clone()
+impl gpui_kit::component::dock::BasePanel for GreeterPanel {
+    fn panel_name(&self) -> &'static str {
+        "Welcome"
     }
+}
 
-    fn title(&self, cx: &App) -> AnyElement {
+impl Panel for GreeterPanel {
+    fn title(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
             .gap_1()
-            .text_style(TextStyle::Caption)
+            .text_xs()
             .child(
                 svg()
                     .path("brand/coop.svg")
                     .size_4()
-                    .text_color(cx.theme().text_muted),
+                    .text_color(cx.theme().muted_foreground),
             )
             .child("Welcome")
             .into_any_element()
@@ -520,7 +527,7 @@ impl Render for GreeterPanel {
                     svg()
                         .path("brand/coop.svg")
                         .size_12()
-                        .text_color(cx.theme().text_faint),
+                        .text_color(cx.theme().muted_foreground),
                 )
             })
             .when(logged_in, |this| {

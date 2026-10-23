@@ -1,14 +1,22 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use chat_ui::text::rendered_text;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FollowMode, ImageSource, IntoElement, ListAlignment, ListScrollEvent, ListState, ParentElement,
+    FollowMode, IntoElement, ListAlignment, ListScrollEvent, ListState, ParentElement,
     PathPromptOptions, Render, SharedString, Styled, Subscription, Task, WeakEntity, Window, div,
     list, px,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
+use gpui_kit::component::dialog::DialogButtonProps;
+use gpui_kit::component::dock::{Panel, PanelEvent};
+use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::scroll::Scrollbar;
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, WindowExt, h_flex, v_flex};
 use nip29::{Group, GroupEvent, GroupKey, GroupsRegistry, Membership, Pin, Row};
 use nostr_sdk::prelude::*;
 use person::Directory;
@@ -16,17 +24,7 @@ use serde::Deserialize;
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, upload};
-use theme::{ActiveTheme, TextStyle, Typeset as _, control_radius};
-use ui::avatar::Avatar;
-use ui::button::{Button, ButtonVariant, ButtonVariants};
-use ui::dialog::DialogButtonProps;
-use ui::dock::{Panel, PanelEvent};
-use ui::input::{InputEvent, Textarea, TextareaState};
-use ui::markdown::RenderedText;
-use ui::message::WelcomeMessage;
-use ui::notification::Notification;
-use ui::scroll::Scrollbar;
-use ui::{Disableable, Icon, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::{Avatar, RenderedText, WelcomeMessage, rendered_text};
 use util::{attachment_name, display_name, opens_run, pin_label, report};
 
 mod details;
@@ -123,7 +121,7 @@ pub fn actions(group: WeakEntity<Group>, cx: &App) -> AnyElement {
         .when(admin, |this| {
             this.child(
                 Button::new("edit")
-                    .icon(IconName::Edit)
+                    .icon(IconName::SquarePen)
                     .tooltip("Edit group")
                     .ghost()
                     .small()
@@ -133,7 +131,7 @@ pub fn actions(group: WeakEntity<Group>, cx: &App) -> AnyElement {
             )
             .child(
                 Button::new("group-invite")
-                    .icon(IconName::Invite)
+                    .icon(IconName::UserRoundPlus)
                     .tooltip("Invite people")
                     .ghost()
                     .small()
@@ -164,7 +162,7 @@ pub fn actions(group: WeakEntity<Group>, cx: &App) -> AnyElement {
             )
             .child(
                 Button::new("group-delete")
-                    .icon(IconName::CloseCircle)
+                    .icon(IconName::CircleX)
                     .tooltip("Delete group")
                     .ghost()
                     .small()
@@ -175,7 +173,7 @@ pub fn actions(group: WeakEntity<Group>, cx: &App) -> AnyElement {
         })
         .child(
             Button::new("leave")
-                .icon(IconName::Logout)
+                .icon(IconName::LogOut)
                 .tooltip("Leave group")
                 .ghost()
                 .small()
@@ -195,7 +193,7 @@ pub fn confirm_leave(group: WeakEntity<Group>, window: &mut Window, cx: &mut App
         return;
     };
 
-    window.open_dialog(cx, move |this, _window, _cx| {
+    window.open_alert_dialog(cx, move |this, _window, _cx| {
         let key = key.clone();
 
         this.confirm()
@@ -209,7 +207,7 @@ pub fn confirm_leave(group: WeakEntity<Group>, window: &mut Window, cx: &mut App
             )
             .child(
                 div()
-                    .text_style(TextStyle::Callout)
+                    .text_xs()
                     .child("You will stop receiving messages from this group."),
             )
             .on_ok(move |_event, _window, cx| {
@@ -231,7 +229,7 @@ pub fn confirm_delete(group: WeakEntity<Group>, window: &mut Window, cx: &mut Ap
         return;
     };
 
-    window.open_dialog(cx, move |this, _window, _cx| {
+    window.open_alert_dialog(cx, move |this, _window, _cx| {
         let key = key.clone();
 
         this.confirm()
@@ -245,7 +243,7 @@ pub fn confirm_delete(group: WeakEntity<Group>, window: &mut Window, cx: &mut Ap
             )
             .child(
                 div()
-                    .text_style(TextStyle::Callout)
+                    .text_xs()
                     .child("The relay will remove this group for everyone."),
             )
             .on_ok(move |_event, window, cx| {
@@ -305,7 +303,6 @@ fn put_user(
 }
 
 pub struct GroupPanel {
-    id: SharedString,
     focus_handle: FocusHandle,
     group: WeakEntity<Group>,
     /// Person directory for members, message authors, and activity subjects
@@ -328,16 +325,11 @@ pub struct GroupPanel {
 
 impl GroupPanel {
     pub(crate) fn new(group: Entity<Group>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let (id, name, count, head) = {
+        let (name, count, head) = {
             let group = group.read(cx);
             let rows = group.rows();
 
-            (
-                SharedString::from(format!("group-{}", group.key().cache_tag())),
-                display_name(group),
-                rows.len(),
-                rows.first().map(Row::id),
-            )
+            (display_name(group), rows.len(), rows.first().map(Row::id))
         };
 
         let input = cx.new(|cx| {
@@ -383,7 +375,6 @@ impl GroupPanel {
         });
 
         let mut this = Self {
-            id,
             focus_handle: cx.focus_handle(),
             group: group.downgrade(),
             directory: Directory::new(cx),
@@ -721,16 +712,16 @@ impl GroupPanel {
         h_flex()
             .flex_shrink_0()
             .w_full()
-            .gap(px(theme::SPACE))
+            .gap_2()
             .px_3()
             .py_2()
-            .text_style(TextStyle::Callout)
+            .text_xs()
             .border_b_1()
             .border_color(cx.theme().border)
             .child(
                 Icon::new(IconName::Info)
                     .small()
-                    .text_color(cx.theme().text_faint),
+                    .text_color(cx.theme().muted_foreground),
             )
             .child(div().flex_1().min_w_0().truncate().child(message))
             .child(
@@ -759,11 +750,11 @@ impl GroupPanel {
         h_flex()
             .flex_shrink_0()
             .w_full()
-            .gap(px(theme::SPACE))
+            .gap_2()
             .px_3()
             .py_2()
-            .text_style(TextStyle::Callout)
-            .bg(cx.theme().surface_raised)
+            .text_xs()
+            .bg(cx.theme().secondary)
             .child(
                 Icon::new(IconName::Info)
                     .small()
@@ -788,7 +779,7 @@ impl GroupPanel {
                     )
                     .child(
                         Button::new("dismiss")
-                            .icon(IconName::Close)
+                            .icon(IconName::X)
                             .small()
                             .ghost()
                             .tooltip("Close")
@@ -826,10 +817,10 @@ impl GroupPanel {
                 div()
                     .px_1p5()
                     .py_0p5()
-                    .rounded(px(control_radius()))
-                    .bg(cx.theme().solid)
-                    .text_style(TextStyle::Caption)
-                    .text_color(cx.theme().text_muted)
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().primary)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
                     .child(pin_label(group, pin))
             }))
             .into_any_element()
@@ -839,17 +830,18 @@ impl GroupPanel {
         let (name, avatar) = match self.group.upgrade() {
             Some(group) => {
                 let group = group.read(cx);
-                let seed = group.key().cache_tag();
                 let picture = group
                     .metadata()
                     .and_then(|metadata| metadata.picture.clone());
 
                 (
                     display_name(group),
-                    Avatar::from_source(picture).seed(seed).large(),
+                    Avatar::new(picture.map(Into::into))
+                        .seed(group.key().cache_tag())
+                        .large(),
                 )
             }
-            None => (SharedString::from("this group"), Avatar::new(None)),
+            None => (SharedString::from("this group"), Avatar::new(None).large()),
         };
 
         WelcomeMessage::new("welcome")
@@ -906,11 +898,11 @@ impl GroupPanel {
             .w_full()
             .justify_center()
             .items_center()
-            .gap(px(theme::SPACE))
+            .gap_2()
             .px_3()
             .py_2()
-            .text_style(TextStyle::Callout)
-            .text_color(cx.theme().text_muted);
+            .text_xs()
+            .text_color(cx.theme().muted_foreground);
 
         match notice {
             Notice::Relay(reason) => row
@@ -941,7 +933,7 @@ impl GroupPanel {
                         Button::new("join")
                             .label("Request to Join")
                             .small()
-                            .ghost_alt()
+                            .ghost()
                             .on_click(cx.listener(move |this, _event, _window, cx| {
                                 this.request_join(key.clone(), cx);
                             })),
@@ -993,7 +985,10 @@ impl GroupPanel {
             .or_insert_with(|| {
                 rendered_text(
                     &message.content,
-                    &message.mentions,
+                    message
+                        .mentions
+                        .iter()
+                        .map(|mention| (mention.range.clone(), mention.public_key)),
                     &message.emojis,
                     &directory,
                     cx,
@@ -1071,7 +1066,6 @@ impl GroupPanel {
                             .loading(self.uploading)
                             .disabled(self.uploading)
                             .ghost()
-                            .large()
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.upload(window, cx);
                             })),
@@ -1079,10 +1073,9 @@ impl GroupPanel {
                     .child(Textarea::new(&self.input).appearance(false).flex_1())
                     .child(
                         Button::new("send")
-                            .icon(IconName::PaperPlaneFill)
+                            .icon(ui::IconName::PaperPlaneFill)
                             .tooltip("Send")
                             .ghost()
-                            .large()
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.send(window, cx);
                             })),
@@ -1119,13 +1112,13 @@ impl GroupPanel {
             .gap_1()
             .px_2()
             .py_1()
-            .rounded(px(control_radius()))
-            .bg(cx.theme().surface_raised)
-            .text_style(TextStyle::Caption)
+            .rounded(cx.theme().radius)
+            .bg(cx.theme().secondary)
+            .text_xs()
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_color(cx.theme().text_muted)
+                    .text_color(cx.theme().muted_foreground)
                     .child("Replying to"),
             )
             .child(
@@ -1134,7 +1127,7 @@ impl GroupPanel {
                     .max_w(px(140.))
                     .truncate()
                     .font_semibold()
-                    .text_color(cx.theme().text)
+                    .text_color(cx.theme().foreground)
                     .child(author),
             )
             .child(
@@ -1142,12 +1135,12 @@ impl GroupPanel {
                     .min_w_0()
                     .flex_1()
                     .truncate()
-                    .text_color(cx.theme().text_faint)
+                    .text_color(cx.theme().muted_foreground)
                     .child(snippet),
             )
             .child(
                 Button::new("cancel-reply")
-                    .icon(IconName::Close)
+                    .icon(ui::IconName::Close)
                     .tooltip("Cancel reply")
                     .ghost()
                     .small()
@@ -1171,10 +1164,10 @@ impl GroupPanel {
                     .h_8()
                     .px_2()
                     .border_1()
-                    .border_color(cx.theme().border_faint)
-                    .rounded(px(control_radius()))
-                    .text_style(TextStyle::Caption)
-                    .text_color(cx.theme().text_muted)
+                    .border_color(cx.theme().border)
+                    .rounded(cx.theme().radius)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
                     .child(Icon::new(IconName::Link).xsmall())
                     .child(
                         div()
@@ -1184,7 +1177,7 @@ impl GroupPanel {
                     )
                     .child(
                         Button::new(SharedString::from(format!("remove-attachment-{ix}")))
-                            .icon(IconName::Close)
+                            .icon(ui::IconName::Close)
                             .tooltip("Remove")
                             .ghost()
                             .xsmall()
@@ -1198,45 +1191,12 @@ impl GroupPanel {
     }
 }
 
-impl Panel for GroupPanel {
-    fn panel_id(&self) -> SharedString {
-        self.id.clone()
+impl gpui_kit::component::dock::BasePanel for GroupPanel {
+    fn panel_name(&self) -> &'static str {
+        "GroupPanel"
     }
 
-    fn title(&self, cx: &App) -> AnyElement {
-        self.group
-            .upgrade()
-            .map(|group| {
-                let group = group.read(cx);
-                let seed = group.key().cache_tag();
-                let picture = group
-                    .metadata()
-                    .and_then(|metadata| metadata.picture.clone());
-
-                h_flex()
-                    .gap_1()
-                    .text_style(TextStyle::Caption)
-                    .child(Avatar::from_source(picture).seed(seed).xsmall())
-                    .child(display_name(group))
-                    .into_any_element()
-            })
-            .unwrap_or_else(|| {
-                div()
-                    .text_style(TextStyle::Caption)
-                    .child("Unknown")
-                    .into_any_element()
-            })
-    }
-
-    fn toolbar_buttons(&self, _window: &Window, _cx: &App) -> Vec<Button> {
-        Vec::new()
-    }
-
-    fn background(&self, cx: &App) -> Option<ImageSource> {
-        AppSettings::panel_background_source(cx)
-    }
-
-    fn set_active(&self, active: bool, window: &mut Window, cx: &mut App) {
+    fn set_active(&mut self, active: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(group) = self.group.upgrade() else {
             return;
         };
@@ -1259,6 +1219,41 @@ impl Panel for GroupPanel {
 
     fn on_removed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.set_active(false, window, cx);
+    }
+}
+
+impl Panel for GroupPanel {
+    fn title(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.group
+            .upgrade()
+            .map(|group| {
+                let group = group.read(cx);
+
+                h_flex()
+                    .gap_1()
+                    .text_xs()
+                    .child(
+                        Avatar::new(
+                            group
+                                .metadata()
+                                .and_then(|metadata| metadata.picture.clone())
+                                .map(Into::into),
+                        )
+                        .seed(group.key().cache_tag())
+                        .xsmall(),
+                    )
+                    .child(display_name(group))
+                    .into_any_element()
+            })
+            .unwrap_or_else(|| div().text_xs().child("Unknown").into_any_element())
+    }
+
+    fn toolbar_buttons(
+        &mut self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Vec<Button>> {
+        None
     }
 }
 
@@ -1294,8 +1289,8 @@ impl Render for GroupPanel {
                                     None => h_flex()
                                         .size_full()
                                         .justify_center()
-                                        .text_style(TextStyle::Callout)
-                                        .text_color(cx.theme().text_faint)
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
                                         .child("No messages yet")
                                         .into_any_element(),
                                 }),

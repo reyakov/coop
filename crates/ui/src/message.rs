@@ -1,18 +1,25 @@
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, ClickEvent, ElementId, InteractiveElement as _, IntoElement, MouseButton,
-    MouseDownEvent, ObjectFit, ParentElement as _, RenderOnce, SharedString, SharedUri,
-    StatefulInteractiveElement as _, StyleRefinement, Styled, StyledImage, Window, div, img, px,
+    AnyElement, App, ClickEvent, Context, ElementId, InteractiveElement as _, IntoElement,
+    MouseButton, MouseDownEvent, ObjectFit, ParentElement as _, RenderOnce, SharedString,
+    SharedUri, StatefulInteractiveElement as _, StyleRefinement, Styled, StyledImage, Window, div,
+    img, px,
+};
+use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
+use gpui_kit::component::{
+    ActiveTheme, InteractiveElementExt as _, Sizable as _, StyledExt as _, h_flex, v_flex,
 };
 use smallvec::SmallVec;
-use theme::{ActiveTheme, TextStyle, Typeset as _, bubble_radius, control_radius};
-
-use crate::{InteractiveElementExt as _, StyledExt as _, h_flex, v_flex};
 
 type MouseDownListener = Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>;
 type ClickListener = Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+type SharedClickListener = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
+type DropdownBuilder = Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
 
 /// Messages from the same author within this window are grouped into one run.
 pub const RUN_WINDOW_SECS: u64 = 300;
@@ -177,7 +184,7 @@ impl RenderOnce for MessageRow {
             .group("")
             .relative()
             .w_full()
-            .py_1()
+            .py_0p5()
             .when(show_author, |this| this.pt_2())
             .px_3()
             .refine_style(&style)
@@ -189,10 +196,10 @@ impl RenderOnce for MessageRow {
                         if show_author {
                             match avatar {
                                 Some(avatar) => this.child(avatar),
-                                None => this.child(div().flex_shrink_0().w(px(32.))),
+                                None => this.child(div().flex_shrink_0().w(px(24.))),
                             }
                         } else {
-                            this.child(div().flex_shrink_0().w(px(32.)))
+                            this.child(div().flex_shrink_0().w(px(24.)))
                         }
                     })
                     .child(
@@ -202,12 +209,13 @@ impl RenderOnce for MessageRow {
                             .min_w_0()
                             .flex_initial()
                             .overflow_hidden()
+                            .text_size(px(15.))
                             .when(show_author, |this| {
                                 this.child(
                                     h_flex()
-                                        .gap(px(theme::SPACE))
-                                        .text_style(TextStyle::Callout)
-                                        .text_color(cx.theme().text_dim)
+                                        .gap_2()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
                                         .when_some(author, |this, author| {
                                             this.child(div().font_semibold().child(author))
                                         })
@@ -227,7 +235,7 @@ impl RenderOnce for MessageRow {
             .when_some(on_double_click, |this, listener| {
                 this.on_double_click(listener)
             })
-            .hover(|this| this.bg(cx.theme().element_hover))
+            .hover(|this| this.bg(cx.theme().list_hover))
             .into_any_element()
     }
 }
@@ -290,12 +298,12 @@ impl RenderOnce for ReplyPreview {
             .w_full()
             .px_2()
             .border_l_2()
-            .border_color(cx.theme().element_active)
-            .text_style(TextStyle::Callout)
+            .border_color(cx.theme().list_active)
+            .text_xs()
             .refine_style(&style)
             .child(div().font_semibold().child(author))
             .child(div().w_full().text_ellipsis().line_clamp(1).child(preview))
-            .hover(|this| this.bg(cx.theme().surface_raised))
+            .hover(|this| this.bg(cx.theme().list_hover))
             .when_some(on_click, |this, on_click| this.on_click(on_click))
             .into_any_element()
     }
@@ -338,10 +346,10 @@ impl RenderOnce for MessageMedia {
                 .child(
                     img(only.clone())
                         .border_1()
-                        .border_color(cx.theme().border_faint)
+                        .border_color(cx.theme().border)
                         .h(px(250.))
                         .object_fit(ObjectFit::Cover)
-                        .rounded(px(bubble_radius())),
+                        .rounded(cx.theme().radius_lg),
                 )
                 .into_any_element();
         }
@@ -352,15 +360,15 @@ impl RenderOnce for MessageMedia {
             .flex()
             .flex_row()
             .flex_wrap()
-            .gap(px(theme::SPACE))
+            .gap_2()
             .refine_style(&style)
             .children(media.into_iter().enumerate().map(|(ix, item)| {
                 div().id(format!("media-{ix}")).flex_shrink_0().child(
                     img(item)
                         .h_32()
                         .border_1()
-                        .border_color(cx.theme().border_faint)
-                        .rounded(px(bubble_radius())),
+                        .border_color(cx.theme().border)
+                        .rounded(cx.theme().radius_lg),
                 )
             }))
             .into_any_element()
@@ -436,16 +444,16 @@ impl RenderOnce for ReactionBar {
             .refine_style(&style)
             .children(groups.into_iter().map(|group| {
                 h_flex()
-                    .gap(px(theme::SPACE))
+                    .gap_2()
                     .py_0p5()
                     .px_1()
-                    .rounded(px(control_radius()))
-                    .text_style(TextStyle::Caption)
+                    .rounded(cx.theme().radius)
+                    .text_xs()
                     .border_1()
                     .when(group.mine, |this| {
-                        this.text_color(cx.theme().text)
-                            .bg(cx.theme().surface_raised)
-                            .border_color(cx.theme().element_active)
+                        this.text_color(cx.theme().foreground)
+                            .bg(cx.theme().secondary)
+                            .border_color(cx.theme().list_active)
                     })
                     .when(!group.mine, |this| this.border_color(cx.theme().border))
                     .when(group.image.is_none(), |this| this.child(group.emoji))
@@ -520,7 +528,7 @@ impl RenderOnce for WelcomeMessage {
         v_flex()
             .id(id)
             .w_full()
-            .gap(px(theme::SPACE))
+            .gap_2()
             .p_3()
             .items_center()
             .justify_center()
@@ -535,19 +543,191 @@ impl RenderOnce for WelcomeMessage {
                     .when_some(title, |this, title| {
                         this.child(
                             div()
-                                .text_style(TextStyle::Headline)
-                                .text_color(cx.theme().text)
+                                .text_sm()
+                                .font_semibold()
+                                .text_color(cx.theme().foreground)
                                 .child(title),
                         )
                     })
                     .when_some(message, |this, message| {
                         this.child(
                             div()
-                                .text_style(TextStyle::Caption)
-                                .text_color(cx.theme().text_faint)
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
                                 .child(message),
                         )
                     }),
             )
+    }
+}
+
+/// Quick reaction emojis offered in message menus.
+pub const REACTION_EMOJIS: &[&str] = &["👍", "👎", "😄", "🎉", "😕", "❤️", "🚀", "👀"];
+
+/// Quick reaction emojis shown on a hovered message's action bar.
+pub const COMPACT_REACTION_EMOJIS: &[&str] = &["👍", "❤️", "👀"];
+
+/// Fill a popup menu with reactions to a message, offering `emojis` then the custom ones.
+///
+/// `react` receives the reaction content: an emoji, or a `:shortcode:` for a custom one.
+pub fn react_menu(
+    menu: PopupMenu,
+    emojis: &[&'static str],
+    custom: &[String],
+    react: impl Fn(&str, &mut Window, &mut App) + Clone + 'static,
+) -> PopupMenu {
+    let menu = emojis.iter().fold(menu, |menu, emoji| {
+        let emoji = *emoji;
+        let react = react.clone();
+        menu.item(PopupMenuItem::new(emoji).on_click(move |_, window, cx| react(emoji, window, cx)))
+    });
+
+    if custom.is_empty() {
+        return menu;
+    }
+
+    custom.iter().fold(menu.separator(), |menu, emoji| {
+        let emoji = emoji.clone();
+        let react = react.clone();
+        menu.item(
+            PopupMenuItem::new(emoji.clone())
+                .on_click(move |_, window, cx| react(&emoji, window, cx)),
+        )
+    })
+}
+
+/// A hovered message's action bar: quick reactions, reply, copy, and an overflow menu.
+#[derive(IntoElement)]
+pub struct MessageActions {
+    style: StyleRefinement,
+    reactions: SmallVec<[(&'static str, SharedClickListener); 4]>,
+    reply: Option<SharedClickListener>,
+    copy: Option<SharedClickListener>,
+    dropdown: Option<DropdownBuilder>,
+}
+
+impl MessageActions {
+    /// Create an empty action bar.
+    pub fn new() -> Self {
+        Self {
+            style: StyleRefinement::default(),
+            reactions: SmallVec::new(),
+            reply: None,
+            copy: None,
+            dropdown: None,
+        }
+    }
+
+    /// Add a quick reaction button.
+    pub fn reaction(
+        mut self,
+        emoji: &'static str,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.reactions.push((emoji, Rc::new(handler)));
+        self
+    }
+
+    /// Add the reply button.
+    pub fn reply(mut self, handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.reply = Some(Rc::new(handler));
+        self
+    }
+
+    /// Add the copy button.
+    pub fn copy(mut self, handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.copy = Some(Rc::new(handler));
+        self
+    }
+
+    /// Fill the bar's overflow menu.
+    pub fn dropdown(
+        mut self,
+        dropdown: impl Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu + 'static,
+    ) -> Self {
+        self.dropdown = Some(Rc::new(dropdown));
+        self
+    }
+}
+
+impl Default for MessageActions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Styled for MessageActions {
+    fn style(&mut self) -> &mut StyleRefinement {
+        &mut self.style
+    }
+}
+
+impl RenderOnce for MessageActions {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Self {
+            style,
+            reactions,
+            reply,
+            copy,
+            dropdown,
+        } = self;
+
+        let has_center = reply.is_some() || copy.is_some();
+
+        h_flex()
+            .p_0p5()
+            .gap_1()
+            .invisible()
+            .absolute()
+            .right_4()
+            .top_neg_2()
+            .when(cx.theme().shadow, |this| this.shadow_sm())
+            .rounded(cx.theme().radius_lg)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(cx.theme().background)
+            .children(reactions.into_iter().map(|(emoji, handler)| {
+                Button::new(emoji)
+                    .label(emoji)
+                    .tooltip(emoji)
+                    .small()
+                    .ghost()
+                    .on_click(move |event, window, cx| handler(event, window, cx))
+            }))
+            .when(has_center, |this| {
+                this.child(div().flex_shrink_0().h_4().w_px().bg(cx.theme().border))
+            })
+            .when_some(reply, |this, reply| {
+                this.child(
+                    Button::new("reply")
+                        .icon(IconName::Reply)
+                        .tooltip("Reply")
+                        .small()
+                        .ghost()
+                        .on_click(move |event, window, cx| reply(event, window, cx)),
+                )
+            })
+            .when_some(copy, |this, copy| {
+                this.child(
+                    Button::new("copy")
+                        .icon(IconName::Copy)
+                        .tooltip("Copy")
+                        .small()
+                        .ghost()
+                        .on_click(move |event, window, cx| copy(event, window, cx)),
+                )
+            })
+            .when_some(dropdown, |this, dropdown| {
+                this.child(div().flex_shrink_0().h_4().w_px().bg(cx.theme().border))
+                    .child(
+                        Button::new("more")
+                            .icon(IconName::Ellipsis)
+                            .small()
+                            .ghost()
+                            .dropdown_menu(move |menu, window, cx| dropdown(menu, window, cx)),
+                    )
+            })
+            .group_hover("", |this| this.visible())
+            .refine_style(&style)
     }
 }

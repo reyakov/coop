@@ -3,22 +3,21 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, ClipboardItem, Context, Entity, IntoElement, ParentElement, SharedString, Styled,
-    WeakEntity, div, px, relative, uniform_list,
+    AnyElement, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement,
+    ParentElement, SharedString, Styled, WeakEntity, div, px, relative, uniform_list,
 };
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use nip29::Group;
 use nostr_sdk::prelude::*;
 use settings::AppSettings;
 use state::NostrRegistry;
-use theme::{ActiveTheme, TextStyle, Typeset as _};
-use ui::avatar::Avatar;
-use ui::menu::{DropdownMenu, PopupMenuItem};
-use ui::nav::Nav;
-use ui::scroll::Scrollbar;
-use ui::{Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
+use ui::{Avatar, IconName};
 
 use super::Sidebar;
 use crate::dialogs::profile;
+use crate::nav::Nav;
 
 /// A collapsible section of the group view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,34 +142,34 @@ impl Sidebar {
             .flex_1()
             .min_h_0()
             .w_full()
-            .gap(px(theme::SPACE))
+            .gap_2()
             .child(
                 h_flex()
-                    .px_2()
+                    .px_4()
                     .flex_shrink_0()
                     .justify_between()
                     .child(
                         h_flex()
-                            .pl_0p5()
                             .gap_1()
                             .flex_shrink_1()
-                            .child(Avatar::from_source(picture).seed(seed).small())
+                            .child(Avatar::new(picture).seed(seed.clone()).small())
                             .child(
                                 v_flex()
                                     .flex_1()
                                     .min_w_0()
                                     .child(
                                         div()
-                                            .text_style(TextStyle::Caption)
+                                            .text_xs()
                                             .truncate()
-                                            .line_height(relative(1.2))
+                                            .line_height(relative(1.125))
                                             .font_semibold()
                                             .child(name),
                                     )
                                     .child(
                                         div()
-                                            .text_style(TextStyle::Caption2)
-                                            .text_color(cx.theme().text_muted)
+                                            .text_size(px(8.0))
+                                            .font_medium()
+                                            .text_color(cx.theme().muted_foreground)
                                             .child(total_members),
                                     ),
                             ),
@@ -182,28 +181,17 @@ impl Sidebar {
                     ),
             )
             .child(
-                div()
-                    .min_h_0()
-                    .flex_1()
-                    .child(
-                        uniform_list(
-                            "group-rows",
-                            rows.len(),
-                            cx.processor(move |this, range, _window, cx| {
-                                this.render_group_rows(
-                                    range,
-                                    rows.as_slice(),
-                                    &member_group,
-                                    admin,
-                                    cx,
-                                )
-                            }),
-                        )
-                        .track_scroll(&self.group_scroll)
-                        .h_full()
-                        .px_2(),
+                div().min_h_0().flex_1().child(
+                    uniform_list(
+                        "group-rows",
+                        rows.len(),
+                        cx.processor(move |this, range, _window, cx| {
+                            this.render_group_rows(range, rows.as_slice(), &member_group, admin, cx)
+                        }),
                     )
-                    .child(Scrollbar::vertical(&self.group_scroll)),
+                    .h_full()
+                    .px_2(),
+                ),
             )
             .into_any_element()
     }
@@ -242,10 +230,14 @@ impl Sidebar {
 
         Nav::new(label)
             .label(label)
-            .suffix(Icon::new(icon).small().text_color(cx.theme().text_faint))
-            .text_style(TextStyle::Caption)
+            .suffix(
+                Icon::new(icon)
+                    .small()
+                    .text_color(cx.theme().muted_foreground),
+            )
+            .text_xs()
             .font_semibold()
-            .text_color(cx.theme().text_faint)
+            .text_color(cx.theme().muted_foreground)
             .on_click(cx.listener(move |this, _event, _window, cx| {
                 match section {
                     GroupSection::Admins => this.admins_open = !this.admins_open,
@@ -277,29 +269,32 @@ impl Sidebar {
             .current_user()
             .is_some_and(|me| me == public_key);
 
-        Nav::new(public_key.to_hex())
+        let nav = Nav::new(public_key.to_hex())
             .label(person.name())
-            .text_style(TextStyle::Callout)
-            .font_medium()
+            .text_sm()
             .clickable(true)
             .when(!hide_avatar, |this| {
                 this.prefix(
                     Avatar::new(person.avatar())
                         .seed(person.avatar_seed())
-                        .small()
-                        .flex_shrink_0(),
+                        .small(),
                 )
             })
             .when(!roles.is_empty(), |this| {
                 this.suffix(
                     div()
+                        .font_normal()
                         .truncate()
-                        .text_style(TextStyle::Caption)
-                        .text_color(cx.theme().text_faint)
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
                         .child(SharedString::from(roles.join(", "))),
                 )
-            })
-            .dropdown_menu(move |menu, _window, _cx| {
+            });
+        let row = div()
+            .id(public_key.to_hex())
+            .w_full()
+            .child(nav)
+            .context_menu(move |menu, _window, _cx| {
                 let menu = menu
                     .item(
                         PopupMenuItem::new("View profile").on_click(move |_, window, cx| {
@@ -338,7 +333,8 @@ impl Sidebar {
                             nip29_ui::remove_member(group.clone(), public_key, window, cx);
                         }
                     }))
-            })
-            .into_any_element()
+            });
+
+        row.into_any_element()
     }
 }

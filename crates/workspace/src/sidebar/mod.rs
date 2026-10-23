@@ -5,23 +5,25 @@ use chat::{ChatEvent, ChatRegistry};
 use common::DebouncedDelay;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, ObjectFit, ParentElement, Render, SharedString, Styled,
-    StyledImage, Subscription, Task, UniformListScrollHandle, WeakEntity, Window, div, img, px,
-    retain_all,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ObjectFit, ParentElement, Render, SharedString, Styled, StyledImage, Subscription,
+    Task, WeakEntity, Window, div, img, retain_all,
 };
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::dock::{DockArea, Panel, PanelEvent};
+use gpui_kit::component::input::{InputEvent, InputState};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
 use instant::Duration;
 use nip29::{Group, GroupKey, GroupsEvent, GroupsRegistry};
 use nostr_sdk::prelude::*;
 use person::{Directory, PersonRegistry};
 use smallvec::{SmallVec, smallvec};
 use state::{FIND_DELAY, NostrRegistry, StateEvent};
-use theme::{ActiveTheme, TABBAR_HEIGHT, TextStyle, Typeset as _};
-use ui::dock::{DockArea, Panel, PanelEvent};
-use ui::indicator::Indicator;
-use ui::input::{InputEvent, InputState};
-use ui::notification::Notification;
-use ui::{Sizable, StyledExt, WindowExtension, h_flex, title_bar_drag_handlers, v_flex};
+use ui::title_bar_drag_handlers;
+
+use crate::dock::TAB_BAR_HEIGHT;
 
 mod group_view;
 mod header;
@@ -36,7 +38,6 @@ use search::SearchResult;
 
 pub struct Sidebar {
     focus_handle: FocusHandle,
-    list_scroll: UniformListScrollHandle,
     dock: WeakEntity<DockArea>,
     /// Random background shown behind the signed-out screen.
     banner: SharedString,
@@ -45,8 +46,6 @@ pub struct Sidebar {
     group: Option<WeakEntity<Group>>,
     /// Whether the sidebar is showing the group's information instead of its list.
     group_open: bool,
-    /// Scroll state of the group's member list.
-    group_scroll: UniformListScrollHandle,
     /// Whether the group view's admins section is expanded.
     admins_open: bool,
     /// Whether the group view's members section is expanded.
@@ -67,13 +66,10 @@ pub struct Sidebar {
     directory: Entity<Directory>,
     /// Contacts selected in the contact picker.
     selected_contacts: HashSet<PublicKey>,
-    /// Scroll state of the contact picker's list.
-    contacts_scroll: UniformListScrollHandle,
 
     /// Whether the main list is showing chat requests instead of chats and groups.
     requests_open: bool,
     new_requests: bool,
-    requests_scroll: UniformListScrollHandle,
 
     /// Whether the search bar is shown below the header.
     search_open: bool,
@@ -91,8 +87,6 @@ pub struct Sidebar {
     global_results: Option<Vec<PublicKey>>,
     /// The async global profile search.
     global_task: Option<Task<()>>,
-    /// Scroll state of the search results list.
-    search_scroll: UniformListScrollHandle,
 
     tasks: SmallVec<[Task<Result<(), Error>>; 1]>,
     _subscriptions: SmallVec<[Subscription; 4]>,
@@ -206,12 +200,10 @@ impl Sidebar {
 
         Self {
             focus_handle: cx.focus_handle(),
-            list_scroll: UniformListScrollHandle::new(),
             dock,
             banner: onboarding::pick_banner(),
             group: None,
             group_open: false,
-            group_scroll: UniformListScrollHandle::new(),
             admins_open: true,
             members_open: true,
             pins_open: true,
@@ -221,9 +213,7 @@ impl Sidebar {
             contacts: None,
             directory: Directory::new(cx),
             selected_contacts: HashSet::new(),
-            contacts_scroll: UniformListScrollHandle::new(),
             requests_open: false,
-            requests_scroll: UniformListScrollHandle::new(),
             new_requests: false,
             search_open: false,
             global_open: false,
@@ -233,7 +223,6 @@ impl Sidebar {
             global_finding: false,
             global_results: None,
             global_task: None,
-            search_scroll: UniformListScrollHandle::new(),
             tasks: smallvec![],
             _subscriptions: subscriptions,
         }
@@ -264,13 +253,9 @@ impl Sidebar {
     }
 }
 
-impl Panel for Sidebar {
-    fn panel_id(&self) -> SharedString {
-        "Sidebar".into()
-    }
-
-    fn title(&self, _cx: &App) -> AnyElement {
-        SharedString::from("Sidebar").into_any_element()
+impl gpui_kit::component::dock::BasePanel for Sidebar {
+    fn panel_name(&self) -> &'static str {
+        "Sidebar"
     }
 
     fn closable(&self, _cx: &App) -> bool {
@@ -279,6 +264,12 @@ impl Panel for Sidebar {
 
     fn zoomable(&self, _cx: &App) -> bool {
         false
+    }
+}
+
+impl Panel for Sidebar {
+    fn title(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        SharedString::from("Sidebar")
     }
 }
 
@@ -301,49 +292,58 @@ impl Render for Sidebar {
 
         let group = self.group.clone().and_then(|group| group.upgrade());
         let searching = self.search_open && !self.find_input.read(cx).value().is_empty();
+        let picking_contacts = self.contacts_open && !self.requests_open;
 
         v_flex()
             .image_cache(retain_all("sidebar"))
             .size_full()
             .relative()
-            .gap(px(theme::SPACE))
-            .bg(cx.theme().surface)
-            .when_some(current_user.as_ref(), |this, current_user| {
-                this.child(title_bar_drag_handlers(
-                    self.render_user(current_user, cx),
-                    window,
-                    cx,
-                ))
-            })
-            .when(self.search_open, |this| this.child(self.render_find(cx)))
-            .when(!logged_in, |this| {
-                this.relative()
-                    .child(title_bar_drag_handlers(
-                        div()
-                            .id("onboarding-drag")
-                            .absolute()
-                            .top_0()
-                            .left_0()
-                            .h(TABBAR_HEIGHT)
-                            .w_full(),
-                        window,
-                        cx,
-                    ))
-                    .child(
-                        div().absolute().inset_0().child(
-                            img(self.banner.clone())
-                                .size_full()
-                                .object_fit(ObjectFit::Cover),
-                        ),
-                    )
-                    .child(onboarding::render_signed_out(window, cx))
-            })
-            .map(|this| match group {
-                Some(group) if self.group_open && !searching => {
-                    this.child(self.render_group(group, cx))
-                }
-                _ if searching => this.child(self.render_results(cx)),
-                _ => this.child(self.render_list(cx)),
+            .justify_between()
+            .bg(cx.theme().sidebar)
+            .text_color(cx.theme().sidebar_foreground)
+            .child(
+                v_flex()
+                    .flex_1()
+                    .min_h_0()
+                    .when_some(current_user.as_ref(), |this, current_user| {
+                        this.child(title_bar_drag_handlers(
+                            self.render_user(current_user, cx),
+                            window,
+                            cx,
+                        ))
+                    })
+                    .when(self.search_open, |this| this.child(self.render_find(cx)))
+                    .when(!logged_in, |this| {
+                        this.child(title_bar_drag_handlers(
+                            div()
+                                .id("onboarding-drag")
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .h(TAB_BAR_HEIGHT)
+                                .w_full(),
+                            window,
+                            cx,
+                        ))
+                        .child(
+                            div().absolute().inset_0().child(
+                                img(self.banner.clone())
+                                    .size_full()
+                                    .object_fit(ObjectFit::Cover),
+                            ),
+                        )
+                        .child(onboarding::render_signed_out(window, cx))
+                    })
+                    .map(|this| match group {
+                        Some(group) if self.group_open && !searching => {
+                            this.child(self.render_group(group, cx))
+                        }
+                        _ if searching => this.child(self.render_results(cx)),
+                        _ => this.child(self.render_list(cx)),
+                    }),
+            )
+            .when(logged_in && !picking_contacts, |this| {
+                this.child(self.render_footer(cx))
             })
             .when(loading && logged_in, |this| {
                 this.child(
@@ -356,17 +356,17 @@ impl Render for Sidebar {
                         .px_8()
                         .child(
                             h_flex()
-                                .gap(px(theme::SPACE))
+                                .gap_2()
                                 .w_full()
                                 .h_9()
                                 .justify_center()
-                                .bg(cx.theme().bg.opacity(0.85))
+                                .bg(cx.theme().background.opacity(0.85))
                                 .when(cx.theme().shadow, |this| this.shadow_md())
                                 .rounded_full()
-                                .text_style(TextStyle::Caption)
+                                .text_xs()
                                 .font_semibold()
-                                .text_color(cx.theme().text_muted)
-                                .child(Indicator::new().small().color(cx.theme().accent))
+                                .text_color(cx.theme().muted_foreground)
+                                .child(Spinner::new().small().color(cx.theme().primary))
                                 .child("Getting messages..."),
                         ),
                 )

@@ -7,16 +7,17 @@ use gpui::{
     App, AppContext, Context, Div, Entity, InteractiveElement, IntoElement, ParentElement, Render,
     SharedString, Styled, Subscription, Task, Window, div, px, relative, uniform_list,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::spinner::Spinner;
+use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, WindowExt, h_flex, v_flex};
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::{Directory, Person, PersonRegistry, shorten_pubkey};
 use smallvec::{SmallVec, smallvec};
 use state::{BOOTSTRAP_RELAYS, NostrAddress, NostrRegistry, TIMEOUT};
-use theme::{ActiveTheme, TextStyle, Typeset as _, button_radius};
-use ui::avatar::Avatar;
-use ui::button::{Button, ButtonVariants};
-use ui::indicator::Indicator;
-use ui::{Disableable, Icon, IconName, Sizable, StyledExt, WindowExtension, h_flex, v_flex};
+use ui::Avatar;
 
 pub fn init(public_key: PublicKey, window: &mut Window, cx: &mut App) -> Entity<Screening> {
     cx.new(|cx| Screening::new(public_key, window, cx))
@@ -310,10 +311,14 @@ impl Screening {
                                     .w_full()
                                     .px_2()
                                     .gap_1p5()
-                                    .rounded(px(button_radius()))
-                                    .text_style(TextStyle::Callout)
-                                    .hover(|this| this.bg(cx.theme().element_hover))
-                                    .child(Avatar::new(profile.avatar()).small())
+                                    .rounded(cx.theme().radius)
+                                    .text_xs()
+                                    .hover(|this| this.bg(cx.theme().primary))
+                                    .child(
+                                        Avatar::new(profile.avatar())
+                                            .seed(profile.avatar_seed())
+                                            .small(),
+                                    )
                                     .child(profile.name()),
                             );
                         }
@@ -365,7 +370,11 @@ impl Render for Screening {
                     .items_center()
                     .justify_center()
                     .text_center()
-                    .child(Avatar::new(profile.avatar()).large())
+                    .child(
+                        Avatar::new(profile.avatar())
+                            .seed(profile.avatar_seed())
+                            .large(),
+                    )
                     .child(
                         div()
                             .font_semibold()
@@ -383,8 +392,8 @@ impl Render for Screening {
                             .h_7()
                             .justify_center()
                             .rounded_full()
-                            .bg(cx.theme().surface_raised)
-                            .text_style(TextStyle::Callout)
+                            .bg(cx.theme().secondary)
+                            .text_xs()
                             .truncate()
                             .text_ellipsis()
                             .text_center()
@@ -398,9 +407,8 @@ impl Render for Screening {
                                 Button::new("njump")
                                     .icon(IconName::Link)
                                     .label("njump.me")
-                                    .ghost_alt()
+                                    .ghost()
                                     .small()
-                                    .rounded()
                                     .on_click(cx.listener(move |this, _e, window, cx| {
                                         this.open_njump(window, cx);
                                     })),
@@ -408,9 +416,8 @@ impl Render for Screening {
                             .child(
                                 Button::new("report")
                                     .tooltip("Report as a scam or impostor")
-                                    .icon(IconName::Warning)
+                                    .icon(IconName::TriangleAlert)
                                     .warning()
-                                    .rounded()
                                     .on_click(cx.listener(move |this, _e, window, cx| {
                                         this.report(window, cx);
                                     })),
@@ -423,36 +430,33 @@ impl Render for Screening {
                     .child(
                         h_flex()
                             .items_start()
-                            .gap(px(theme::SPACE))
-                            .text_style(TextStyle::Callout)
+                            .gap_2()
+                            .text_xs()
                             .child(status_badge(Some(self.followed), cx))
                             .child(
-                                v_flex()
-                                    .text_style(TextStyle::Callout)
-                                    .child("Contact")
-                                    .child(
-                                        div()
-                                            .line_clamp(1)
-                                            .text_color(cx.theme().text_muted)
-                                            .child({
-                                                if self.followed {
-                                                    SharedString::from(CONTACT)
-                                                } else {
-                                                    SharedString::from(NOT_CONTACT)
-                                                }
-                                            }),
-                                    ),
+                                v_flex().text_xs().child("Contact").child(
+                                    div()
+                                        .line_clamp(1)
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child({
+                                            if self.followed {
+                                                SharedString::from(CONTACT)
+                                            } else {
+                                                SharedString::from(NOT_CONTACT)
+                                            }
+                                        }),
+                                ),
                             ),
                     )
                     .child(
                         h_flex()
                             .items_start()
-                            .gap(px(theme::SPACE))
-                            .text_style(TextStyle::Callout)
+                            .gap_2()
+                            .text_xs()
                             .child(status_badge(last_active, cx))
                             .child(
                                 v_flex()
-                                    .text_style(TextStyle::Callout)
+                                    .text_xs()
                                     .child(
                                         h_flex()
                                             .gap_0p5()
@@ -462,7 +466,6 @@ impl Render for Screening {
                                                     .icon(IconName::Info)
                                                     .xsmall()
                                                     .ghost()
-                                                    .rounded()
                                                     .tooltip(RELAY_INFO),
                                             ),
                                     )
@@ -470,7 +473,7 @@ impl Render for Screening {
                                         div()
                                             .w_full()
                                             .line_clamp(1)
-                                            .text_color(cx.theme().text_muted)
+                                            .text_color(cx.theme().muted_foreground)
                                             .map(|this| {
                                                 if let Some(t) = self.last_active {
                                                     this.child(SharedString::from(format!(
@@ -487,11 +490,11 @@ impl Render for Screening {
                     .child(
                         h_flex()
                             .items_start()
-                            .gap(px(theme::SPACE))
+                            .gap_2()
                             .child(status_badge(Some(self.verified), cx))
                             .child(
                                 v_flex()
-                                    .text_style(TextStyle::Callout)
+                                    .text_xs()
                                     .child({
                                         if let Some(addr) = self.address(cx) {
                                             SharedString::from(format!("{} validation", addr))
@@ -504,7 +507,7 @@ impl Render for Screening {
                                     .child(
                                         div()
                                             .line_clamp(1)
-                                            .text_color(cx.theme().text_muted)
+                                            .text_color(cx.theme().muted_foreground)
                                             .child({
                                                 if self.address(cx).is_some() {
                                                     if self.verified {
@@ -522,15 +525,15 @@ impl Render for Screening {
                     .child(
                         h_flex()
                             .items_start()
-                            .gap(px(theme::SPACE))
+                            .gap_2()
                             .child(status_badge(Some(mutuals > 0), cx))
                             .child(
                                 h_flex()
-                                    .text_style(TextStyle::Callout)
+                                    .text_xs()
                                     .child(
                                         div()
                                             .line_clamp(1)
-                                            .text_color(cx.theme().text_muted)
+                                            .text_color(cx.theme().muted_foreground)
                                             .child({
                                                 if mutuals > 0 {
                                                     SharedString::from(mutuals_str)
@@ -544,7 +547,6 @@ impl Render for Screening {
                                             .icon(IconName::Info)
                                             .xsmall()
                                             .ghost()
-                                            .rounded()
                                             .disabled(mutuals == 0)
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.mutual_contacts(
@@ -567,15 +569,15 @@ fn status_badge(status: Option<bool>, cx: &App) -> Div {
         .flex_shrink_0()
         .map(|this| {
             if let Some(status) = status {
-                this.child(Icon::new(IconName::CheckCircle).small().text_color({
+                this.child(Icon::new(IconName::CircleCheck).small().text_color({
                     if status {
-                        cx.theme().accent
+                        cx.theme().primary
                     } else {
-                        cx.theme().text_faint
+                        cx.theme().muted_foreground
                     }
                 }))
             } else {
-                this.child(Indicator::new().small())
+                this.child(Spinner::new().small())
             }
         })
 }

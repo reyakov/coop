@@ -5,7 +5,7 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-theme = { path = "../theme" }
+gpui-kit.workspace = true
 common = { path = "../common" }
 
 nostr-sdk.workspace = true

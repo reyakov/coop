@@ -3,19 +3,18 @@ use std::rc::Rc;
 use chat::{ChatRegistry, RoomKind};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, Context, IntoElement, ParentElement, SharedString, Styled, div, px,
-    uniform_list,
+    AnyElement, App, Context, IntoElement, ParentElement, SharedString, Styled, div, uniform_list,
 };
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use nip29::GroupsRegistry;
 use settings::AppSettings;
-use theme::{ActiveTheme, TextStyle, Typeset as _, control_radius};
-use ui::nav_item::NavItem;
-use ui::scroll::Scrollbar;
-use ui::{Icon, IconName, Sizable, StyledExt, h_flex, v_flex};
+use ui::IconName;
 
 use super::Sidebar;
 use super::rows::SidebarRow;
 use crate::Command;
+use crate::nav::Nav;
 
 /// A collapsible section of the sidebar's main list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,12 +43,12 @@ impl Sidebar {
         // Whether to show the create button for the contact picker
         let create_button = contacts_open && !self.selected_contacts.is_empty();
 
-        let (list_id, scroll_handle, list_title) = if contacts_open {
-            ("sidebar-contacts", &self.contacts_scroll, Some("Contacts"))
+        let (list_id, title) = if contacts_open {
+            ("sidebar-contacts", Some("Contacts"))
         } else if requests_open {
-            ("sidebar-requests", &self.requests_scroll, Some("Requests"))
+            ("sidebar-requests", Some("Requests"))
         } else {
-            ("sidebar-list", &self.list_scroll, None)
+            ("sidebar-list", None)
         };
 
         let request_count = ChatRegistry::global(cx)
@@ -61,86 +60,96 @@ impl Sidebar {
             .flex_1()
             .min_h_0()
             .relative()
-            .gap(px(theme::SPACE))
             .child(
                 v_flex()
                     .px_2()
                     .gap_1()
+                    .items_start()
+                    .justify_start()
                     .child(
-                        NavItem::new("browse", "Browse", Icon::new(IconName::Compass).small())
+                        Nav::new("browse")
+                            .prefix(Icon::new(IconName::Compass).small())
+                            .label("Browse")
+                            .text_sm()
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(Box::new(Command::ShowBrowse), cx)
                             }),
                     )
                     .child(
-                        NavItem::new("reqs", "Requests", Icon::new(IconName::Invite).small())
+                        Nav::new("reqs")
+                            .prefix(Icon::new(IconName::Invite).small())
+                            .label("Requests")
+                            .text_sm()
                             .when(request_count > 0, |this| {
                                 this.suffix(
                                     h_flex()
                                         .gap_1()
-                                        .items_center()
                                         .child(
                                             h_flex()
                                                 .py_0p5()
                                                 .px_1()
                                                 .min_w_6()
                                                 .justify_center()
-                                                .text_style(TextStyle::Caption2)
-                                                .text_color(cx.theme().text_muted)
+                                                .text_xs()
+                                                .font_medium()
+                                                .text_color(cx.theme().muted_foreground)
                                                 .text_center()
-                                                .rounded(px(control_radius()))
-                                                .bg(cx.theme().surface_raised)
+                                                .rounded(cx.theme().radius)
+                                                .bg(cx.theme().secondary)
                                                 .child(SharedString::from(
                                                     request_count.to_string(),
                                                 )),
                                         )
                                         .when(self.new_requests && !requests_open, |this| {
                                             this.child(
-                                                div().size_1().rounded_full().bg(cx.theme().accent),
+                                                div()
+                                                    .size_1()
+                                                    .rounded_full()
+                                                    .bg(cx.theme().primary),
                                             )
                                         }),
                                 )
                             })
-                            .when(requests_open, |this| this.bg(cx.theme().element_active))
+                            .when(requests_open, |this| this.bg(cx.theme().list_active))
                             .on_click(cx.listener(|this, _event, _window, cx| {
                                 this.toggle_requests(cx);
                             })),
                     )
                     .child(
-                        NavItem::new("contacts", "Contacts", Icon::new(IconName::Book).small())
-                            .when(contacts_open, |this| this.bg(cx.theme().element_active))
+                        Nav::new("contacts")
+                            .prefix(Icon::new(IconName::Book).small())
+                            .label("Contacts")
+                            .text_sm()
+                            .when(contacts_open, |this| this.bg(cx.theme().list_active))
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.toggle_contacts(window, cx);
                             })),
                     ),
             )
-            .when_some(list_title, |this, list_title| {
+            .when_some(title, |this, title| {
                 this.child(
-                    div()
+                    h_flex()
                         .px_4()
-                        .text_style(TextStyle::Caption)
+                        .h_10()
+                        .w_full()
+                        .flex_shrink_0()
+                        .text_color(cx.theme().muted_foreground)
+                        .text_xs()
                         .font_semibold()
-                        .text_color(cx.theme().text_muted)
-                        .child(list_title),
+                        .child(title),
                 )
             })
             .child(
-                div()
-                    .min_h_0()
-                    .flex_1()
-                    .child(
-                        uniform_list(
-                            list_id,
-                            rows.len(),
-                            cx.processor(move |this, range, _window, cx| {
-                                this.render_rows(range, rows.as_slice(), cx)
-                            }),
-                        )
-                        .track_scroll(scroll_handle)
-                        .h_full()
-                        .px_2(),
-                    )
-                    .child(Scrollbar::vertical(scroll_handle)),
+                uniform_list(
+                    list_id,
+                    rows.len(),
+                    cx.processor(move |this, range, _window, cx| {
+                        this.render_rows(range, rows.as_slice(), cx)
+                    }),
+                )
+                .min_h_0()
+                .flex_1()
+                .px_2(),
             )
             .when(create_button, |this| {
                 this.child(self.render_create_overlay(cx))

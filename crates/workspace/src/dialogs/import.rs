@@ -4,20 +4,19 @@ use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
     Subscription, Task, Window, div, px, relative,
 };
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, v_flex};
 use instant::Duration;
 use nostr_connect::prelude::*;
 use state::NostrRegistry;
-use theme::{ActiveTheme, TextStyle, Typeset as _, surface_radius};
-use ui::button::{Button, ButtonVariants};
-use ui::input::{Input, InputEvent, InputState};
-use ui::{Disableable, WindowExtension, v_flex};
 
 pub fn open(window: &mut Window, cx: &mut App) {
     let import = cx.new(|cx| ImportIdentity::new(window, cx));
 
     window.open_dialog(cx, move |this, _window, _cx| {
         this.width(px(450.))
-            .show_close(false)
+            .close_button(false)
             .overlay_closable(false)
             .keyboard(false)
             .title("Continue with your Nostr Identity")
@@ -31,7 +30,7 @@ pub fn open_unlock(window: &mut Window, cx: &mut App) {
 
     window.open_dialog(cx, move |this, _window, _cx| {
         this.width(px(450.))
-            .show_close(false)
+            .close_button(false)
             .overlay_closable(false)
             .keyboard(false)
             .title("Unlock your identity")
@@ -239,15 +238,15 @@ impl Render for ImportIdentity {
         v_flex()
             .size_full()
             .gap_4()
-            .text_style(TextStyle::Callout)
+            .text_xs()
             .child(
                 v_flex()
-                    .gap(px(theme::SPACE))
+                    .gap_2()
                     .when(!is_unlock, |this| {
                         this.child(
                             v_flex()
                                 .gap_1()
-                                .text_color(cx.theme().text_muted)
+                                .text_color(cx.theme().muted_foreground)
                                 .child("Use secret key or bunker connection")
                                 .child(Input::new(&self.key_input)),
                         )
@@ -256,7 +255,7 @@ impl Render for ImportIdentity {
                         this.child(
                             v_flex()
                                 .gap_1()
-                                .text_color(cx.theme().text_muted)
+                                .text_color(cx.theme().muted_foreground)
                                 .child(if is_unlock {
                                     "Passphrase to unlock your identity:"
                                 } else {
@@ -269,14 +268,14 @@ impl Render for ImportIdentity {
                         this.child(
                             v_flex()
                                 .gap_1()
-                                .text_color(cx.theme().text_muted)
+                                .text_color(cx.theme().muted_foreground)
                                 .child("Passphrase to encrypt your key on this device:")
                                 .child(Input::new(&self.pass_input)),
                         )
                         .child(
                             v_flex()
                                 .gap_1()
-                                .text_color(cx.theme().text_muted)
+                                .text_color(cx.theme().muted_foreground)
                                 .child("Repeat Passphrase:")
                                 .child(Input::new(&self.repass_input)),
                         )
@@ -285,9 +284,9 @@ impl Render for ImportIdentity {
                         this.child(
                             div()
                                 .p_2()
-                                .rounded(px(surface_radius()))
-                                .bg(cx.theme().warning_muted)
-                                .text_style(TextStyle::Caption)
+                                .rounded(cx.theme().radius_lg)
+                                .bg(cx.theme().warning.opacity(0.15))
+                                .text_xs()
                                 .text_color(cx.theme().warning)
                                 .line_height(relative(1.2))
                                 .child(div().child(BUNKER_WARN)),
@@ -297,9 +296,9 @@ impl Render for ImportIdentity {
                         this.child(
                             div()
                                 .p_2()
-                                .rounded(px(surface_radius()))
-                                .bg(cx.theme().warning_muted)
-                                .text_style(TextStyle::Caption)
+                                .rounded(cx.theme().radius_lg)
+                                .bg(cx.theme().warning.opacity(0.15))
+                                .text_xs()
                                 .text_color(cx.theme().warning)
                                 .line_height(relative(1.2))
                                 .child(div().child(KEY_WARN)),
@@ -330,7 +329,7 @@ impl Render for ImportIdentity {
             .when_some(self.error.read(cx).as_ref(), |this, error| {
                 this.child(
                     div()
-                        .text_style(TextStyle::Caption)
+                        .text_xs()
                         .text_center()
                         .text_color(cx.theme().danger)
                         .child(error.clone()),

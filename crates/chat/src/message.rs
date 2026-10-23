@@ -1,15 +1,12 @@
 use std::hash::Hash;
 use std::ops::Range;
 
-use common::{EventExt, NostrParser, emojis_from_tags, extract_and_remove_media_urls};
+use common::{EventExt, NostrParser, emojis_from_tags, extract_and_remove_media_urls, nevent_refs};
 use gpui::{SharedString, SharedUri};
 use nostr_sdk::prelude::*;
 use state::FileAttachment;
 
 pub(crate) const KIND_FILE_MESSAGE: Kind = Kind::Custom(15);
-
-const SCHEME_WITH_COLON: &str = "nostr:";
-const NEVENT_PREFIX: &str = "nevent1";
 
 /// Rendered message.
 #[derive(Debug, Clone)]
@@ -246,61 +243,6 @@ fn extract_mentions(content: &str) -> Vec<Mention> {
             _ => None,
         })
         .collect()
-}
-
-/// A `nevent` reference found in a content string.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NeventRef {
-    /// Range of the reference, including the optional `nostr:` scheme
-    pub range: Range<usize>,
-    /// Compact display label, like `https://njump.me/nevent1...d9sp`
-    pub label: String,
-}
-
-/// Extracts valid `nevent1...` and `nostr:nevent1...` references from content.
-pub fn nevent_refs(content: &str) -> Vec<NeventRef> {
-    let mut references = Vec::new();
-
-    for (match_start, _) in content.match_indices(NEVENT_PREFIX) {
-        // Only lowercase references are matched, matching NIP-19 encodings in practice
-        let start = if content[..match_start].ends_with(SCHEME_WITH_COLON) {
-            match_start - SCHEME_WITH_COLON.len()
-        } else {
-            match_start
-        };
-
-        // Skip matches glued to word characters, like the `nevent1` in `xnevent1...`
-        if content[..start].ends_with(char::is_alphanumeric) {
-            continue;
-        }
-
-        let end = match_start
-            + content[match_start..]
-                .bytes()
-                .take_while(u8::is_ascii_alphanumeric)
-                .count();
-
-        // The bech32 token excludes the optional `nostr:` scheme
-        let bech32 = &content[match_start..end];
-        if Nip19Event::from_bech32(bech32).is_err() {
-            continue;
-        }
-
-        references.push(NeventRef {
-            range: start..end,
-            label: nevent_label(bech32),
-        });
-    }
-
-    references
-}
-
-/// Compact display of a nevent link, like `https://njump.me/nevent1...d9sp`.
-fn nevent_label(bech32: &str) -> String {
-    match bech32.len() {
-        0..=4 => format!("https://njump.me/{bech32}"),
-        _ => format!("https://njump.me/nevent1...{}", &bech32[bech32.len() - 4..]),
-    }
 }
 
 /// Extracts all reply (ids) from the event tags.

@@ -3,15 +3,17 @@ use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, PathPromptOptions, Render,
     SharedString, Styled, Window, div,
 };
-use settings::AppSettings;
-use theme::{ActiveTheme, AppExt as _, AppearanceMode, TextStyle, Typeset as _};
-use ui::button::{Button, ButtonVariants};
-use ui::group_box::{GroupBox, GroupBoxVariants};
-use ui::input::{Input, InputState};
-use ui::menu::{DropdownMenu, PopupMenuItem};
-use ui::notification::Notification;
-use ui::switch::Switch;
-use ui::{Disableable, IconName, Sizable, WindowExtension, h_flex, v_flex};
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
+use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::switch::Switch;
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
+use settings::{AppSettings, AppearanceMode};
+use ui::settings_row;
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Preferences> {
     cx.new(|cx| Preferences::new(window, cx))
@@ -50,7 +52,9 @@ impl Preferences {
     /// Set the appearance mode (system, light or dark)
     fn set_appearance_mode(mode: AppearanceMode, cx: &mut App) {
         AppSettings::update_appearance_mode(mode, cx);
-        cx.set_appearance_mode(mode);
+        AppSettings::global(cx).update(cx, |settings, cx| {
+            settings.apply_theme(cx);
+        });
     }
 
     /// Ask the user for an image to show behind chat and group panels
@@ -109,33 +113,36 @@ impl Render for Preferences {
                     .id("general")
                     .title("General")
                     .fill()
-                    .child(
-                        Switch::new("screening")
-                            .label("Screening")
-                            .description(SCREENING)
-                            .checked(screening)
-                            .on_click(move |_, _window, cx| {
+                    .child(settings_row(
+                        "Screening",
+                        SCREENING,
+                        Switch::new("screening").checked(screening).on_click(
+                            move |_, _window, cx| {
                                 AppSettings::update_screening(!screening, cx);
-                            }),
-                    )
-                    .child(
+                            },
+                        ),
+                        cx,
+                    ))
+                    .child(settings_row(
+                        "Web of Trust",
+                        WOT,
                         Switch::new("wot-auto-trust")
-                            .label("Web of Trust")
-                            .description(WOT)
                             .checked(wot_auto_trust)
                             .on_click(move |_, _window, cx| {
                                 AppSettings::update_wot_auto_trust(!wot_auto_trust, cx);
                             }),
-                    )
-                    .child(
-                        Switch::new("avatar")
-                            .label("Hide user avatar")
-                            .description(AVATAR)
-                            .checked(hide_avatar)
-                            .on_click(move |_, _window, cx| {
+                        cx,
+                    ))
+                    .child(settings_row(
+                        "Hide user avatar",
+                        AVATAR,
+                        Switch::new("avatar").checked(hide_avatar).on_click(
+                            move |_, _window, cx| {
                                 AppSettings::update_hide_avatar(!hide_avatar, cx);
-                            }),
-                    ),
+                            },
+                        ),
+                        cx,
+                    )),
             )
             .child(
                 GroupBox::new()
@@ -148,22 +155,18 @@ impl Render for Preferences {
                             .justify_between()
                             .child(
                                 v_flex()
+                                    .child(div().text_xs().child(SharedString::from("Mode")))
                                     .child(
                                         div()
-                                            .text_style(TextStyle::Callout)
-                                            .child(SharedString::from("Mode")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_style(TextStyle::Caption)
-                                            .text_color(cx.theme().text_muted)
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
                                             .child(SharedString::from(MODE)),
                                     ),
                             )
                             .child(
                                 Button::new("appearance-mode")
                                     .label(appearance_mode.label())
-                                    .ghost_alt()
+                                    .ghost()
                                     .small()
                                     .dropdown_menu(|this, _window, _cx| {
                                         AppearanceMode::ALL.iter().fold(this, |menu, mode| {
@@ -182,16 +185,17 @@ impl Render for Preferences {
                     .id("background")
                     .title("Background")
                     .fill()
-                    .child(
+                    .child(settings_row(
+                        "Panel background",
+                        BACKGROUND,
                         Switch::new("panel-background")
-                            .label("Panel background")
-                            .description(BACKGROUND)
                             .checked(panel_background)
                             .on_click(move |_, _window, cx| {
                                 AppSettings::update_panel_background(!panel_background, cx);
                                 cx.refresh_windows();
                             }),
-                    )
+                        cx,
+                    ))
                     .child(
                         h_flex()
                             .gap_3()
@@ -200,15 +204,11 @@ impl Render for Preferences {
                                 v_flex()
                                     .flex_1()
                                     .min_w_0()
+                                    .child(div().text_xs().child(SharedString::from("Image")))
                                     .child(
                                         div()
-                                            .text_style(TextStyle::Callout)
-                                            .child(SharedString::from("Image")),
-                                    )
-                                    .child(
-                                        div()
-                                            .text_style(TextStyle::Caption)
-                                            .text_color(cx.theme().text_muted)
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
                                             .truncate()
                                             .child(SharedString::from(background_label)),
                                     ),
@@ -220,7 +220,7 @@ impl Render for Preferences {
                                     .child(
                                         Button::new("choose-background")
                                             .label("Choose image")
-                                            .ghost_alt()
+                                            .ghost()
                                             .small()
                                             .disabled(!panel_background)
                                             .on_click(|_, _window, cx| {
@@ -230,7 +230,7 @@ impl Render for Preferences {
                                     .child(
                                         Button::new("reset-background")
                                             .label("Reset")
-                                            .ghost_alt()
+                                            .ghost()
                                             .small()
                                             .disabled(
                                                 !panel_background
@@ -249,15 +249,16 @@ impl Render for Preferences {
                     .id("experiments")
                     .title("Experiments")
                     .fill()
-                    .child(
+                    .child(settings_row(
+                        "Decoupling Encryption Key",
+                        NIP4E,
                         Switch::new("nip4e")
-                            .label("Decoupling Encryption Key")
-                            .description(NIP4E)
                             .checked(nip4e)
                             .on_click(move |_, _window, cx| {
                                 AppSettings::update_nip4e(!nip4e, cx);
                             }),
-                    ),
+                        cx,
+                    )),
             )
             .child(
                 GroupBox::new()
@@ -283,9 +284,10 @@ impl Render for Preferences {
                             )
                             .child(
                                 div()
-                                    .text_style(TextStyle::Caption2)
+                                    .text_xs()
+                                    .font_medium()
                                     .italic()
-                                    .text_color(cx.theme().text_faint)
+                                    .text_color(cx.theme().muted_foreground)
                                     .child(SharedString::from("Only support blossom service")),
                             ),
                     ),

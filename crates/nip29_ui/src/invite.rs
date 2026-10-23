@@ -5,13 +5,12 @@ use gpui::{
     App, AppContext, ClipboardItem, Entity, IntoElement, ParentElement, SharedString, Styled,
     WeakEntity, Window, div, px,
 };
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::InputState;
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
 use nip29::{Group, Invite};
 use nostr_sdk::prelude::SecretKey;
-use theme::{ActiveTheme, TextStyle, Typeset as _};
-use ui::button::{Button, ButtonVariants};
-use ui::input::InputState;
-use ui::notification::Notification;
-use ui::{Sizable, WindowExtension, h_flex, v_flex};
 
 use crate::util::{field, report};
 
@@ -26,7 +25,7 @@ pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) 
 
     window.open_dialog(cx, move |this, _window, cx| {
         this.max_h(px(600.))
-            .show_close(true)
+            .close_button(true)
             .title("Invites")
             .child(body(group.clone(), input.clone(), cx))
     });
@@ -48,16 +47,16 @@ fn body(group: WeakEntity<Group>, input: Entity<InputState>, cx: &App) -> impl I
 
     v_flex()
         .gap_3()
-        .text_style(TextStyle::Callout)
+        .text_xs()
         .child(
             div()
-                .text_color(cx.theme().text_muted)
+                .text_color(cx.theme().muted_foreground)
                 .child("Anyone with a code can ask to join. Revoking a code stops new joins, it doesn't remove anyone."),
         )
         .when(invites.is_empty(), |this| {
             this.child(
                 div()
-                    .text_color(cx.theme().text_faint)
+                    .text_color(cx.theme().muted_foreground)
                     .child("No active invites"),
             )
         })
@@ -68,8 +67,8 @@ fn body(group: WeakEntity<Group>, input: Entity<InputState>, cx: &App) -> impl I
 fn invite_row(group: WeakEntity<Group>, invite: &Invite, cx: &App) -> impl IntoElement {
     let created = div()
         .flex_shrink_0()
-        .text_style(TextStyle::Caption)
-        .text_color(cx.theme().text_faint)
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
         .child(invite.created_at.to_ago());
 
     h_flex()
