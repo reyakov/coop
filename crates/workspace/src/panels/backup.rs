@@ -158,7 +158,7 @@ impl Render for BackupPanel {
                                     .text_color(cx.theme().muted_foreground)
                                     .child(SharedString::from("Public Key:")),
                             )
-                            .child(Input::new(&self.npub_input).small().disabled(true)),
+                            .child(Input::new(&self.npub_input).disabled(true)),
                     )
                     .child(
                         v_flex()
@@ -171,7 +171,7 @@ impl Render for BackupPanel {
                                     .text_color(cx.theme().muted_foreground)
                                     .child(SharedString::from("Secret Key:")),
                             )
-                            .child(Input::new(&self.nsec_input).small().disabled(true)),
+                            .child(Input::new(&self.nsec_input).disabled(true)),
                     )
                     .child(
                         Button::new("copy")

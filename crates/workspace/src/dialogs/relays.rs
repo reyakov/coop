@@ -1,11 +1,3 @@
-use gpui_kit::assets::IconName;
-use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::scroll::ScrollableElement;
-use gpui_kit::component::tab::{Tab, TabBar};
-use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use std::collections::HashSet;
 
 use anyhow::{Error, anyhow};
@@ -15,6 +7,14 @@ use gpui::{
     ParentElement, Render, SharedString, Stateful, Styled, Subscription, Task, TextAlign,
     WeakEntity, Window, div, rems,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::tab::{Tab, TabBar};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
@@ -119,7 +119,7 @@ impl RelayManager {
                 h_flex()
                     .gap_1()
                     .w_full()
-                    .child(Input::new(&self.gossip.input).small().cleanable(true))
+                    .child(Input::new(&self.gossip.input).cleanable(true))
                     .child(
                         Button::new("metadata")
                             .map(|this| {
@@ -208,7 +208,7 @@ impl RelayManager {
                 h_flex()
                     .gap_1()
                     .w_full()
-                    .child(Input::new(&self.inbox.input).small().cleanable(true))
+                    .child(Input::new(&self.inbox.input).cleanable(true))
                     .child(
                         Button::new("add-inbox")
                             .icon(IconName::Plus)

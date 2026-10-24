@@ -16,8 +16,6 @@ use workspace::TAB_BAR_HEIGHT;
 
 actions!(coop, [Quit]);
 
-const BASE_FONT_SIZE: f32 = 16.0;
-
 fn main() {
     // Initialize logging
     tracing_subscriber::fmt::init();
@@ -66,11 +64,13 @@ fn main() {
             settings::init(cx);
 
             let appearance = settings::persisted_appearance_mode();
-            match apply_native_theme(appearance, cx) {
+            let font_size = settings::persisted_theme().font_size;
+            match apply_native_theme(appearance, font_size, cx) {
                 Ok(()) => start_theme_watcher(appearance, cx),
                 Err(error) => {
                     log::warn!("native theme unavailable ({error})");
                     apply_appearance(appearance, cx);
+                    AppSettings::apply_theme_style(cx);
                 }
             }
 
@@ -171,31 +171,36 @@ fn quit(_ev: &Quit, cx: &mut App) {
     cx.quit();
 }
 
-/// Apply the native theme to the app, and then apply the persisted appearance mode
-fn apply_native_theme(appearance: AppearanceMode, cx: &mut App) -> native_theme::Result<()> {
+/// Apply the native theme to the app, scaled to the user's font size,
+/// then layer the persisted theme tuning on top
+fn apply_native_theme(
+    appearance: AppearanceMode,
+    font_size: f32,
+    cx: &mut App,
+) -> native_theme::Result<()> {
     let mut system = native_theme_gpui::SystemTheme::from_system()?;
     let native = system.light.defaults.font.size;
 
     if native > 0.0 {
-        system.accessibility.text_scaling_factor *= BASE_FONT_SIZE / native;
+        system.accessibility.text_scaling_factor *= font_size / native;
     }
 
     apply_system_theme(&system, cx);
     apply_appearance(appearance, cx);
+    // Applying the native theme replaces the whole theme, so the user's
+    // tuning must be layered on afterwards.
+    AppSettings::apply_theme_style(cx);
 
     Ok(())
 }
 
-/// Honor the appearance mode against the installed (native) palettes.
+/// Honor the appearance mode against the installed (native) palettes
 fn apply_appearance(appearance: AppearanceMode, cx: &mut App) {
     match appearance {
         AppearanceMode::System => Theme::sync_system_appearance(None, cx),
         AppearanceMode::Light => Theme::change(ThemeMode::Light, None, cx),
         AppearanceMode::Dark => Theme::change(ThemeMode::Dark, None, cx),
     }
-
-    // Like signed, inputs show only their tinted border when focused.
-    Theme::global_mut(cx).focus_ring = false;
 }
 
 /// Holds the watcher subscription so it lives as long as the app.
@@ -225,10 +230,11 @@ fn start_theme_watcher(initial_appearance: AppearanceMode, cx: &mut App) {
                     log::info!("OS theme changed; re-applying");
                     cx.update(|cx| {
                         let appearance = AppSettings::get_appearance_mode(cx);
+                        let font_size = AppSettings::get_theme(cx).font_size;
                         if let Some(watcher) = cx.try_global::<ThemeWatcher>() {
                             watcher.appearance.set(appearance);
                         }
-                        if let Err(error) = apply_native_theme(appearance, cx) {
+                        if let Err(error) = apply_native_theme(appearance, font_size, cx) {
                             log::warn!("failed to apply updated OS theme ({error})");
                         }
                     });

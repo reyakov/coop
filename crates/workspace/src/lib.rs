@@ -275,7 +275,7 @@ impl Workspace {
                 let view = settings::init(window, cx);
 
                 window.open_dialog(cx, move |this, _window, _cx| {
-                    this.width(px(520.))
+                    this.width(px(650.))
                         .close_button(true)
                         .pb_2()
                         .title("Preferences")

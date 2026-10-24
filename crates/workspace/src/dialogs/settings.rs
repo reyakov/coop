@@ -1,19 +1,22 @@
 use gpui::http_client::Url;
 use gpui::{
     App, AppContext, Context, Entity, IntoElement, ParentElement, PathPromptOptions, Render,
-    SharedString, Styled, Window, div,
+    Styled, Subscription, Window, div,
 };
 use gpui_kit::assets::IconName;
-use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
-use gpui_kit::component::input::{Input, InputState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::separator::Separator;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{Disableable, Sizable, WindowExt, h_flex, v_flex};
 use settings::{AppSettings, AppearanceMode};
-use ui::settings_row;
+use ui::{settings_block, settings_row};
+
+/// Bounds for the theme number inputs
+const FONT_SIZE_RANGE: (f32, f32) = (10., 32.);
+const RADIUS_RANGE: (f32, f32) = (0., 24.);
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Preferences> {
     cx.new(|cx| Preferences::new(window, cx))
@@ -21,6 +24,11 @@ pub fn init(window: &mut Window, cx: &mut App) -> Entity<Preferences> {
 
 pub struct Preferences {
     file_input: Entity<InputState>,
+    font_size_input: Entity<InputState>,
+    radius_input: Entity<InputState>,
+    radius_lg_input: Entity<InputState>,
+    /// Keeps the control subscriptions alive while the dialog is open
+    _subscriptions: Vec<Subscription>,
 }
 
 impl Preferences {
@@ -32,7 +40,91 @@ impl Preferences {
                 .placeholder("https://myblossom.com")
         });
 
-        Self { file_input }
+        let theme = AppSettings::get_theme(cx);
+        let font_size_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(theme.font_size.to_string())
+                .step(1.)
+                .min(FONT_SIZE_RANGE.0 as f64)
+                .max(FONT_SIZE_RANGE.1 as f64)
+        });
+        let radius_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(
+                    theme
+                        .radius
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                )
+                .placeholder("System")
+                .step(1.)
+                .min(RADIUS_RANGE.0 as f64)
+                .max(RADIUS_RANGE.1 as f64)
+        });
+        let radius_lg_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .default_value(
+                    theme
+                        .radius_lg
+                        .map(|value| value.to_string())
+                        .unwrap_or_default(),
+                )
+                .placeholder("System")
+                .step(1.)
+                .min(RADIUS_RANGE.0 as f64)
+                .max(RADIUS_RANGE.1 as f64)
+        });
+
+        let subscriptions = vec![
+            Self::wire_number_input(&font_size_input, FONT_SIZE_RANGE, cx, |value, cx| {
+                if let Some(font_size) = value {
+                    AppSettings::update_theme(|theme| theme.font_size = font_size, cx);
+                    AppSettings::apply_theme_style(cx);
+                }
+            }),
+            Self::wire_number_input(&radius_input, RADIUS_RANGE, cx, |value, cx| {
+                AppSettings::update_theme(|theme| theme.radius = value, cx);
+                AppSettings::apply_theme_style(cx);
+            }),
+            Self::wire_number_input(&radius_lg_input, RADIUS_RANGE, cx, |value, cx| {
+                AppSettings::update_theme(|theme| theme.radius_lg = value, cx);
+                AppSettings::apply_theme_style(cx);
+            }),
+        ];
+
+        Self {
+            file_input,
+            font_size_input,
+            radius_input,
+            radius_lg_input,
+            _subscriptions: subscriptions,
+        }
+    }
+
+    /// Persist a theme number as it changes; an empty value stores `None`
+    fn wire_number_input(
+        state: &Entity<InputState>,
+        range: (f32, f32),
+        cx: &mut Context<Self>,
+        persist: impl Fn(Option<f32>, &mut App) + 'static,
+    ) -> Subscription {
+        let (min, max) = range;
+        let state = state.clone();
+
+        cx.subscribe(&state, move |_, state, event: &InputEvent, cx| {
+            if !matches!(event, InputEvent::Change) {
+                return;
+            }
+
+            let value = state
+                .read(cx)
+                .value()
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .map(|value| value.clamp(min, max));
+            persist(value, cx);
+        })
     }
 
     /// Update the file server (blossom) URL
@@ -89,15 +181,23 @@ impl Render for Preferences {
         const SCREENING: &str = "Show an screening dialog to verify the unknown sender.";
         const WOT: &str = "Treat people followed by your contacts as known senders.";
         const AVATAR: &str = "Hide all avatar pictures to improve performance.";
-        const MODE: &str = "Follow the OS, or always use light or dark.";
+        const APPEARANCE: &str =
+            "Choose whether the app follows the system theme or uses a light/dark theme.";
+        const FONT_SIZE: &str = "The base font size for the interface.";
+        const RADIUS: &str = "Corner radius for UI elements. Empty follows the OS theme.";
+        const RADIUS_LG: &str =
+            "Corner radius for large elements like dialogs. Empty follows the OS theme.";
+        const FOCUS_RING: &str = "Draw a ring around focused controls.";
         const NIP4E: &str = "Use a dedicated key to encrypt and decrypt messages.";
         const BACKGROUND: &str = "Show an image behind chat and group panels.";
+        const MEDIA: &str = "Server for media attachments. Only blossom services are supported.";
 
         let screening = AppSettings::get_screening(cx);
         let wot_auto_trust = AppSettings::get_wot_auto_trust(cx);
         let hide_avatar = AppSettings::get_hide_avatar(cx);
         let nip4e = AppSettings::get_nip4e(cx);
         let appearance_mode = AppSettings::get_appearance_mode(cx);
+        let theme = AppSettings::get_theme(cx);
         let panel_background = AppSettings::get_panel_background(cx);
         let panel_background_path = AppSettings::get_panel_background_path(cx);
 
@@ -107,12 +207,13 @@ impl Render for Preferences {
         };
 
         v_flex()
+            .mt_2()
             .gap_4()
+            .w_full()
             .child(
-                GroupBox::new()
-                    .id("general")
-                    .title("General")
-                    .fill()
+                v_flex()
+                    .w_full()
+                    .gap_3()
                     .child(settings_row(
                         "Screening",
                         SCREENING,
@@ -144,47 +245,68 @@ impl Render for Preferences {
                         cx,
                     )),
             )
+            .child(Separator::horizontal())
+            .child(settings_row(
+                "Appearance",
+                APPEARANCE,
+                Button::new("appearance-mode")
+                    .label(appearance_mode.label())
+                    .ghost()
+                    .small()
+                    .dropdown_menu(|this, _window, _cx| {
+                        AppearanceMode::ALL.iter().fold(this, |menu, mode| {
+                            menu.item(PopupMenuItem::new(mode.label()).on_click(
+                                move |_, _window, cx| {
+                                    Self::set_appearance_mode(*mode, cx);
+                                },
+                            ))
+                        })
+                    }),
+                cx,
+            ))
+            .child(Separator::horizontal())
             .child(
-                GroupBox::new()
-                    .id("appearance")
-                    .title("Appearance")
-                    .fill()
-                    .child(
-                        h_flex()
-                            .gap_3()
-                            .justify_between()
-                            .child(
-                                v_flex()
-                                    .child(div().text_xs().child(SharedString::from("Mode")))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(SharedString::from(MODE)),
-                                    ),
-                            )
-                            .child(
-                                Button::new("appearance-mode")
-                                    .label(appearance_mode.label())
-                                    .ghost()
-                                    .small()
-                                    .dropdown_menu(|this, _window, _cx| {
-                                        AppearanceMode::ALL.iter().fold(this, |menu, mode| {
-                                            menu.item(PopupMenuItem::new(mode.label()).on_click(
-                                                move |_, _window, cx| {
-                                                    Self::set_appearance_mode(*mode, cx);
-                                                },
-                                            ))
-                                        })
-                                    }),
-                            ),
-                    ),
+                v_flex()
+                    .w_full()
+                    .gap_3()
+                    .child(settings_row(
+                        "Font Size",
+                        FONT_SIZE,
+                        NumberInput::new(&self.font_size_input).w_24(),
+                        cx,
+                    ))
+                    .child(settings_row(
+                        "Corner Radius",
+                        RADIUS,
+                        NumberInput::new(&self.radius_input).w_24(),
+                        cx,
+                    ))
+                    .child(settings_row(
+                        "Large Corner Radius",
+                        RADIUS_LG,
+                        NumberInput::new(&self.radius_lg_input).w_24(),
+                        cx,
+                    ))
+                    .child(settings_row(
+                        "Focus Ring",
+                        FOCUS_RING,
+                        Switch::new("focus-ring")
+                            .checked(theme.focus_ring)
+                            .on_click(move |_, _window, cx| {
+                                AppSettings::update_theme(
+                                    |theme| theme.focus_ring = !theme.focus_ring,
+                                    cx,
+                                );
+                                AppSettings::apply_theme_style(cx);
+                            }),
+                        cx,
+                    )),
             )
+            .child(Separator::horizontal())
             .child(
-                GroupBox::new()
-                    .id("background")
-                    .title("Background")
-                    .fill()
+                v_flex()
+                    .w_full()
+                    .gap_3()
                     .child(settings_row(
                         "Panel background",
                         BACKGROUND,
@@ -196,101 +318,64 @@ impl Render for Preferences {
                             }),
                         cx,
                     ))
-                    .child(
+                    .child(settings_block(
+                        "Image",
+                        background_label,
                         h_flex()
-                            .gap_3()
-                            .justify_between()
+                            .justify_end()
+                            .gap_1()
                             .child(
-                                v_flex()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(div().text_xs().child(SharedString::from("Image")))
-                                    .child(
-                                        div()
-                                            .text_xs()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .truncate()
-                                            .child(SharedString::from(background_label)),
-                                    ),
+                                Button::new("choose-background")
+                                    .label("Choose image")
+                                    .ghost()
+                                    .small()
+                                    .disabled(!panel_background)
+                                    .on_click(|_, _window, cx| {
+                                        Self::choose_background(cx);
+                                    }),
                             )
                             .child(
-                                h_flex()
-                                    .flex_shrink_0()
-                                    .gap_1()
-                                    .child(
-                                        Button::new("choose-background")
-                                            .label("Choose image")
-                                            .ghost()
-                                            .small()
-                                            .disabled(!panel_background)
-                                            .on_click(|_, _window, cx| {
-                                                Self::choose_background(cx);
-                                            }),
-                                    )
-                                    .child(
-                                        Button::new("reset-background")
-                                            .label("Reset")
-                                            .ghost()
-                                            .small()
-                                            .disabled(
-                                                !panel_background
-                                                    || panel_background_path.is_none(),
-                                            )
-                                            .on_click(|_, _window, cx| {
-                                                AppSettings::update_panel_background_path(None, cx);
-                                                cx.refresh_windows();
-                                            }),
-                                    ),
+                                Button::new("reset-background")
+                                    .label("Reset")
+                                    .ghost()
+                                    .small()
+                                    .disabled(!panel_background || panel_background_path.is_none())
+                                    .on_click(|_, _window, cx| {
+                                        AppSettings::update_panel_background_path(None, cx);
+                                        cx.refresh_windows();
+                                    }),
                             ),
-                    ),
-            )
-            .child(
-                GroupBox::new()
-                    .id("experiments")
-                    .title("Experiments")
-                    .fill()
-                    .child(settings_row(
-                        "Decoupling Encryption Key",
-                        NIP4E,
-                        Switch::new("nip4e")
-                            .checked(nip4e)
-                            .on_click(move |_, _window, cx| {
-                                AppSettings::update_nip4e(!nip4e, cx);
-                            }),
                         cx,
                     )),
             )
-            .child(
-                GroupBox::new()
-                    .id("media")
-                    .title("Media Upload Service")
-                    .fill()
+            .child(Separator::horizontal())
+            .child(settings_row(
+                "Decoupling Encryption Key",
+                NIP4E,
+                Switch::new("nip4e")
+                    .checked(nip4e)
+                    .on_click(move |_, _window, cx| {
+                        AppSettings::update_nip4e(!nip4e, cx);
+                    }),
+                cx,
+            ))
+            .child(Separator::horizontal())
+            .child(settings_block(
+                "Media Upload Service",
+                MEDIA,
+                h_flex()
+                    .gap_1()
+                    .child(div().flex_1().child(Input::new(&self.file_input)))
                     .child(
-                        v_flex()
-                            .gap_0p5()
-                            .child(
-                                h_flex()
-                                    .gap_1()
-                                    .child(Input::new(&self.file_input).small())
-                                    .child(
-                                        Button::new("update-file-server")
-                                            .icon(IconName::Check)
-                                            .ghost()
-                                            .size_8()
-                                            .on_click(cx.listener(move |this, _ev, window, cx| {
-                                                this.update_file_server(window, cx)
-                                            })),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .font_medium()
-                                    .italic()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(SharedString::from("Only support blossom service")),
-                            ),
+                        Button::new("update-file-server")
+                            .icon(IconName::Check)
+                            .ghost()
+                            .size_8()
+                            .on_click(cx.listener(move |this, _ev, window, cx| {
+                                this.update_file_server(window, cx)
+                            })),
                     ),
-            )
+                cx,
+            ))
     }
 }

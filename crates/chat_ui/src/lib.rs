@@ -1828,7 +1828,7 @@ impl Render for ChatPanel {
                         .gap_2()
                         .border_b_1()
                         .border_color(cx.theme().border)
-                        .child(Input::new(&self.subject_input).small())
+                        .child(Input::new(&self.subject_input))
                         .child(
                             Button::new("change")
                                 .icon(IconName::CheckCircle)

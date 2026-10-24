@@ -424,19 +424,19 @@ impl Render for ProfileDialog {
                     v_flex()
                         .gap_1p5()
                         .child(label("Name", cx))
-                        .child(Input::new(&self.name_input).small()),
+                        .child(Input::new(&self.name_input)),
                 )
                 .child(
                     v_flex()
                         .gap_1p5()
                         .child(label("About", cx))
-                        .child(Textarea::new(&self.bio_input).small()),
+                        .child(Textarea::new(&self.bio_input)),
                 )
                 .child(
                     v_flex()
                         .gap_1p5()
                         .child(label("Website", cx))
-                        .child(Input::new(&self.website_input).small()),
+                        .child(Input::new(&self.website_input)),
                 )
             })
             .when(!self.editing, |this| {

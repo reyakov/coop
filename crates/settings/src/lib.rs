@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Error, anyhow};
 use common::config_dir;
-use gpui::{App, AppContext, Context, Entity, Global, ImageSource, Subscription, Task};
+use gpui::{App, AppContext, Context, Entity, Global, ImageSource, Subscription, Task, px};
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use smallvec::{SmallVec, smallvec};
@@ -31,6 +31,33 @@ impl AppearanceMode {
     }
 }
 
+/// The default base font size for the interface
+pub const DEFAULT_FONT_SIZE: f32 = 16.0;
+
+/// User tuning applied on top of the native OS theme
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ThemeSettings {
+    /// The base UI font size in pixels
+    pub font_size: f32,
+    /// Draw a ring around focused controls
+    pub focus_ring: bool,
+    /// Corner radius for general elements; follows the OS theme when unset
+    pub radius: Option<f32>,
+    /// Corner radius for large elements like dialogs; follows the OS theme when unset
+    pub radius_lg: Option<f32>,
+}
+
+impl Default for ThemeSettings {
+    fn default() -> Self {
+        Self {
+            font_size: DEFAULT_FONT_SIZE,
+            focus_ring: false,
+            radius: None,
+            radius_lg: None,
+        }
+    }
+}
+
 pub fn init(cx: &mut App) {
     AppSettings::set_global(cx.new(AppSettings::new), cx)
 }
@@ -40,17 +67,34 @@ pub fn init(cx: &mut App) {
 /// The async load fills the global settings later; the native theme must be
 /// applied before the first window opens, so boot reads the mode straight
 /// from the settings file instead.
-pub fn persisted_appearance_mode() -> AppearanceMode {
+fn persisted_settings() -> Option<Settings> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let path = config_dir().join(".settings");
         if let Ok(content) = std::fs::read_to_string(path)
             && let Ok(settings) = serde_json::from_str::<Settings>(&content)
         {
-            return settings.appearance_mode;
+            return Some(settings);
         }
     }
-    AppearanceMode::default()
+    None
+}
+
+pub fn persisted_appearance_mode() -> AppearanceMode {
+    persisted_settings()
+        .map(|settings| settings.appearance_mode)
+        .unwrap_or_default()
+}
+
+/// Read the persisted theme tuning synchronously.
+///
+/// Like [`persisted_appearance_mode`], the native theme is applied before the
+/// async settings load completes, so boot reads the tuning straight from the
+/// settings file instead.
+pub fn persisted_theme() -> ThemeSettings {
+    persisted_settings()
+        .map(|settings| settings.theme)
+        .unwrap_or_default()
 }
 
 const DEFAULT_FILE_SERVER: &str = "https://nostr.download/";
@@ -109,6 +153,7 @@ setting_accessors! {
 }
 
 setting_getters! {
+    pub theme: ThemeSettings,
     pub pinned_rooms: Vec<u64>,
     pub pinned_groups: Vec<String>,
 }
@@ -179,6 +224,9 @@ pub struct Settings {
     /// Hide the notice that messages in public groups are not encrypted
     #[serde(default)]
     pub hide_group_notice: bool,
+    /// Tuning applied on top of the native OS theme
+    #[serde(default)]
+    pub theme: ThemeSettings,
     /// Show an image behind chat and group panels
     #[serde(default)]
     pub panel_background: bool,
@@ -206,6 +254,7 @@ impl Default for Settings {
             wot_auto_trust: true,
             nip4e: false,
             hide_group_notice: false,
+            theme: ThemeSettings::default(),
             panel_background: true,
             panel_background_path: None,
             trusted_relays: vec![],
@@ -268,6 +317,34 @@ impl AppSettings {
             *this = settings;
             cx.notify();
         });
+    }
+
+    /// Edit the theme tuning
+    pub fn update_theme(edit: impl FnOnce(&mut ThemeSettings), cx: &mut App) {
+        Self::global(cx).update(cx, |this, cx| {
+            this.inner.update(cx, |inner, cx| {
+                edit(&mut inner.theme);
+                cx.notify();
+            });
+        });
+    }
+
+    /// Apply the persisted theme tuning on top of the active theme
+    pub fn apply_theme_style(cx: &mut App) {
+        use gpui_kit::component::Theme;
+
+        let theme = Self::get_theme(cx);
+        let styled = Theme::global_mut(cx);
+        styled.font_size = px(theme.font_size);
+        styled.focus_ring = theme.focus_ring;
+        if let Some(radius) = theme.radius {
+            styled.radius = px(radius);
+        }
+        if let Some(radius_lg) = theme.radius_lg {
+            styled.radius_lg = px(radius_lg);
+        }
+        Theme::sync_base(cx);
+        cx.refresh_windows();
     }
 
     /// Load settings
@@ -380,5 +457,29 @@ impl AppSettings {
             }
             cx.notify();
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Settings written before theme tuning existed must keep loading.
+    #[test]
+    fn settings_without_theme_keep_defaults() {
+        let settings: Settings = serde_json::from_str(
+            r#"{
+                "appearance_mode": "Dark",
+                "hide_avatar": false,
+                "screening": true,
+                "wot_auto_trust": true,
+                "nip4e": false,
+                "trusted_relays": [],
+                "file_server": "https://nostr.download/"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.theme, ThemeSettings::default());
     }
 }

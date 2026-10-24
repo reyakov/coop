@@ -337,7 +337,7 @@ impl Render for ContactListPanel {
                                 h_flex()
                                     .gap_1()
                                     .w_full()
-                                    .child(Input::new(&self.input).small().cleanable(true))
+                                    .child(Input::new(&self.input).cleanable(true))
                                     .child(
                                         Button::new("add")
                                             .icon(IconName::Plus)
