@@ -4,7 +4,7 @@ use gpui::{Context, EventEmitter, Task};
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
-use state::NostrRegistry;
+use state::{BOOTSTRAP_RELAYS, NostrRegistry};
 
 /// Disable scoring when the follow set exceeds this size
 const MAX_FOLLOWS: usize = 2000;
@@ -14,6 +14,10 @@ const MAX_TAGS_PER_LIST: usize = 5000;
 const SYNC_INTERVAL: u64 = 15 * 60;
 /// Longest wait between retries while the graph has no data yet
 const MAX_RETRY_WAIT: u64 = 60;
+/// Time for a relay to prove negentropy support before the reconcile gives up
+const SYNC_INITIAL_TIMEOUT: u64 = 30;
+/// Longest silence from a relay before the reconcile gives up
+const SYNC_IDLE_TIMEOUT: u64 = 60;
 
 /// The web of trust graph changed
 #[derive(Debug, Clone)]
@@ -77,6 +81,36 @@ impl Snapshot {
 
         snapshot
     }
+
+    /// Build the snapshot from the contact lists the local database holds
+    async fn load(client: &Client, self_key: PublicKey) -> Option<Self> {
+        let own = stored_contact_list(client, self_key).await?;
+        let follows: HashSet<PublicKey> = own.tags.public_keys().take(MAX_FOLLOWS + 1).collect();
+
+        let events: Vec<Event> = if follows.is_empty() {
+            Vec::new()
+        } else {
+            let authors: Vec<PublicKey> = follows.iter().copied().collect();
+            let filter = Filter::new().kind(Kind::ContactList).authors(authors);
+
+            client
+                .database()
+                .query(filter)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .collect()
+        };
+
+        let snapshot = Self::build(self_key, follows, events);
+        log::debug!(
+            "wot loaded from database: {} follows, {} scored keys",
+            snapshot.follows.len(),
+            snapshot.scores.len()
+        );
+
+        Some(snapshot)
+    }
 }
 
 impl EventEmitter<WoTEvent> for WebOfTrust {}
@@ -88,8 +122,10 @@ impl EventEmitter<WoTEvent> for WebOfTrust {}
 pub struct WebOfTrust {
     /// Current user's public key
     self_key: Option<PublicKey>,
-    /// Latest built snapshot, none until the first refresh completes
+    /// Latest built snapshot, none until the first load completes
     snapshot: Option<Snapshot>,
+    /// Whether a reconciliation with the relays is in flight
+    syncing: bool,
     /// In-flight refresh, replaced by newer ones
     refresh_task: Option<Task<()>>,
     /// Keeps the periodic reconciliation loop alive
@@ -110,9 +146,9 @@ impl WebOfTrust {
 
                 let mut has_data = false;
 
-                // Ignore errors, the next refresh will retry
+                // Ignore errors, the next sync will retry
                 let _ = this.update(cx, |this, cx| {
-                    this.refresh(cx);
+                    this.sync(cx);
                     has_data = this.has_data();
                 });
 
@@ -133,40 +169,69 @@ impl WebOfTrust {
         Self {
             self_key: None,
             snapshot: None,
+            syncing: false,
             refresh_task: None,
             _tasks: tasks,
         }
     }
 
-    /// Load the graph for the current account
+    /// Load the graph for the current account from the local database
     pub(crate) fn hydrate(&mut self, cx: &mut Context<Self>) {
-        let nostr = NostrRegistry::global(cx);
-        let Some(self_key) = nostr.read(cx).current_user() else {
-            return;
-        };
-
-        self.self_key = Some(self_key);
-        self.refresh(cx);
-    }
-
-    /// Clear the graph on sign out or account switch
-    pub(crate) fn reset(&mut self, cx: &mut Context<Self>) {
-        self.self_key = None;
-        self.snapshot = None;
-        self.refresh_task = None;
-
-        cx.emit(WoTEvent);
-        cx.notify();
-    }
-
-    /// Reconcile the follow set's contact lists with the relays and rebuild.
-    fn refresh(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
 
         let Some(self_key) = nostr.read(cx).current_user() else {
             return;
         };
+
+        self.self_key = Some(self_key);
+        // Replacing the task below cancels any in-flight work
+        self.syncing = false;
+
+        self.refresh_task = Some(cx.spawn(async move |this, cx| {
+            let Some(snapshot) = Snapshot::load(&client, self_key).await else {
+                return;
+            };
+
+            this.update(cx, |this, cx| {
+                this.snapshot = Some(snapshot);
+                cx.emit(WoTEvent);
+                cx.notify();
+            })
+            .ok();
+        }));
+    }
+
+    /// Clear the graph on sign out or account switch
+    pub(crate) fn reset(&mut self, cx: &mut Context<Self>) {
+        self.self_key = None;
+        self.snapshot = None;
+        self.syncing = false;
+        self.refresh_task = None;
+
+        cx.emit(WoTEvent);
+        cx.notify();
+    }
+
+    /// Reconcile the follow set's contact lists with the bootstrap relays and rebuild.
+    fn sync(&mut self, cx: &mut Context<Self>) {
+        if self.syncing {
+            return;
+        }
+
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+
+        let Some(self_key) = nostr.read(cx).current_user() else {
+            return;
+        };
+
+        // The defaults are too short for relays streaming large batches
+        let opts = SyncOptions::new()
+            .initial_timeout(Duration::from_secs(SYNC_INITIAL_TIMEOUT))
+            .idle_timeout(Duration::from_secs(SYNC_IDLE_TIMEOUT));
+
+        self.syncing = true;
 
         self.refresh_task = Some(cx.spawn(async move |this, cx| {
             // Scope the reconcile to the follow set known so far
@@ -178,60 +243,36 @@ impl WebOfTrust {
             let mut authors: Vec<PublicKey> = known.iter().copied().collect();
             authors.push(self_key);
 
-            // Negentropy transfers only the lists the relays hold
-            // and the database is missing
             let filter = Filter::new().kind(Kind::ContactList).authors(authors);
-            if let Err(error) = client.sync(filter).await {
-                log::warn!("Failed to reconcile contact lists: {error}");
+            match client.sync(filter).with(BOOTSTRAP_RELAYS).opts(opts).await {
+                Ok(output) => {
+                    for (url, error) in output.failed {
+                        log::warn!("Failed to reconcile contact lists with {url}: {error}");
+                    }
+                }
+                Err(error) => log::warn!("Failed to reconcile contact lists: {error}"),
             }
 
             // The follow set after the reconcile
-            let Some(own) = stored_contact_list(&client, self_key).await else {
-                return;
-            };
-
-            let follows: HashSet<PublicKey> =
-                own.tags.public_keys().take(MAX_FOLLOWS + 1).collect();
-
-            let mut authors: Vec<PublicKey> = follows.iter().copied().collect();
-            authors.push(self_key);
-
-            let events: Vec<Event> = if follows.is_empty() {
-                Vec::new()
-            } else {
-                let filter = Filter::new().kind(Kind::ContactList).authors(authors);
-                client
-                    .database()
-                    .query(filter)
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .collect()
-            };
-
-            let snapshot = Snapshot::build(self_key, follows.clone(), events);
-            log::debug!(
-                "Web of trust rebuilt: {} follows, {} scored keys",
-                snapshot.follows.len(),
-                snapshot.scores.len()
-            );
-
-            // Newly followed authors were not part of the reconcile
-            let grew = !known.is_superset(&follows);
+            let snapshot = Snapshot::load(&client, self_key).await;
 
             this.update(cx, |this, cx| {
-                this.snapshot = Some(snapshot);
-                cx.emit(WoTEvent);
-                cx.notify();
+                this.syncing = false;
+
+                if let Some(snapshot) = snapshot {
+                    // Newly followed authors were not part of the reconcile
+                    let grew = !known.is_superset(&snapshot.follows);
+
+                    this.snapshot = Some(snapshot);
+                    cx.emit(WoTEvent);
+                    cx.notify();
+
+                    if grew {
+                        this.sync(cx);
+                    }
+                }
             })
             .ok();
-
-            if grew {
-                this.update(cx, |this, cx| {
-                    this.refresh(cx);
-                })
-                .ok();
-            }
         }));
     }
 
