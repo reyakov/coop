@@ -8,6 +8,7 @@ publish.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+assets = { path = "../crates/assets" }
 workspace = { path = "../crates/workspace" }
 ui = { path = "../crates/ui" }
 state = { path = "../crates/state" }
@@ -29,6 +30,8 @@ console_error_panic_hook = "0.1"
 tracing-wasm = "0.2"
 console_log = "1.0"
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
 universal-time = { git = "https://github.com/shadowylab/universal-time" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

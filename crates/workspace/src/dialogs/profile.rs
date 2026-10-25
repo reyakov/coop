@@ -4,8 +4,8 @@ use anyhow::Error;
 use chat::{ChatRegistry, Room, RoomKind};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, ClipboardItem, Context, Div, Entity, IntoElement, ParentElement,
-    PathPromptOptions, Render, SharedString, Styled, Task, Window, div, retain_all,
+    App, AppContext, ClipboardItem, Context, Div, Entity, IntoElement, ParentElement, Render,
+    SharedString, Styled, Task, Window, div, retain_all,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -18,7 +18,7 @@ use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::{Directory, Person, PersonRegistry, shorten_pubkey};
 use settings::AppSettings;
-use state::{NostrRegistry, upload};
+use state::{NostrRegistry, pick_file, upload_file};
 use ui::Avatar;
 
 use crate::Workspace;
@@ -179,17 +179,12 @@ impl ProfileDialog {
         // Get the user's configured blossom server
         let server = AppSettings::get_file_server(cx);
 
-        // Ask user for file upload
-        let path = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: None,
-        });
+        // Ask the user for an image to upload
+        let picker = pick_file(cx);
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             // Selecting no file means the prompt was cancelled
-            let Some(path) = path.await??.and_then(|mut paths| paths.pop()) else {
+            let Some(picked) = picker.await? else {
                 return Ok(());
             };
 
@@ -198,7 +193,7 @@ impl ProfileDialog {
             })?;
 
             // Upload via blossom client
-            match upload(server, path, cx).await {
+            match upload_file(server, picked, cx).await {
                 Ok(url) => {
                     this.update_in(cx, |this, window, cx| {
                         this.avatar_input.update(cx, |this, cx| {

@@ -9,7 +9,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, v_flex};
 use instant::Duration;
 use nostr_connect::prelude::*;
-use state::NostrRegistry;
+use state::{NostrRegistry, StateEvent};
 
 pub fn open(window: &mut Window, cx: &mut App) {
     let import = cx.new(|cx| ImportIdentity::new(window, cx));
@@ -73,12 +73,13 @@ impl ImportIdentity {
     }
 
     fn build(mode: Mode, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let nostr = NostrRegistry::global(cx);
         let key_input = cx.new(|cx| InputState::new(window, cx).placeholder("secret or bunker://"));
         let pass_input = cx.new(|cx| InputState::new(window, cx).masked(true));
         let repass_input = cx.new(|cx| InputState::new(window, cx).masked(true));
         let error = cx.new(|_| None);
 
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             cx.subscribe_in(&key_input, window, |this, _input, event, _window, cx| {
                 if let InputEvent::PressEnter { .. } = event {
                     this.login(cx);
@@ -95,6 +96,14 @@ impl ImportIdentity {
                 };
             }),
         ];
+
+        subscriptions.push(
+            cx.subscribe_in(&nostr, window, |this, _nostr, event, _window, cx| {
+                if let StateEvent::Error(error) = event {
+                    this.set_error(error.clone(), cx);
+                }
+            }),
+        );
 
         Self {
             mode,
@@ -188,6 +197,14 @@ impl ImportIdentity {
         });
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn extension(&mut self, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        nostr.update(cx, |this, cx| {
+            this.connect_extension(cx);
+        });
+    }
+
     fn set_loading(&mut self, status: bool, cx: &mut Context<Self>) {
         self.loading = status;
         cx.notify();
@@ -226,7 +243,6 @@ impl Render for ImportIdentity {
         const BUNKER_WARN: &str = "Nostr Connect will usually take more time to get all your messages. Please keep your session open until you see all your messages.";
         const KEY_WARN: &str = "Coop encrypts your key with your passphrase and stores it on this device. You only need the passphrase to sign in next time.";
 
-        let is_wasm = cfg!(target_arch = "wasm32");
         let is_unlock = self.mode == Mode::Unlock;
 
         let value = self.key_input.read(cx).value().trim().to_string();
@@ -305,26 +321,45 @@ impl Render for ImportIdentity {
                         )
                     }),
             )
-            .child(
-                Button::new("login")
-                    .label(if is_unlock { "Unlock" } else { "Continue" })
-                    .primary()
-                    .loading(self.loading)
-                    .disabled(self.loading)
-                    .on_click(cx.listener(move |this, _ev, _window, cx| {
-                        this.login(cx);
-                    })),
-            )
-            .when(!is_wasm && !is_unlock, |this| {
-                this.child(
-                    Button::new("proxy")
-                        .label("Connect via Web Extension (Experimental)")
-                        .ghost()
+            .child({
+                let content = v_flex().child(
+                    Button::new("login")
+                        .label(if is_unlock { "Unlock" } else { "Continue" })
+                        .primary()
+                        .loading(self.loading)
                         .disabled(self.loading)
                         .on_click(cx.listener(move |this, _ev, _window, cx| {
-                            this.proxy(cx);
+                            this.login(cx);
                         })),
-                )
+                );
+
+                #[cfg(not(target_arch = "wasm32"))]
+                let content = content.when(!is_unlock, |this| {
+                    this.child(
+                        Button::new("proxy")
+                            .label("Connect via Web Extension (Experimental)")
+                            .ghost()
+                            .disabled(self.loading)
+                            .on_click(cx.listener(move |this, _ev, _window, cx| {
+                                this.proxy(cx);
+                            })),
+                    )
+                });
+
+                #[cfg(target_arch = "wasm32")]
+                let content = content.when(!is_unlock, |this| {
+                    this.child(
+                        Button::new("extension")
+                            .label("Continue with Browser Extension (NIP-07)")
+                            .ghost()
+                            .disabled(self.loading)
+                            .on_click(cx.listener(move |this, _ev, _window, cx| {
+                                this.extension(cx);
+                            })),
+                    )
+                });
+
+                content
             })
             .when_some(self.error.read(cx).as_ref(), |this, error| {
                 this.child(

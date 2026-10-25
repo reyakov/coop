@@ -1,11 +1,16 @@
 use std::path::PathBuf;
 
 use anyhow::{Error, anyhow};
+#[cfg(not(target_arch = "wasm32"))]
 use common::config_dir;
 use gpui::{App, AppContext, Context, Entity, Global, ImageSource, Subscription, Task, px};
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use smallvec::{SmallVec, smallvec};
+
+/// Browser storage key for the settings JSON
+#[cfg(target_arch = "wasm32")]
+const SETTINGS_KEY: &str = "coop.settings";
 
 /// The user's appearance preference, persisted with the rest of the settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -63,21 +68,21 @@ pub fn init(cx: &mut App) {
 }
 
 /// Read the persisted appearance mode synchronously.
-///
-/// The async load fills the global settings later; the native theme must be
-/// applied before the first window opens, so boot reads the mode straight
-/// from the settings file instead.
 fn persisted_settings() -> Option<Settings> {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let path = config_dir().join(".settings");
-        if let Ok(content) = std::fs::read_to_string(path)
-            && let Ok(settings) = serde_json::from_str::<Settings>(&content)
-        {
-            return Some(settings);
-        }
-    }
-    None
+    let content = persisted_content();
+    content.and_then(|content| serde_json::from_str(&content).ok())
+}
+
+/// The persisted settings JSON, from the config file or browser storage
+#[cfg(not(target_arch = "wasm32"))]
+fn persisted_content() -> Option<String> {
+    let path = config_dir().join(".settings");
+    std::fs::read_to_string(path).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn persisted_content() -> Option<String> {
+    common::web_store::get(SETTINGS_KEY).ok().flatten()
 }
 
 pub fn persisted_appearance_mode() -> AppearanceMode {
@@ -87,10 +92,6 @@ pub fn persisted_appearance_mode() -> AppearanceMode {
 }
 
 /// Read the persisted theme tuning synchronously.
-///
-/// Like [`persisted_appearance_mode`], the native theme is applied before the
-/// async settings load completes, so boot reads the tuning straight from the
-/// settings file instead.
 pub fn persisted_theme() -> ThemeSettings {
     persisted_settings()
         .map(|settings| settings.theme)
@@ -357,6 +358,14 @@ impl AppSettings {
                     return Ok(serde_json::from_str(&content)?);
                 }
             }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                if let Some(content) = common::web_store::get(SETTINGS_KEY)? {
+                    return Ok(serde_json::from_str(&content)?);
+                }
+            }
+
             Err(anyhow!("Not found"))
         });
 
@@ -389,6 +398,11 @@ impl AppSettings {
                 smol::fs::write(&path, content).await.ok();
             })
             .detach();
+
+            #[cfg(target_arch = "wasm32")]
+            if let Err(e) = common::web_store::set(SETTINGS_KEY, &content) {
+                log::warn!("failed to persist settings: {e}");
+            }
         }
     }
 

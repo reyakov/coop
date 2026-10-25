@@ -1,7 +1,9 @@
+#[cfg(not(target_arch = "wasm32"))]
+use gpui::PathPromptOptions;
 use gpui::http_client::Url;
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, PathPromptOptions, Render,
-    Styled, Subscription, Window, div,
+    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Subscription,
+    Window, div,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -150,29 +152,41 @@ impl Preferences {
     }
 
     /// Ask the user for an image to show behind chat and group panels
-    fn choose_background(cx: &mut App) {
-        let task = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: None,
-        });
+    fn choose_background(
+        #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))] window: &mut Window,
+        cx: &mut App,
+    ) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let note = Notification::warning("Background images are not supported on web yet.");
+            window.push_notification(note, cx);
+        }
 
-        cx.spawn(async move |cx| {
-            let Ok(Ok(Some(mut paths))) = task.await else {
-                return;
-            };
-
-            let Some(path) = paths.pop() else {
-                return;
-            };
-
-            cx.update(|cx| {
-                AppSettings::update_panel_background_path(Some(path), cx);
-                cx.refresh_windows();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let task = cx.prompt_for_paths(PathPromptOptions {
+                files: true,
+                directories: false,
+                multiple: false,
+                prompt: None,
             });
-        })
-        .detach();
+
+            cx.spawn(async move |cx| {
+                let Ok(Ok(Some(mut paths))) = task.await else {
+                    return;
+                };
+
+                let Some(path) = paths.pop() else {
+                    return;
+                };
+
+                cx.update(|cx| {
+                    AppSettings::update_panel_background_path(Some(path), cx);
+                    cx.refresh_windows();
+                });
+            })
+            .detach();
+        }
     }
 }
 
@@ -330,8 +344,8 @@ impl Render for Preferences {
                                     .ghost()
                                     .small()
                                     .disabled(!panel_background)
-                                    .on_click(|_, _window, cx| {
-                                        Self::choose_background(cx);
+                                    .on_click(|_, window, cx| {
+                                        Self::choose_background(window, cx);
                                     }),
                             )
                             .child(

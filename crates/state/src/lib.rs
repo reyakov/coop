@@ -4,26 +4,33 @@ use std::sync::Arc;
 use anyhow::{Error, anyhow};
 #[cfg(not(target_arch = "wasm32"))]
 use browser_signer_proxy::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
 use common::config_dir;
 use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Task, TaskExt};
+#[cfg(not(target_arch = "wasm32"))]
 use gpui_tokio::Tokio;
 use instant::Duration;
+#[cfg(target_arch = "wasm32")]
+use nostr_browser_signer::BrowserSigner;
 use nostr_connect::prelude::*;
 use nostr_gossip_memory::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 use nostr_lmdb::prelude::*;
-#[cfg(target_arch = "wasm32")]
-use nostr_memory::prelude::*;
 use nostr_sdk::prelude::*;
 
 mod blossom;
 mod constants;
+pub mod credentials;
 mod file;
 mod nip05;
 mod nip4e;
 mod signer;
 
-pub use blossom::*;
+#[cfg(target_arch = "wasm32")]
+pub mod web_database;
+#[cfg(target_arch = "wasm32")]
+pub mod web_file;
+
 pub use constants::*;
 pub use file::*;
 pub use nip4e::*;
@@ -107,7 +114,6 @@ impl NostrRegistry {
         let signer = UniversalSigner::new(Keys::generate());
         let authenticator = SignerAuthenticator::new(signer.clone());
 
-        // Construct the nostr lmdb instance
         #[cfg(not(target_arch = "wasm32"))]
         let database = cx.foreground_executor().block_on(async move {
             NostrLmdb::open(config_dir().join("nostr"))
@@ -116,7 +122,7 @@ impl NostrRegistry {
         });
 
         #[cfg(target_arch = "wasm32")]
-        let database = MemoryDatabase::unbounded();
+        let database = web_database::take();
 
         // Construct the nostr client
         let client = ClientBuilder::default()
@@ -137,9 +143,7 @@ impl NostrRegistry {
             let _ = entity.update(cx, |this, cx| {
                 this.connect_bootstrap_relays(cx);
 
-                if cfg!(target_arch = "wasm32") {
-                    cx.emit(StateEvent::NoSigner);
-                } else if let Some(secret) = cli_key {
+                if let Some(secret) = cli_key {
                     // Use CLI-provided key -- same path as restore_session
                     let keys = Keys::new(secret);
                     this.set_signer(keys, cx);
@@ -241,7 +245,7 @@ impl NostrRegistry {
 
     /// Restore the signer from the stored credential
     fn restore_session(&mut self, cx: &mut Context<Self>) {
-        let user_keyring = cx.read_credentials(USER_KEYRING);
+        let user_keyring = credentials::read(cx);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             let result = async {
@@ -278,6 +282,11 @@ impl NostrRegistry {
                             this.update(cx, |this, cx| {
                                 this.connect_proxy(cx);
                             })?;
+                        } else if content == "extension" {
+                            #[cfg(target_arch = "wasm32")]
+                            this.update(cx, |this, cx| {
+                                this.connect_extension(cx);
+                            })?;
                         } else {
                             this.update(cx, |_, cx| {
                                 cx.emit(StateEvent::NoSigner);
@@ -313,7 +322,7 @@ impl NostrRegistry {
         cx: &mut Context<Self>,
     ) -> Task<Result<PublicKey, Error>> {
         let password = password.to_owned();
-        let user_keyring = cx.read_credentials(USER_KEYRING);
+        let user_keyring = credentials::read(cx);
 
         cx.spawn(async move |this, cx| {
             let content = user_keyring
@@ -372,9 +381,8 @@ impl NostrRegistry {
             let (keys, ncryptsec) = job.await?;
             let public_key = keys.public_key();
 
-            let write = cx.update(|cx| {
-                cx.write_credentials(USER_KEYRING, &public_key.to_hex(), ncryptsec.as_bytes())
-            });
+            let write =
+                cx.update(|cx| credentials::write(cx, &public_key.to_hex(), ncryptsec.as_bytes()));
             write.await?;
 
             this.update(cx, |this, cx| {
@@ -411,9 +419,8 @@ impl NostrRegistry {
             let keys = decrypt_task.await?;
             let public_key = keys.public_key();
 
-            let write = cx.update(|cx| {
-                cx.write_credentials(USER_KEYRING, &public_key.to_hex(), stored.as_bytes())
-            });
+            let write =
+                cx.update(|cx| credentials::write(cx, &public_key.to_hex(), stored.as_bytes()));
             write.await?;
 
             this.update(cx, |this, cx| {
@@ -439,7 +446,7 @@ impl NostrRegistry {
 
         let keys = Keys::generate();
         let credential = with_master_key(&uri_string, &keys);
-        let write = cx.write_credentials(USER_KEYRING, "bunker", credential.as_bytes());
+        let write = credentials::write(cx, "bunker", credential.as_bytes());
 
         cx.spawn(async move |this, cx| {
             let signer = NostrConnect::builder(connect_uri, keys)
@@ -463,10 +470,48 @@ impl NostrRegistry {
         self.current_user = None;
         self.passphrase_required = false;
 
-        cx.delete_credentials(USER_KEYRING).detach_and_log_err(cx);
+        credentials::delete(cx).detach_and_log_err(cx);
         cx.emit(StateEvent::SignerChanged);
         cx.emit(StateEvent::NoSigner);
         cx.notify();
+    }
+
+    /// Connect the browser extension signer (NIP-07).
+    #[cfg(target_arch = "wasm32")]
+    pub fn connect_extension(&mut self, cx: &mut Context<Self>) {
+        let signer = match BrowserSigner::new() {
+            Ok(signer) => signer,
+            Err(e) => {
+                cx.emit(StateEvent::error(format!("No Nostr extension found: {e}.")));
+                cx.emit(StateEvent::NoSigner);
+                return;
+            }
+        };
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            match signer.get_public_key_async().await {
+                Ok(public_key) => {
+                    this.update(cx, |this, cx| {
+                        credentials::write(cx, "extension", b"extension").detach_and_log_err(cx);
+                        this.signer.swap_inner(signer);
+                        this.current_user = Some(public_key);
+                        this.passphrase_required = false;
+
+                        cx.emit(StateEvent::SignerChanged);
+                        cx.notify();
+                    })?;
+                }
+                Err(e) => {
+                    this.update(cx, |_, cx| {
+                        credentials::delete(cx).detach_and_log_err(cx);
+                        cx.emit(StateEvent::error(e.to_string()));
+                        cx.emit(StateEvent::NoSigner);
+                    })?;
+                }
+            };
+
+            Ok(())
+        }));
     }
 
     /// Start the browser proxy

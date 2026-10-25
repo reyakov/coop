@@ -20,6 +20,7 @@ futures.workspace = true
 anyhow.workspace = true
 webbrowser.workspace = true
 serde_json.workspace = true
+log.workspace = true
 
 mime_guess = "2.0.4"
 
@@ -28,7 +29,24 @@ sha2.workspace = true
 data-encoding.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+js-sys = "0.3"
+nostr-browser-signer.workspace = true
 nostr-memory.workspace = true
+nostr-sqlite.workspace = true
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+    "Blob",
+    "BlobPropertyBag",
+    "File",
+    "FileList",
+    "HtmlAnchorElement",
+    "HtmlInputElement",
+    "Url",
+    "Window",
+] }
+sqlite-wasm-rs = "0.5"
+sqlite-wasm-vfs = "0.2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 browser-signer-proxy = { path = "../browser-signer-proxy" }

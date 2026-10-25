@@ -54,6 +54,7 @@ impl Render for DragPanelPreview {
             .cursor_grab()
             .p_1()
             .whitespace_nowrap()
+            .font_family(cx.theme().font_family.clone())
             .border_1()
             .border_color(cx.theme().border)
             .rounded(cx.theme().radius_lg)

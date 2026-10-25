@@ -20,12 +20,39 @@ impl AssetSource for CombinedAssets {
         if let Ok(Some(data)) = Assets.load(path) {
             return Ok(Some(data));
         }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            // The kit bundle fetches icons over HTTP on the web; a single
+            // instance keeps its download cache alive across loads.
+            use std::sync::OnceLock;
+            static KIT_ASSETS: OnceLock<gpui_kit::assets::Assets> = OnceLock::new();
+            KIT_ASSETS
+                .get_or_init(gpui_kit::assets::Assets::default)
+                .load(path)
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
         gpui_kit::assets::Assets.load(path)
     }
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut paths = Assets.list(path).unwrap_or_default();
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            use std::sync::OnceLock;
+            static KIT_ASSETS: OnceLock<gpui_kit::assets::Assets> = OnceLock::new();
+            paths.extend(
+                KIT_ASSETS
+                    .get_or_init(gpui_kit::assets::Assets::default)
+                    .list(path)?,
+            );
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
         paths.extend(gpui_kit::assets::Assets.list(path)?);
+
         Ok(paths)
     }
 }

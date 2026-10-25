@@ -3,7 +3,10 @@ use std::sync::RwLock;
 
 use anyhow::{Error, anyhow};
 use common::emojis_from_tags;
-use gpui::{App, AppContext, Context, Entity, EventEmitter, Global, Subscription, Task};
+use futures::{FutureExt, pin_mut};
+use gpui::{
+    App, AppContext, BackgroundExecutor, Context, Entity, EventEmitter, Global, Subscription, Task,
+};
 use instant::Duration;
 use nostr_sdk::prelude::*;
 use smallvec::{SmallVec, smallvec};
@@ -98,8 +101,9 @@ impl PersonRegistry {
         }));
 
         let client3 = client.clone();
+        let executor = cx.background_executor().clone();
         tasks.push(cx.background_spawn(async move {
-            Self::handle_requests(&client3, &metadata_rx).await;
+            Self::handle_requests(&client3, &metadata_rx, executor).await;
         }));
 
         tasks.push(cx.spawn(async move |this, cx| {
@@ -193,30 +197,45 @@ impl PersonRegistry {
     }
 
     /// Handle request for metadata
-    async fn handle_requests(client: &Client, rx: &flume::Receiver<PublicKey>) {
+    async fn handle_requests(
+        client: &Client,
+        rx: &flume::Receiver<PublicKey>,
+        executor: BackgroundExecutor,
+    ) {
         let mut batch: HashSet<PublicKey> = HashSet::new();
 
         loop {
-            match flume::Selector::new()
-                .recv(rx, |result| result.ok())
-                .wait_timeout(Duration::from_secs(TIMEOUT))
-            {
-                Ok(Some(public_key)) => {
-                    batch.insert(public_key);
-                    // Process the batch if it's full
-                    if batch.len() >= 20
-                        && let Err(e) = get_metadata(client, std::mem::take(&mut batch)).await
-                    {
-                        log::warn!("Failed to get metadata batch: {e}");
+            let timer = executor.timer(Duration::from_secs(TIMEOUT)).fuse();
+            pin_mut!(timer);
+
+            let request = futures::select! {
+                result = rx.recv_async().fuse() => match result {
+                    Ok(public_key) => public_key,
+                    Err(_) => {
+                        if !batch.is_empty()
+                            && let Err(e) = get_metadata(client, std::mem::take(&mut batch)).await
+                        {
+                            log::warn!("Failed to get metadata batch: {e}");
+                        }
+                        return;
                     }
-                }
-                _ => {
+                },
+                () = timer => {
                     if !batch.is_empty()
                         && let Err(e) = get_metadata(client, std::mem::take(&mut batch)).await
                     {
                         log::warn!("Failed to get metadata batch: {e}");
                     }
+                    continue;
                 }
+            };
+
+            batch.insert(request);
+            // Process the batch if it's full
+            if batch.len() >= 20
+                && let Err(e) = get_metadata(client, std::mem::take(&mut batch)).await
+            {
+                log::warn!("Failed to get metadata batch: {e}");
             }
         }
     }

@@ -2,8 +2,8 @@ use anyhow::Error;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement,
-    ParentElement, PathPromptOptions, Render, SharedString, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Subscription, Task, WeakEntity, Window, div, px, rems,
+    ParentElement, Render, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled,
+    Subscription, Task, WeakEntity, Window, div, px, rems,
 };
 use gpui_base::{Popup, Select};
 use gpui_kit::assets::IconName;
@@ -18,7 +18,7 @@ use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, WindowExt, h_
 use nip29::{GroupCreateOptions, GroupKey, GroupsEvent, GroupsRegistry};
 use nostr_sdk::prelude::*;
 use settings::AppSettings;
-use state::upload;
+use state::{pick_file, upload_file};
 use ui::{Avatar, settings_row};
 
 const DEFAULT_RELAYS: [&str; 2] = ["wss://relay.ditto.net", "wss://chat.wisp.talk"];
@@ -297,16 +297,11 @@ impl NewGroup {
     fn upload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let server = AppSettings::get_file_server(cx);
 
-        let path = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: None,
-        });
+        let picker = pick_file(cx);
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             // Selecting no file means the prompt was cancelled
-            let Some(path) = path.await??.and_then(|mut paths| paths.pop()) else {
+            let Some(picked) = picker.await? else {
                 return Ok(());
             };
 
@@ -314,7 +309,7 @@ impl NewGroup {
                 this.set_uploading(true, cx);
             })?;
 
-            match upload(server, path, cx).await {
+            match upload_file(server, picked, cx).await {
                 Ok(url) => {
                     this.update(cx, |this, cx| {
                         this.picture = Some(url.to_string().into());

@@ -1,8 +1,7 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use gpui::{AnyElement, App, IntoElement, ParentElement, SharedString, Styled, Window, img};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::v_flex;
+use instant::Instant;
 
 use crate::dialogs::import;
 
@@ -11,12 +10,8 @@ const SIGNED_OUT_BANNERS: [&str; 2] = ["brand/bg1.jpg", "brand/bg2.jpg"];
 
 /// Pick one of the signed-out backgrounds at random.
 pub(super) fn pick_banner() -> SharedString {
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|elapsed| elapsed.subsec_nanos())
-        .unwrap_or_default();
+    let nanos = Instant::now().elapsed().subsec_nanos();
     let index = nanos as usize % SIGNED_OUT_BANNERS.len();
-
     SIGNED_OUT_BANNERS[index].into()
 }
 

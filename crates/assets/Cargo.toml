@@ -9,3 +9,8 @@ gpui.workspace = true
 anyhow.workspace = true
 rust-embed.workspace = true
 gpui-kit.workspace = true
+
+# On wasm there is no filesystem to read from, so rust-embed's debug-mode
+# disk loading returns nothing; embed the assets even in debug builds.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rust-embed = { workspace = true, features = ["debug-embed"] }

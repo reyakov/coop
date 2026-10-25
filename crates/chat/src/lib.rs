@@ -11,12 +11,12 @@ use gpui::{
     App, AppContext, Context, Entity, EventEmitter, Global, SharedString, Subscription, Task,
     WeakEntity,
 };
-use instant::Duration;
+use instant::{Duration, Instant};
 use nip4e::{DeviceEvent, DeviceRegistry};
 use nostr_sdk::prelude::*;
 use person::PersonRegistry;
 use smallvec::{SmallVec, smallvec};
-use state::{DEVICE_GIFTWRAP, NostrRegistry, USER_GIFTWRAP};
+use state::{DEVICE_GIFTWRAP, NostrRegistry, USER_GIFTWRAP, UniversalSigner};
 
 mod message;
 mod room;
@@ -29,7 +29,10 @@ pub use state::FileAttachment;
 
 use crate::search::MessageSearchIndex;
 
-/// A static keypair used only for signing locally-cached rumor events.
+/// Upper bound on signals applied to the UI in a single update
+const MAX_SIGNAL_BATCH: usize = 256;
+
+/// Keypair used only for identifying locally-cached rumor events.
 static LOCAL_KEYS: LazyLock<Keys> = LazyLock::new(Keys::generate);
 
 pub fn init(cx: &mut App) {
@@ -72,6 +75,13 @@ impl Signal {
     {
         Self::Error(FailedMessage::new(event, reason))
     }
+}
+
+/// Which signer to attempt when unwrapping a gift wrap
+enum UnwrapRoute {
+    User,
+    Device,
+    Both,
 }
 
 /// Chat Registry
@@ -216,32 +226,34 @@ impl ChatRegistry {
         let tx = self.signal_tx.clone();
         let rx = self.signal_rx.clone();
 
+        let executor = cx.background_executor().clone();
+
         self.notification_listener = Some(cx.background_spawn(async move {
-            let mut notifications = client.notifications();
-            let mut processed_events = HashSet::new();
             const MAX_PROCESSED: usize = 10_000;
 
+            let mut notifications = client.notifications();
+            let mut processed_events = HashSet::new();
+
+            let mut user_key = signer.get_public_key_async().await.ok();
+            let device_key = match device_signer.as_ref() {
+                Some(device) => device.get_public_key_async().await.ok(),
+                None => None,
+            };
+
+            let mut last_yield = Instant::now();
+
             while let Some(notification) = notifications.next().await {
+                if last_yield.elapsed() >= Duration::from_millis(8) {
+                    executor.timer(Duration::from_millis(0)).await;
+                    last_yield = Instant::now();
+                }
+
                 let ClientNotification::Message { message, relay_url } = notification else {
                     continue;
                 };
 
                 match *message {
-                    RelayMessage::Event {
-                        subscription_id,
-                        event,
-                        ..
-                    } => {
-                        let chat_sub = subscription_id.as_str() != sub_id1.as_str();
-                        let device_sub = subscription_id.as_str() != sub_id2.as_str();
-
-                        // Concord wraps are also kind 1059.
-                        //
-                        // Only the two gift wrap subscriptions carry NIP-59 wraps for this account.
-                        if event.kind == Kind::GiftWrap && chat_sub && device_sub {
-                            continue;
-                        }
-
+                    RelayMessage::Event { event, .. } => {
                         // Prune the dedup set before it grows unbounded
                         if processed_events.len() >= MAX_PROCESSED {
                             processed_events.clear();
@@ -253,8 +265,10 @@ impl ChatRegistry {
 
                         // Handle msg relays event to determine when the app is ready to subscribe
                         if event.kind == Kind::InboxRelays {
-                            let current_user = signer.get_public_key_async().await?;
-                            if event.pubkey == current_user {
+                            if user_key.is_none() {
+                                user_key = signer.get_public_key_async().await.ok();
+                            }
+                            if Some(event.pubkey) == user_key {
                                 tx.send_async(Signal::InboxReady).await?;
                             }
                         }
@@ -270,15 +284,39 @@ impl ChatRegistry {
                             seen.entry(event.id).or_default().insert(relay_url);
                         }
 
+                        // Route to the signer matching the recipient tag
+                        // so a wrap is never decrypted twice.
+                        let recipient = event.tags.public_keys().next();
+                        let route = match recipient {
+                            Some(key) if Some(key) == device_key => UnwrapRoute::Device,
+                            Some(key) if Some(key) == user_key => UnwrapRoute::User,
+                            Some(_) if user_key.is_some() && device_key.is_some() => continue,
+                            _ => UnwrapRoute::Both,
+                        };
+
                         // Extract the rumor from the gift wrap event
-                        match extract_rumor(
-                            &client,
-                            &signer,
-                            device_signer.as_ref(),
-                            event.as_ref(),
-                        )
-                        .await
-                        {
+                        let result = match route {
+                            UnwrapRoute::User => {
+                                extract_rumor(&client, &signer, None, event.as_ref()).await
+                            }
+                            UnwrapRoute::Device => match device_signer.as_ref() {
+                                Some(device) => {
+                                    extract_rumor(&client, device, None, event.as_ref()).await
+                                }
+                                None => continue,
+                            },
+                            UnwrapRoute::Both => {
+                                extract_rumor(
+                                    &client,
+                                    &signer,
+                                    device_signer.as_ref(),
+                                    event.as_ref(),
+                                )
+                                .await
+                            }
+                        };
+
+                        match result {
                             Ok(rumor) => {
                                 let Some(rumor_id) = rumor.id else {
                                     log::error!("Rumor missing id after ensure_id");
@@ -317,35 +355,56 @@ impl ChatRegistry {
             Ok(())
         }));
 
-        self.signal_consumer = Some(cx.spawn(async move |this, cx| {
-            while let Ok(message) = rx.recv_async().await {
-                match message {
-                    Signal::Message(message) => {
-                        this.update(cx, |this, cx| {
-                            this.new_message(message, cx);
-                        })?;
-                    }
-                    Signal::InboxReady => {
-                        this.update(cx, |this, cx| {
-                            this.get_messages(cx);
-                        })?;
-                    }
-                    Signal::Eose => {
-                        this.update(cx, |this, _cx| {
-                            this.tracking.store(false, Ordering::Release);
-                        })?;
+        let tracking = self.tracking.clone();
 
-                        this.update(cx, |this, cx| {
-                            this.get_rooms(cx);
-                        })?;
+        self.signal_consumer = Some(cx.spawn(async move |this, cx| {
+            while let Ok(first) = rx.recv_async().await {
+                // Batch whatever has already arrived so the UI updates once per burst
+                let mut messages = Vec::new();
+                let mut errors = Vec::new();
+                let mut inbox_ready = false;
+                let mut eose = false;
+
+                let mut pending = Some(first);
+                while let Some(signal) = pending.take() {
+                    match signal {
+                        Signal::Message(message) => messages.push(message),
+                        Signal::InboxReady => inbox_ready = true,
+                        Signal::Eose => eose = true,
+                        Signal::Error(failed) => errors.push(failed),
                     }
-                    Signal::Error(failed) => {
-                        trash.update(cx, |this, cx| {
-                            this.insert(failed);
-                            cx.notify();
-                        })?;
+
+                    if messages.len() + errors.len() >= MAX_SIGNAL_BATCH {
+                        break;
                     }
-                };
+
+                    pending = rx.try_recv().ok();
+                }
+
+                if inbox_ready {
+                    this.update(cx, |this, cx| {
+                        this.get_messages(cx);
+                    })?;
+                }
+
+                if !messages.is_empty() {
+                    this.update(cx, |this, cx| {
+                        this.new_messages(messages, cx);
+                    })?;
+                }
+
+                if !errors.is_empty() {
+                    trash.update(cx, |trash, cx| {
+                        trash.extend(errors);
+                        cx.notify();
+                    })?;
+                }
+
+                if eose && tracking.swap(false, Ordering::AcqRel) {
+                    this.update(cx, |this, cx| {
+                        this.get_rooms(cx);
+                    })?;
+                }
             }
 
             Ok(())
@@ -669,6 +728,7 @@ impl ChatRegistry {
         self.rooms.clear();
         self.room_index.clear();
         self.search.write().unwrap().clear();
+        self.tracking.store(true, Ordering::Release);
         self.trash.update(cx, |this, cx| {
             this.clear();
             cx.notify();
@@ -748,6 +808,7 @@ impl ChatRegistry {
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
         let search = self.search.clone();
+        let executor = cx.background_executor().clone();
 
         cx.background_spawn(async move {
             let public_key = signer.get_public_key_async().await?;
@@ -775,7 +836,15 @@ impl ChatRegistry {
             let events = client.database().query(filter).await?;
             let mut grouped: HashMap<u64, Vec<UnsignedEvent>> = HashMap::new();
 
+            // Keep the single-threaded web event loop responsive during large rescans
+            let mut last_yield = Instant::now();
+
             for raw in events.into_iter() {
+                if last_yield.elapsed() >= Duration::from_millis(8) {
+                    executor.timer(Duration::from_millis(0)).await;
+                    last_yield = Instant::now();
+                }
+
                 if let Ok(rumor) = UnsignedEvent::from_json(&raw.content)
                     && rumor.tags.public_keys().next().is_some()
                 {
@@ -811,12 +880,17 @@ impl ChatRegistry {
         })
     }
 
-    /// Parse a nostr event into a message and push it to the belonging room
+    /// Parse nostr events into messages and push them to the belonging rooms
     ///
-    /// - If the room doesn't exist, it will be created.
-    /// - Updates room ordering based on the most recent messages.
-    pub(crate) fn new_message(&mut self, message: NewMessage, cx: &mut Context<Self>) {
-        self.search.write().unwrap().insert(&message.rumor);
+    /// - If a room doesn't exist, it will be created.
+    /// - Room ordering is updated once after the whole batch.
+    pub(crate) fn new_messages(&mut self, messages: Vec<NewMessage>, cx: &mut Context<Self>) {
+        {
+            let mut search = self.search.write().unwrap();
+            for message in &messages {
+                search.insert(&message.rumor);
+            }
+        }
 
         let nostr = NostrRegistry::global(cx);
 
@@ -824,37 +898,42 @@ impl ChatRegistry {
             return;
         };
 
-        match self.room_index.get(&message.room).cloned() {
-            Some(room) => {
-                room.update(cx, |this, cx| {
-                    if this.kind == RoomKind::Request
-                        && (message.rumor.pubkey == public_key || this.auto_trusted(public_key, cx))
-                    {
-                        this.set_ongoing(cx);
-                    }
-                    this.push_message(message, cx);
-                });
-                self.sort(cx);
-            }
-            None => {
-                // Push the new room to the front of the list
-                self.add_room(message.rumor, cx);
+        for message in messages {
+            match self.room_index.get(&message.room).cloned() {
+                Some(room) => {
+                    room.update(cx, |this, cx| {
+                        if this.kind == RoomKind::Request
+                            && (message.rumor.pubkey == public_key
+                                || this.auto_trusted(public_key, cx))
+                        {
+                            this.set_ongoing(cx);
+                        }
+                        this.push_message(message, cx);
+                    });
+                }
+                None => {
+                    // Push the new room to the front of the list
+                    self.add_room(message.rumor, cx);
+                }
             }
         }
+
+        self.sort(cx);
+    }
+
+    /// Parse a nostr event into a message and push it to the belonging room
+    pub(crate) fn new_message(&mut self, message: NewMessage, cx: &mut Context<Self>) {
+        self.new_messages(vec![message], cx);
     }
 }
 
 /// Unwraps a gift-wrapped event and processes its contents.
-async fn extract_rumor<S, D>(
+async fn extract_rumor(
     client: &Client,
-    signer: &S,
-    device_signer: Option<&D>,
+    signer: &UniversalSigner,
+    device_signer: Option<&UniversalSigner>,
     gift_wrap: &Event,
-) -> Result<UnsignedEvent, Error>
-where
-    S: AsyncNip44 + ?Sized,
-    D: AsyncNip44 + ?Sized,
-{
+) -> Result<UnsignedEvent, Error> {
     // Try to get cached rumor first
     if let Ok(rumor) = get_rumor(client, gift_wrap.id).await {
         return Ok(rumor);
@@ -888,10 +967,10 @@ where
 }
 
 /// Attempts to unwrap a gift wrap event with a given signer.
-async fn try_unwrap_with<S>(signer: &S, gift_wrap: &Event) -> Result<UnwrappedGift, Error>
-where
-    S: AsyncNip44 + ?Sized,
-{
+async fn try_unwrap_with(
+    signer: &UniversalSigner,
+    gift_wrap: &Event,
+) -> Result<UnwrappedGift, Error> {
     // Get the sealed event
     let seal = signer
         .nip44_decrypt_async(&gift_wrap.pubkey, &gift_wrap.content)
@@ -926,17 +1005,27 @@ where
 async fn set_rumor(client: &Client, id: EventId, rumor: &UnsignedEvent) -> Result<(), Error> {
     let room_id = rumor.uniq_id().to_string();
 
-    let tags = vec![
+    let tags = Tags::from_list(vec![
         Tag::identifier(id),
         Tag::public_key(rumor.pubkey),
         Tag::custom("r", [room_id]),
         Tag::custom("k", [rumor.kind.to_string()]),
-    ];
+    ]);
 
-    let event = EventBuilder::new(Kind::ApplicationSpecificData, rumor.as_json())
-        .tags(tags)
-        .finalize_async(&*LOCAL_KEYS)
-        .await?;
+    let public_key = LOCAL_KEYS.public_key();
+    let created_at = Timestamp::now();
+    let kind = Kind::ApplicationSpecificData;
+    let content = rumor.as_json();
+
+    let event = Event::new(
+        EventId::compute(&public_key, &created_at, &kind, &tags, &content),
+        public_key,
+        created_at,
+        kind,
+        tags,
+        content,
+        Signature::from_byte_array([0u8; 64]),
+    );
 
     client.database().save_event(&event).await?;
 

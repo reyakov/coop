@@ -18,7 +18,7 @@ use nostr_sdk::prelude::*;
 use person::Directory;
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
-use state::{Announcement, CLIENT_NAME, NostrRegistry, UniversalSigner};
+use state::{Announcement, NostrRegistry, UniversalSigner, credentials};
 use ui::Avatar;
 
 const IDENTIFIER: &str = "coop:device";
@@ -221,25 +221,38 @@ impl DeviceRegistry {
         cx.emit(DeviceEvent::Set);
     }
 
-    /// Backup the encryption's secret key to a file
-    pub fn backup(&self, path: PathBuf, cx: &App) -> Task<Result<(), Error>> {
+    /// Backup the encryption's secret key, returning the `nsec1...` content
+    pub fn backup_bytes(&self, cx: &App) -> Task<Result<String, Error>> {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
 
         cx.background_spawn(async move {
             let keys = get_keys(&client, &signer).await?;
-            let content = keys.secret_key().to_bech32()?;
+            Ok(keys.secret_key().to_bech32()?)
+        })
+    }
 
-            if cfg!(target_arch = "wasm32") {
-                return Err(anyhow!("Not supported"));
-            }
+    /// Backup the encryption's secret key to a file
+    pub fn backup(&self, path: PathBuf, cx: &App) -> Task<Result<(), Error>> {
+        let backup = self.backup_bytes(cx);
 
-            #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(target_arch = "wasm32"))]
+        return cx.background_spawn(async move {
+            let content = backup.await?;
             smol::fs::write(path, &content).await?;
 
             Ok(())
-        })
+        });
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = path;
+            cx.background_spawn(async move {
+                backup.await?;
+                Err(anyhow!("File backups are not supported on web; copy the key from the backup panel instead."))
+            })
+        }
     }
 
     /// Get device announcement for current user
@@ -827,10 +840,10 @@ fn authorization_code(public_key: &PublicKey) -> SharedString {
 
 /// Get or create new app keys (async, returns a task)
 fn get_or_init_app_keys(cx: &App) -> Task<Result<Keys, Error>> {
-    let read = cx.read_credentials(CLIENT_NAME);
+    let read = credentials::read_app_keys(cx);
 
     cx.spawn(async move |cx| {
-        if let Ok(Some((_, secret))) = read.await
+        if let Ok(Some(secret)) = read.await
             && let Ok(keys) = SecretKey::from_slice(&secret).map(Keys::new)
         {
             return Ok(keys);
@@ -838,14 +851,13 @@ fn get_or_init_app_keys(cx: &App) -> Task<Result<Keys, Error>> {
 
         // No stored keys found or invalid — generate new ones
         let keys = Keys::generate();
-        let user = keys.public_key().to_hex();
         let secret = keys.secret_key().to_secret_bytes();
 
         cx.update(|cx| {
-            let write = cx.write_credentials(CLIENT_NAME, &user, &secret);
+            let write = credentials::write_app_keys(cx, &secret);
             cx.background_spawn(async move {
                 if let Err(e) = write.await {
-                    log::error!("Keyring not available or panic: {e}")
+                    log::error!("Failed to persist app keys: {e}")
                 }
             })
             .detach();

@@ -7,6 +7,9 @@ async function init() {
     const wasm = await import('./wasm/coop_web.js');
     await wasm.default();
 
+    // Open the persistent nostr database before the app starts
+    await wasm.open_database();
+
     // Initialize the story gallery
     await wasm.run();
 

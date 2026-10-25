@@ -4,9 +4,8 @@ use anyhow::Result;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FollowMode, IntoElement, ListAlignment, ListScrollEvent, ListState, ParentElement,
-    PathPromptOptions, Render, SharedString, Styled, Subscription, Task, WeakEntity, Window, div,
-    list, px,
+    FollowMode, IntoElement, ListAlignment, ListScrollEvent, ListState, ParentElement, Render,
+    SharedString, Styled, Subscription, Task, WeakEntity, Window, div, list, px,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -23,7 +22,7 @@ use person::Directory;
 use serde::Deserialize;
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
-use state::{NostrRegistry, upload};
+use state::{NostrRegistry, pick_file, upload_file};
 use ui::{Avatar, RenderedText, WelcomeMessage, rendered_text};
 use util::{attachment_name, display_name, opens_run, pin_label, report};
 
@@ -553,22 +552,17 @@ impl GroupPanel {
     fn upload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let server = AppSettings::get_file_server(cx);
 
-        let path = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: None,
-        });
+        let picker = pick_file(cx);
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             // Selecting no file means the prompt was cancelled
-            let Some(path) = path.await??.and_then(|mut paths| paths.pop()) else {
+            let Some(picked) = picker.await? else {
                 return Ok(());
             };
 
             this.update(cx, |this, cx| this.set_uploading(true, cx))?;
 
-            match upload(server, path, cx).await {
+            match upload_file(server, picked, cx).await {
                 Ok(url) => {
                     this.update_in(cx, |this, _window, cx| {
                         this.attachments.push(url);

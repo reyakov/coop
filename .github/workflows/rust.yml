@@ -30,3 +30,25 @@ jobs:
 
       - name: Run tests
         run: cargo test --verbose
+
+  check-wasm:
+    name: Check web target
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: wasm32-unknown-unknown
+          components: llvm-tools-preview
+
+      - name: Install wasm C toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang llvm
+
+      - name: Check web target
+        env:
+          CC_wasm32_unknown_unknown: clang
+          AR_wasm32_unknown_unknown: llvm-ar
+        run: cargo +nightly check -p coop_web --target wasm32-unknown-unknown

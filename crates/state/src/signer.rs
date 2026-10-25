@@ -188,7 +188,13 @@ impl AuthUrlHandler for CoopAuthUrlHandler {
         auth_url: Url,
     ) -> Pin<Box<dyn Future<Output = Result<(), nostr_connect::error::Error>> + Send + '_>> {
         Box::pin(async move {
+            #[cfg(not(target_arch = "wasm32"))]
             webbrowser::open(auth_url.as_str()).map_err(nostr_connect::error::Error::other)?;
+
+            #[cfg(target_arch = "wasm32")]
+            crate::web_file::open_url(auth_url.as_str())
+                .map_err(nostr_connect::error::Error::other)?;
+
             Ok(())
         })
     }

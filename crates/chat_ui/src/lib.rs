@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::path::PathBuf;
 use std::sync::{Arc, LazyLock, RwLock};
 
 pub use actions::*;
@@ -10,10 +9,9 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle,
     Focusable, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, MouseButton,
-    ObjectFit, ParentElement, PathPromptOptions, Render, SharedString, SharedUri,
-    StatefulInteractiveElement, Styled, StyledImage, Subscription, SystemNotification,
-    SystemNotificationAction, Task, WeakEntity, Window, div, img, list, px, red, relative,
-    retain_all, svg, white,
+    ObjectFit, ParentElement, Render, SharedString, SharedUri, StatefulInteractiveElement, Styled,
+    StyledImage, Subscription, SystemNotification, SystemNotificationAction, Task, WeakEntity,
+    Window, div, img, list, px, red, relative, retain_all, svg, white,
 };
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -31,7 +29,7 @@ use regex::Regex;
 use settings::{AppSettings, SignerKind};
 use smallvec::{SmallVec, smallvec};
 use state::{
-    FileAttachment, NostrRegistry, download_and_decrypt_to_file, upload, upload_encrypted,
+    FileAttachment, LocalFile, NostrRegistry, PickedFile, download_and_decrypt_file, pick_file,
 };
 use ui::{
     Avatar, COMPACT_REACTION_EMOJIS, IconName, MessageActions, MessageMedia, MessageRow,
@@ -642,22 +640,17 @@ impl ChatPanel {
         // Encrypt attachments which are not part of a message being written
         let encrypted = self.input.read(cx).value().trim().is_empty();
 
-        // Ask user for file upload
-        let path = cx.prompt_for_paths(PathPromptOptions {
-            files: true,
-            directories: false,
-            multiple: false,
-            prompt: None,
-        });
+        // Ask the user for a file to upload
+        let picker = pick_file(cx);
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             // Selecting no file means the prompt was cancelled
-            let Some(path) = path.await??.and_then(|mut paths| paths.pop()) else {
+            let Some(picked) = picker.await? else {
                 return Ok(());
             };
 
             this.update_in(cx, |this, window, cx| {
-                this.upload_file(server, path, encrypted, window, cx);
+                this.upload_file(server, picked, encrypted, window, cx);
             })?;
 
             Ok(())
@@ -668,7 +661,7 @@ impl ChatPanel {
     fn upload_file(
         &mut self,
         server: Url,
-        path: PathBuf,
+        picked: PickedFile,
         encrypted: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -676,25 +669,18 @@ impl ChatPanel {
         self.set_uploading(true, cx);
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            let result = if encrypted {
-                upload_encrypted(server.clone(), path.clone(), cx)
-                    .await
-                    .map(|file| Uploaded::File(file, path.clone()))
-            } else {
-                upload(server.clone(), path.clone(), cx)
-                    .await
-                    .map(Uploaded::Url)
-            };
+            let result = Uploaded::from_pick(encrypted, server.clone(), picked, cx).await;
 
             this.update_in(cx, |this, window, cx| {
                 this.set_uploading(false, cx);
 
                 match result {
                     Ok(Uploaded::Url(url)) => this.add_attachment(url, cx),
-                    Ok(Uploaded::File(file, path)) => this.add_pending_file(file, path, cx),
-                    Err(e) if encrypted => {
-                        this.report_encrypted_upload_error(server, path, e, window, cx)
+                    Ok(Uploaded::File(uploaded)) => {
+                        let UploadedFile { file, local } = *uploaded;
+                        this.add_pending_file(file, local, cx);
                     }
+                    Err(e) if encrypted => this.report_encrypted_upload_error(e, window, cx),
                     Err(e) => {
                         window.push_notification(
                             Notification::error(e.to_string()).autohide(false),
@@ -711,8 +697,6 @@ impl ChatPanel {
     /// Report a failed encrypted upload, offering to retry it without encryption
     fn report_encrypted_upload_error(
         &mut self,
-        server: Url,
-        path: PathBuf,
         error: Error,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -724,14 +708,12 @@ impl ChatPanel {
                 .title("Encrypted upload failed")
                 .action(move |_this, _window, _cx| {
                     let view = view.clone();
-                    let server = server.clone();
-                    let path = path.clone();
 
                     Button::new("retry-without-encryption")
-                        .label("Upload without encryption")
+                        .label("Pick the file again without encryption")
                         .on_click(move |_ev, window, cx| {
                             view.update(cx, |this, cx| {
-                                this.upload_file(server.clone(), path.clone(), false, window, cx);
+                                this.upload(window, cx);
                             })
                             .ok();
                         })
@@ -761,9 +743,9 @@ impl ChatPanel {
         });
     }
 
-    fn add_pending_file(&mut self, file: FileAttachment, path: PathBuf, cx: &mut Context<Self>) {
+    fn add_pending_file(&mut self, file: FileAttachment, local: LocalFile, cx: &mut Context<Self>) {
         self.encrypted_attachments.update(cx, |this, cx| {
-            this.push(PendingFile { file, path });
+            this.push(PendingFile { file, local });
             cx.notify();
         });
     }
@@ -782,12 +764,13 @@ impl ChatPanel {
         self.decrypted_files.insert(id, DecryptedFile::Loading);
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            let result = download_and_decrypt_to_file(&file, cx).await;
+            let result = download_and_decrypt_file(&file, cx).await;
 
             this.update(cx, |this, cx| {
                 match result {
-                    Ok(path) => {
-                        this.decrypted_files.insert(id, DecryptedFile::Ready(path));
+                    Ok(downloaded) => {
+                        this.decrypted_files
+                            .insert(id, DecryptedFile::Ready(downloaded.local));
                     }
                     Err(e) => {
                         this.decrypted_files
@@ -802,7 +785,7 @@ impl ChatPanel {
         }));
     }
 
-    /// Decrypt the attachment of a file message and open it with the OS
+    /// Decrypt the attachment of a file message and open it with the platform handler
     fn open_file(
         &mut self,
         id: EventId,
@@ -810,25 +793,30 @@ impl ChatPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        match self.decrypted_files.get(&id) {
-            Some(DecryptedFile::Ready(path)) => {
-                cx.open_url(&file_url(path));
-                return;
-            }
-            Some(DecryptedFile::Loading) => return,
-            _ => {}
-        };
+        if let Some(DecryptedFile::Ready(local)) = self.decrypted_files.get(&id) {
+            let _ = local.open(cx).map_err(|e| {
+                window.push_notification(Notification::error(e.to_string()).autohide(false), cx);
+            });
+            return;
+        }
+
+        if let Some(DecryptedFile::Loading) = self.decrypted_files.get(&id) {
+            return;
+        }
 
         self.decrypted_files.insert(id, DecryptedFile::Loading);
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            let result = download_and_decrypt_to_file(&file, cx).await;
+            let result = download_and_decrypt_file(&file, cx).await;
 
-            this.update_in(cx, |this, _window, cx| {
+            this.update_in(cx, |this, window, cx| {
                 match result {
-                    Ok(path) => {
-                        cx.open_url(&file_url(&path));
-                        this.decrypted_files.insert(id, DecryptedFile::Ready(path));
+                    Ok(downloaded) => {
+                        if let Err(e) = downloaded.open(cx) {
+                            window.push_notification(Notification::error(e.to_string()), cx);
+                        }
+                        this.decrypted_files
+                            .insert(id, DecryptedFile::Ready(downloaded.local));
                     }
                     Err(e) => {
                         this.decrypted_files
@@ -1475,16 +1463,16 @@ impl ChatPanel {
     ) -> AnyElement {
         let state = self.decrypted_files.get(id);
 
-        if let Some(path) = state
+        if let Some(local) = state
             .and_then(|state| match state {
-                DecryptedFile::Ready(path) => Some(path),
+                DecryptedFile::Ready(local) => Some(local),
                 _ => None,
             })
             .filter(|_| file.is_image())
         {
             return div()
                 .child(
-                    img(path.clone())
+                    img(local.image_source())
                         .border_1()
                         .border_color(cx.theme().border)
                         .h(px(250.))
@@ -1560,7 +1548,7 @@ impl ChatPanel {
             .map(|this| {
                 if file.is_image() {
                     this.child(
-                        img(pending.path.clone())
+                        img(pending.local.image_source())
                             .size_16()
                             .when(cx.theme().shadow, |this| this.shadow_sm())
                             .rounded(cx.theme().radius)

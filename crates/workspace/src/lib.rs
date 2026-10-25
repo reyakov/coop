@@ -2,8 +2,10 @@ use std::sync::Arc;
 
 use ::settings::{AppSettings, AppearanceMode};
 use anyhow::Error;
+#[cfg(not(target_arch = "wasm32"))]
 use auto_update::AutoUpdater;
 use chat::{ChatEvent, ChatRegistry};
+#[cfg(not(target_arch = "wasm32"))]
 use common::download_dir;
 use gpui::{
     Action, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
@@ -337,34 +339,57 @@ impl Workspace {
             }
             Command::BackupEncryption => {
                 let device = DeviceRegistry::global(cx).downgrade();
-                let save_dialog = cx.prompt_for_new_path(download_dir(), Some("encryption.txt"));
 
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let save_dialog =
+                        cx.prompt_for_new_path(download_dir(), Some("encryption.txt"));
+
+                    self.tasks.push(cx.spawn_in(window, async move |_this, cx| {
+                        // Get the output path from the save dialog
+                        let output_path = match save_dialog.await {
+                            Ok(Ok(Some(path))) => path,
+                            Ok(Ok(None)) | Err(_) => return Ok(()),
+                            Ok(Err(error)) => {
+                                cx.update(|window, cx| {
+                                    let message =
+                                        format!("Failed to pick save location: {error:#}");
+                                    let note = Notification::error(message).autohide(false);
+                                    window.push_notification(note, cx);
+                                })?;
+                                return Ok(());
+                            }
+                        };
+
+                        // Get the backup task
+                        let backup = device
+                            .read_with(cx, |this, cx| this.backup(output_path.clone(), cx))?;
+
+                        // Run the backup task
+                        backup.await?;
+
+                        // Open the backup file with the system's default application
+                        cx.update(|_window, cx| {
+                            cx.open_with_system(output_path.as_path());
+                        })?;
+
+                        Ok(())
+                    }));
+                }
+
+                #[cfg(target_arch = "wasm32")]
                 self.tasks.push(cx.spawn_in(window, async move |_this, cx| {
-                    // Get the output path from the save dialog
-                    let output_path = match save_dialog.await {
-                        Ok(Ok(Some(path))) => path,
-                        Ok(Ok(None)) | Err(_) => return Ok(()),
-                        Ok(Err(error)) => {
-                            cx.update(|window, cx| {
-                                let message = format!("Failed to pick save location: {error:#}");
-                                let note = Notification::error(message).autohide(false);
-                                window.push_notification(note, cx);
-                            })?;
-                            return Ok(());
-                        }
-                    };
+                    let backup = device.read_with(cx, |this, cx| this.backup_bytes(cx))?;
+                    let content = backup.await?;
 
-                    // Get the backup task
-                    let backup =
-                        device.read_with(cx, |this, cx| this.backup(output_path.clone(), cx))?;
-
-                    // Run the backup task
-                    backup.await?;
-
-                    // Open the backup file with the system's default application
-                    cx.update(|_window, cx| {
-                        cx.open_with_system(output_path.as_path());
-                    })?;
+                    cx.update(|_window, _cx| {
+                        state::web_file::download(
+                            "encryption.txt",
+                            "text/plain",
+                            content.as_bytes(),
+                        )
+                    })
+                    .map_err(|e| anyhow::anyhow!(e))??;
 
                     Ok(())
                 }));
@@ -372,7 +397,9 @@ impl Workspace {
             Command::ImportEncryption => {
                 self.import_encryption(window, cx);
             }
-            Command::Update => {
+            Command::Update =>
+            {
+                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(auto_updater) = AutoUpdater::try_global(cx) {
                     auto_updater.update(cx, |this, cx| this.check(cx));
                 }

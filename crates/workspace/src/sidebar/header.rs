@@ -1,15 +1,17 @@
+#[cfg(not(target_arch = "wasm32"))]
 use auto_update::AutoUpdater;
 use gpui::prelude::FluentBuilder;
+#[cfg(not(target_arch = "wasm32"))]
+use gpui::{AnyElement, Entity, IntoElement};
 use gpui::{
-    AnyElement, App, Context, Div, Entity, InteractiveElement, IntoElement, ParentElement,
-    Stateful, Styled, Window, div, px,
+    App, Context, Div, InteractiveElement, ParentElement, Stateful, Styled, Window, div, px,
 };
+#[cfg(not(target_arch = "wasm32"))]
+use gpui_kit::component::Disableable;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::{
-    ActiveTheme, Disableable, Icon, Selectable, Sizable, WindowExt, h_flex, v_flex,
-};
+use gpui_kit::component::{ActiveTheme, Icon, Selectable, Sizable, WindowExt, h_flex, v_flex};
 use nostr_sdk::prelude::*;
 use state::NostrRegistry;
 use ui::{Avatar, IconName};
@@ -25,6 +27,7 @@ impl Sidebar {
         current_user: &PublicKey,
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
+        #[cfg(not(target_arch = "wasm32"))]
         let updater = AutoUpdater::try_global(cx);
         let profile = self.directory.read(cx).person(current_user, cx);
         let avatar = profile.avatar();
@@ -62,12 +65,15 @@ impl Sidebar {
                         )
                     }),
             )
-            .child(
-                h_flex()
-                    .gap_1()
-                    .when_some(updater, |this, updater| {
-                        this.child(self.render_updater(updater, cx))
-                    })
+            .child({
+                let actions = h_flex().gap_1();
+
+                #[cfg(not(target_arch = "wasm32"))]
+                let actions = actions.when_some(updater, |this, updater| {
+                    this.child(self.render_updater(updater, cx))
+                });
+
+                actions
                     .child(
                         Button::new("sidebar-search")
                             .icon(IconName::Search)
@@ -104,8 +110,8 @@ impl Sidebar {
                                     this.hide_group(cx);
                                 })),
                         )
-                    }),
-            )
+                    })
+            })
     }
 
     /// The bottom navigation, pinned below the list like signed's sidebar.
@@ -128,6 +134,7 @@ impl Sidebar {
             )
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn render_updater(&self, updater: Entity<AutoUpdater>, cx: &mut App) -> AnyElement {
         let status = updater.read(cx).status();
         let up_to_date = updater.read(cx).up_to_date();
