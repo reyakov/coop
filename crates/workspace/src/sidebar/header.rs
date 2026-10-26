@@ -13,7 +13,7 @@ use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Icon, Selectable, Sizable, WindowExt, h_flex, v_flex};
 use nostr_sdk::prelude::*;
-use state::NostrRegistry;
+use state::{CLIENT_NAME, NostrRegistry};
 use ui::{Avatar, IconName};
 
 use super::Sidebar;
@@ -38,31 +38,28 @@ impl Sidebar {
             .h(TAB_BAR_HEIGHT)
             .flex_shrink_0()
             .justify_between()
-            .px_2()
+            .px_2p5()
             .when(cfg!(target_os = "macos"), |this| this.pl(px(80.)))
             .child(
-                Button::new("current-user")
+                Button::new("user")
                     .text()
                     .dropdown_caret(true)
                     .min_w_0()
                     .flex_shrink_1()
                     .child(Avatar::new(avatar).seed(profile.avatar_seed()).small())
                     .dropdown_menu(move |this, _window, _cx| {
-                        this.menu_with_icon(
-                            "Profile",
-                            IconName::Profile,
-                            Box::new(Command::ShowProfile),
-                        )
-                        .menu_with_icon("Relays", IconName::Relay, Box::new(Command::ShowRelayList))
-                        .separator()
-                        .item(
-                            PopupMenuItem::element(|_, cx| {
-                                div().text_color(cx.theme().danger).child("Log out")
-                            })
-                            .on_click(|_, window, cx| {
-                                open_logout_dialog(window, cx);
-                            }),
-                        )
+                        this.menu("Profile", Box::new(Command::ShowProfile))
+                            .menu("Relays", Box::new(Command::ShowRelayList))
+                            .separator()
+                            .label(format!("{CLIENT_NAME} {}", env!("CARGO_PKG_VERSION")))
+                            .item(
+                                PopupMenuItem::element(|_, cx| {
+                                    div().text_color(cx.theme().danger).child("Log out")
+                                })
+                                .on_click(|_, window, cx| {
+                                    open_logout_dialog(window, cx);
+                                }),
+                            )
                     }),
             )
             .child({

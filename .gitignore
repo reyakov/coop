@@ -24,3 +24,4 @@ dist/
 vendor/
 wasm/
 node_modules/
+.wrangler/

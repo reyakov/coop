@@ -29,8 +29,7 @@ pub fn open_unlock(window: &mut Window, cx: &mut App) {
     let import = cx.new(|cx| ImportIdentity::new_unlock(window, cx));
 
     window.open_dialog(cx, move |this, _window, _cx| {
-        this.width(px(450.))
-            .close_button(false)
+        this.close_button(false)
             .overlay_closable(false)
             .keyboard(false)
             .title("Unlock your identity")
@@ -322,7 +321,7 @@ impl Render for ImportIdentity {
                     }),
             )
             .child({
-                let content = v_flex().child(
+                let content = v_flex().gap_1().child(
                     Button::new("login")
                         .label(if is_unlock { "Unlock" } else { "Continue" })
                         .primary()
@@ -337,7 +336,7 @@ impl Render for ImportIdentity {
                 let content = content.when(!is_unlock, |this| {
                     this.child(
                         Button::new("proxy")
-                            .label("Connect via Web Extension (Experimental)")
+                            .label("Connect via Web Extension")
                             .ghost()
                             .disabled(self.loading)
                             .on_click(cx.listener(move |this, _ev, _window, cx| {
@@ -350,7 +349,7 @@ impl Render for ImportIdentity {
                 let content = content.when(!is_unlock, |this| {
                     this.child(
                         Button::new("extension")
-                            .label("Continue with Browser Extension (NIP-07)")
+                            .label("Continue with Browser Extension")
                             .ghost()
                             .disabled(self.loading)
                             .on_click(cx.listener(move |this, _ev, _window, cx| {
