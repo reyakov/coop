@@ -5,20 +5,22 @@ use chat::{ChatEvent, ChatRegistry};
 use common::DebouncedDelay;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ObjectFit, ParentElement, Render, SharedString, Styled, StyledImage, Subscription,
-    Task, WeakEntity, Window, div, img, retain_all,
+    App, AppContext, Context, Div, Entity, EventEmitter, FocusHandle, Focusable,
+    InteractiveElement, IntoElement, ObjectFit, ParentElement, Render, SharedString, Styled,
+    StyledImage, Subscription, Task, WeakEntity, Window, div, img, retain_all,
 };
-use gpui_kit::base::StyledExt as _;
+use gpui_kit::base::{Presence, Transition};
 use gpui_kit::component::dock::{DockArea, Panel, PanelEvent};
 use gpui_kit::component::input::{InputEvent, InputState};
 use gpui_kit::component::notification::Notification;
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::progress::ProgressCircle;
+use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
 use instant::Duration;
 use nip29::{Group, GroupKey, GroupsEvent, GroupsRegistry};
 use nostr_sdk::prelude::*;
 use person::{Directory, PersonRegistry};
+pub(crate) use rows::open_room;
+use search::SearchResult;
 use smallvec::{SmallVec, smallvec};
 use state::{FIND_DELAY, NostrRegistry, StateEvent};
 use ui::title_bar_drag_handlers;
@@ -33,8 +35,8 @@ mod onboarding;
 mod rows;
 mod search;
 
-pub(crate) use rows::open_room;
-use search::SearchResult;
+const PROGRESS_TICK_MS: u64 = 500;
+const PROGRESS_CAP: f32 = 95.0;
 
 pub struct Sidebar {
     focus_handle: FocusHandle,
@@ -88,6 +90,11 @@ pub struct Sidebar {
     /// The async global profile search.
     global_task: Option<Task<()>>,
 
+    /// Simulated gift wrap processing progress, shown while the backlog loads
+    chat_progress: f32,
+    /// Simulated web of trust sync progress
+    sync_progress: f32,
+
     tasks: SmallVec<[Task<Result<(), Error>>; 1]>,
     _subscriptions: SmallVec<[Subscription; 4]>,
 }
@@ -97,7 +104,6 @@ impl Sidebar {
         let chat = ChatRegistry::global(cx);
         let groups = GroupsRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
-        let wot = PersonRegistry::global(cx).read(cx).wot();
 
         let find_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -105,20 +111,22 @@ impl Sidebar {
                 .clean_on_escape()
         });
 
+        let mut tasks = smallvec![];
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
-            cx.subscribe_in(&chat, window, move |this, _s, event, _window, cx| {
-                if event == &ChatEvent::Ping {
-                    this.new_requests = true;
-                    cx.notify();
+            cx.subscribe_in(&chat, window, move |this, _, event, _, cx| {
+                match event {
+                    ChatEvent::Ping => {
+                        this.new_requests = true;
+                        cx.notify();
+                    }
+                    ChatEvent::Loaded => {
+                        this.chat_progress = 0.0;
+                        cx.notify();
+                    }
+                    _ => {}
                 };
-            }),
-        );
-
-        subscriptions.push(
-            cx.subscribe_in(&wot, window, |_this, _wot, _event, _window, cx| {
-                cx.notify();
             }),
         );
 
@@ -126,7 +134,7 @@ impl Sidebar {
             cx.subscribe_in(&groups, window, |_this, _, event, window, cx| {
                 match event {
                     GroupsEvent::Updated => {
-                        // TODO: find a better way?
+                        // TODO: we must not trigger re-render directly like this
                         cx.notify();
                     }
                     GroupsEvent::Error(error) => {
@@ -198,6 +206,16 @@ impl Sidebar {
             },
         ));
 
+        tasks.push(cx.spawn(async move |this, cx| {
+            let timer = Duration::from_millis(PROGRESS_TICK_MS);
+            loop {
+                cx.background_executor().timer(timer).await;
+                this.update(cx, |this, cx| {
+                    this.tick_progress(cx);
+                })?;
+            }
+        }));
+
         Self {
             focus_handle: cx.focus_handle(),
             dock,
@@ -223,7 +241,9 @@ impl Sidebar {
             global_finding: false,
             global_results: None,
             global_task: None,
-            tasks: smallvec![],
+            chat_progress: 0.0,
+            sync_progress: 0.0,
+            tasks,
             _subscriptions: subscriptions,
         }
     }
@@ -250,6 +270,80 @@ impl Sidebar {
         if showing {
             self.hide_group(cx);
         }
+    }
+
+    /// Advance the simulated loading progress of any active background work.
+    fn tick_progress(&mut self, cx: &mut Context<Self>) {
+        let logged_in = NostrRegistry::global(cx).read(cx).current_user().is_some();
+        let chat = ChatRegistry::global(cx);
+        let wot = PersonRegistry::global(cx).read(cx).wot();
+
+        let chat_loading = logged_in && chat.read(cx).loading();
+        let syncing = logged_in && wot.read(cx).is_syncing();
+
+        let mut changed = false;
+
+        if chat_loading {
+            let next = self.advance_progress(self.chat_progress);
+            if next > self.chat_progress {
+                self.chat_progress = next;
+                changed = true;
+            }
+        } else if self.chat_progress != 0.0 {
+            self.chat_progress = 0.0;
+            changed = true;
+        }
+
+        if syncing {
+            let next = self.advance_progress(self.sync_progress);
+            if next > self.sync_progress {
+                self.sync_progress = next;
+                changed = true;
+            }
+        } else if self.sync_progress != 0.0 {
+            self.sync_progress = 0.0;
+            changed = true;
+        }
+
+        if changed {
+            cx.notify();
+        }
+    }
+
+    /// Bump simulated progress by a random step
+    fn advance_progress(&self, progress: f32) -> f32 {
+        (progress + rand::random::<f32>() * 8.0 + 1.0).min(PROGRESS_CAP)
+    }
+
+    /// A floating pill showing simulated progress for a background operation.
+    fn render_loading_pill(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        progress: f32,
+        opacity: f32,
+        cx: &Context<Self>,
+    ) -> Div {
+        h_flex()
+            .opacity(opacity)
+            .h_9()
+            .w_full()
+            .px_5()
+            .gap_2p5()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .child(
+                ProgressCircle::new(id)
+                    .value(progress)
+                    .color(cx.theme().primary)
+                    .accessibility_label(label),
+            )
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(cx.theme().sidebar_foreground)
+                    .child(label),
+            )
     }
 }
 
@@ -289,6 +383,9 @@ impl Render for Sidebar {
 
         let chat = ChatRegistry::global(cx);
         let loading = chat.read(cx).loading();
+
+        let wot = PersonRegistry::global(cx).read(cx).wot();
+        let syncing = wot.read(cx).is_syncing();
 
         let group = self.group.clone().and_then(|group| group.upgrade());
         let searching = self.search_open && !self.find_input.read(cx).value().is_empty();
@@ -343,32 +440,46 @@ impl Render for Sidebar {
                     }),
             )
             .when(logged_in && !picking_contacts, |this| {
-                this.child(self.render_footer(cx))
+                this.child(self.render_footer(loading || syncing, cx))
             })
-            .when(loading && logged_in, |this| {
+            .when(logged_in, |this| {
+                let pill_motion = Transition::new(cx.theme().motion_tokens().duration_normal)
+                    .easing(cx.theme().motion_tokens().easing_move.clone());
+
+                let chat_presence = Presence::new("chat-presence", loading)
+                    .transition(pill_motion.clone())
+                    .sample(window, cx);
+
+                let wot_presence = Presence::new("wot-presence", syncing)
+                    .transition(pill_motion)
+                    .sample(window, cx);
+
                 this.child(
-                    div()
+                    v_flex()
                         .absolute()
-                        .bottom_4()
+                        .bottom_0()
                         .left_0()
-                        .h_9()
                         .w_full()
-                        .px_8()
-                        .child(
-                            h_flex()
-                                .gap_2()
-                                .w_full()
-                                .h_9()
-                                .justify_center()
-                                .bg(cx.theme().background.opacity(0.85))
-                                .when(cx.theme().shadow, |this| this.shadow_md())
-                                .rounded_full()
-                                .text_xs()
-                                .font_semibold()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(Spinner::new().small().color(cx.theme().primary))
-                                .child("Getting messages..."),
-                        ),
+                        .bg(cx.theme().sidebar)
+                        .text_color(cx.theme().sidebar_foreground)
+                        .children(chat_presence.should_render().then(|| {
+                            self.render_loading_pill(
+                                "chat-sync",
+                                "Syncing messages",
+                                self.chat_progress,
+                                chat_presence.progress,
+                                cx,
+                            )
+                        }))
+                        .children(wot_presence.should_render().then(|| {
+                            self.render_loading_pill(
+                                "wot-sync",
+                                "Syncing contacts",
+                                self.sync_progress,
+                                wot_presence.progress,
+                                cx,
+                            )
+                        })),
                 )
             })
             .into_any_element()

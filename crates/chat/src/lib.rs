@@ -47,6 +47,7 @@ impl Global for GlobalChatRegistry {}
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ChatEvent {
     Ping,
+    Loaded,
     InboxRelayNotFound,
     Error(String),
 }
@@ -402,6 +403,7 @@ impl ChatRegistry {
 
                 if eose && tracking.swap(false, Ordering::AcqRel) {
                     this.update(cx, |this, cx| {
+                        cx.emit(ChatEvent::Loaded);
                         this.get_rooms(cx);
                     })?;
                 }

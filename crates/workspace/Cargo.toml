@@ -27,4 +27,5 @@ nostr-connect.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 log.workspace = true
+rand.workspace = true
 smallvec.workspace = true

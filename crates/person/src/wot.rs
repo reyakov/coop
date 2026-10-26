@@ -232,6 +232,7 @@ impl WebOfTrust {
             .idle_timeout(Duration::from_secs(SYNC_IDLE_TIMEOUT));
 
         self.syncing = true;
+        cx.notify();
 
         self.refresh_task = Some(cx.spawn(async move |this, cx| {
             // Scope the reconcile to the follow set known so far
@@ -265,12 +266,13 @@ impl WebOfTrust {
 
                     this.snapshot = Some(snapshot);
                     cx.emit(WoTEvent);
-                    cx.notify();
 
                     if grew {
                         this.sync(cx);
                     }
                 }
+
+                cx.notify();
             })
             .ok();
         }));
@@ -312,6 +314,11 @@ impl WebOfTrust {
         self.snapshot
             .as_ref()
             .is_some_and(|snapshot| !snapshot.disabled)
+    }
+
+    /// Whether a reconciliation with the relays is in flight
+    pub fn is_syncing(&self) -> bool {
+        self.syncing
     }
 
     /// Whether the snapshot covers a follow set

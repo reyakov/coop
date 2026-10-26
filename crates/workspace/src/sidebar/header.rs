@@ -114,24 +114,25 @@ impl Sidebar {
             })
     }
 
-    /// The bottom navigation, pinned below the list like signed's sidebar.
-    pub(super) fn render_footer(&self, _cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_footer(&self, loading: bool, _cx: &mut Context<Self>) -> Div {
         v_flex()
             .p_2()
             .flex_shrink_0()
             .gap_1()
             .items_start()
             .justify_start()
-            .child(
-                Nav::new("sidebar-settings")
-                    .prefix(Icon::new(IconName::Settings).small())
-                    .center_prefix(true)
-                    .label("Settings")
-                    .text_sm()
-                    .on_click(|_, window, cx| {
-                        window.dispatch_action(Box::new(Command::ShowSettings), cx)
-                    }),
-            )
+            .when(!loading, |this| {
+                this.child(
+                    Nav::new("settings")
+                        .prefix(Icon::new(IconName::Settings).small())
+                        .center_prefix(true)
+                        .label("Settings")
+                        .text_sm()
+                        .on_click(|_, window, cx| {
+                            window.dispatch_action(Box::new(Command::ShowSettings), cx)
+                        }),
+                )
+            })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
