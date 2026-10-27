@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use chat_ui::ToggleDictation;
 use gpui::{
     App, Bounds, Global, KeyBinding, Menu, MenuItem, SharedString, TitlebarOptions,
     WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowKind, WindowOptions,
@@ -45,13 +46,19 @@ fn main() {
             // Register the `quit` function
             cx.on_action(quit);
 
-            // Register the `quit` function with CMD+Q (macOS)
+            // Register the `quit` function with CMD+Q (macOS) and dictation with CMD+D
             #[cfg(target_os = "macos")]
-            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+            cx.bind_keys([
+                KeyBinding::new("cmd-q", Quit, None),
+                KeyBinding::new("cmd-d", ToggleDictation, None),
+            ]);
 
-            // Register the `quit` function with Super+Q (others)
+            // Register the `quit` function with Super+Q (others) and dictation with Ctrl+D
             #[cfg(not(target_os = "macos"))]
-            cx.bind_keys([KeyBinding::new("super-q", Quit, None)]);
+            cx.bind_keys([
+                KeyBinding::new("super-q", Quit, None),
+                KeyBinding::new("ctrl-d", ToggleDictation, None),
+            ]);
 
             // Set menu items
             cx.set_menus(vec![Menu {

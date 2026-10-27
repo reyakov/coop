@@ -264,7 +264,7 @@ impl RelayManager {
 
     fn render_tab_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         TabBar::new("relays-tabs")
-            .segmented()
+            .pill()
             .selected_index(self.active_tab)
             .on_click(cx.listener(|this, ix: &usize, _window, cx| {
                 this.active_tab = *ix;

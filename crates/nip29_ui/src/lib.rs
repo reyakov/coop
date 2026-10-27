@@ -1,11 +1,14 @@
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use anyhow::Result;
+use chat_ui::ToggleDictation;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Action, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FollowMode, IntoElement, ListAlignment, ListScrollEvent, ListState, ParentElement, Render,
-    SharedString, Styled, Subscription, Task, WeakEntity, Window, div, list, px,
+    FollowMode, InteractiveElement, IntoElement, ListAlignment, ListScrollEvent, ListState,
+    ParentElement, Render, SharedString, Styled, Subscription, Task, WeakEntity, Window, div, list,
+    px,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -15,6 +18,7 @@ use gpui_kit::component::dock::{Panel, PanelEvent};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::Scrollbar;
+use gpui_kit::component::speech::{SpeechButton, SpeechEvent, SpeechState, SpeechWaveform};
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, WindowExt, h_flex, v_flex};
 use nip29::{Group, GroupEvent, GroupKey, GroupsRegistry, Membership, Pin, Row};
 use nostr_sdk::prelude::*;
@@ -312,6 +316,10 @@ pub struct GroupPanel {
     reply_to: Option<EventId>,
     rendered_texts_by_id: BTreeMap<EventId, RenderedText>,
     input: Entity<TextareaState>,
+    /// Dictation session for the composer input
+    speech: Entity<SpeechState>,
+    /// When the running dictation started, for the elapsed counter
+    speech_started: Option<instant::Instant>,
     /// Uploaded, non-encrypted attachments waiting to be sent.
     attachments: Vec<Url>,
     /// Whether an upload is in flight.
@@ -319,7 +327,7 @@ pub struct GroupPanel {
     /// Whether the user closed the encryption notice this visit
     notice_dismissed: bool,
     tasks: SmallVec<[Task<Result<()>>; 4]>,
-    _subscriptions: SmallVec<[Subscription; 3]>,
+    _subscriptions: SmallVec<[Subscription; 4]>,
 }
 
 impl GroupPanel {
@@ -338,6 +346,18 @@ impl GroupPanel {
                 .clean_on_escape()
         });
 
+        let speech = cx.new(|cx| {
+            let state = SpeechState::new(cx)
+                .recognizer(speech::recognizer())
+                // Batch transcription of a long recording can take a while.
+                .stop_timeout(Duration::from_secs(180));
+
+            #[cfg(target_arch = "wasm32")]
+            let state = state.input(speech::input());
+
+            state
+        });
+
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
@@ -345,6 +365,34 @@ impl GroupPanel {
                 if let InputEvent::PressEnter { .. } = event {
                     this.send(window, cx);
                 }
+            }),
+        );
+
+        subscriptions.push(
+            cx.subscribe_in(&speech, window, |this, _, event, window, cx| {
+                match event {
+                    SpeechEvent::Started => {
+                        this.speech_started = Some(instant::Instant::now());
+                        cx.notify();
+                    }
+                    SpeechEvent::Final(text) => {
+                        this.speech_started = None;
+
+                        if !text.is_empty() {
+                            this.input.update(cx, |input, cx| {
+                                input.insert(text.clone(), window, cx);
+                            });
+                        }
+                    }
+                    SpeechEvent::Error(error) => {
+                        this.speech_started = None;
+                        window.push_notification(Notification::error(error.to_string()), cx);
+                    }
+                    SpeechEvent::Cancelled => {
+                        this.speech_started = None;
+                    }
+                    _ => {}
+                };
             }),
         );
 
@@ -383,6 +431,8 @@ impl GroupPanel {
             notice_dismissed: false,
             rendered_texts_by_id: BTreeMap::new(),
             input,
+            speech,
+            speech_started: None,
             attachments: Vec::new(),
             uploading: false,
             tasks: smallvec![],
@@ -1015,6 +1065,17 @@ impl GroupPanel {
         )
     }
 
+    fn toggle_dictation(
+        &mut self,
+        _ev: &ToggleDictation,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.speech.update(cx, |speech, cx| {
+            speech.toggle(cx);
+        });
+    }
+
     fn render_composer(&self, cx: &mut Context<Self>) -> AnyElement {
         let notice = self.group.upgrade().and_then(|group| {
             let group = group.read(cx);
@@ -1040,6 +1101,8 @@ impl GroupPanel {
             return self.render_notice(&notice, cx);
         }
 
+        let dictating = self.speech.read(cx).status().is_active();
+
         v_flex()
             .flex_shrink_0()
             .w_full()
@@ -1055,21 +1118,45 @@ impl GroupPanel {
                     .items_end()
                     .child(
                         Button::new("upload")
-                            .icon(IconName::Upload)
-                            .tooltip("Upload file")
+                            .icon(ui::IconName::Paperclip)
+                            .tooltip("Upload media")
                             .loading(self.uploading)
-                            .disabled(self.uploading)
+                            .disabled(dictating || self.uploading)
                             .ghost()
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.upload(window, cx);
                             })),
                     )
-                    .child(Textarea::new(&self.input).appearance(false).flex_1())
+                    .when(dictating, |this| {
+                        this.child(
+                            h_flex()
+                                .h_8()
+                                .flex_1()
+                                .gap_2()
+                                .child(SpeechWaveform::new(&self.speech).small().flex_1())
+                                .when_some(self.speech_started, |this, started| {
+                                    this.child(speech::elapsed(started, cx))
+                                }),
+                        )
+                    })
+                    .when(!dictating, |this| {
+                        this.child(
+                            Textarea::new(&self.input)
+                                .appearance(false)
+                                .bg(cx.theme().input)
+                                .small()
+                                .min_h_8()
+                                .py_1()
+                                .flex_1(),
+                        )
+                    })
+                    .child(SpeechButton::new(&self.speech))
                     .child(
                         Button::new("send")
                             .icon(ui::IconName::PaperPlaneFill)
                             .tooltip("Send")
                             .ghost()
+                            .disabled(dictating || self.uploading)
                             .on_click(cx.listener(|this, _event, window, cx| {
                                 this.send(window, cx);
                             })),
@@ -1267,6 +1354,7 @@ impl Render for GroupPanel {
         v_flex()
             .size_full()
             .min_w_0()
+            .on_action(cx.listener(Self::toggle_dictation))
             .child(self.render_encryption_notice(cx))
             .child(self.render_banner(cx))
             .child(self.render_pins(cx))

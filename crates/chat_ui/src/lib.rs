@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, LazyLock, RwLock};
+use std::time::Duration;
 
 pub use actions::*;
 use anyhow::Error;
@@ -20,6 +21,7 @@ use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, Textar
 use gpui_kit::component::menu::DropdownMenu;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::Scrollbar;
+use gpui_kit::component::speech::{SpeechButton, SpeechEvent, SpeechState, SpeechWaveform};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, WindowExt, h_flex, v_flex};
 use itertools::Itertools;
@@ -91,6 +93,12 @@ pub struct ChatPanel {
     /// Chat input state
     input: Entity<TextareaState>,
 
+    /// Dictation session for the chat input
+    speech: Entity<SpeechState>,
+
+    /// When the running dictation started, for the elapsed counter
+    speech_started: Option<instant::Instant>,
+
     /// Subject input state
     subject_input: Entity<InputState>,
 
@@ -116,7 +124,7 @@ pub struct ChatPanel {
     tasks: Vec<Task<Result<(), Error>>>,
 
     /// Event subscriptions
-    subscriptions: SmallVec<[Subscription; 3]>,
+    subscriptions: SmallVec<[Subscription; 4]>,
 }
 
 impl ChatPanel {
@@ -160,6 +168,19 @@ impl ChatPanel {
                 .clean_on_escape()
         });
 
+        // Define dictation state
+        let speech = cx.new(|cx| {
+            let state = SpeechState::new(cx)
+                .recognizer(speech::recognizer())
+                // Batch transcription of a long recording can take a while.
+                .stop_timeout(Duration::from_secs(180));
+
+            #[cfg(target_arch = "wasm32")]
+            let state = state.input(speech::input());
+
+            state
+        });
+
         // Define subject input state
         let subject_input = cx.new(|cx| InputState::new(window, cx).placeholder("New subject..."));
         let subject_bar = cx.new(|_cx| false);
@@ -178,15 +199,39 @@ impl ChatPanel {
 
         subscriptions.push(
             // Subscribe the subject input event
-            cx.subscribe_in(
-                &subject_input,
-                window,
-                move |this, _input, event, window, cx| {
-                    if let InputEvent::PressEnter { .. } = event {
-                        this.change_subject(window, cx);
-                    };
-                },
-            ),
+            cx.subscribe_in(&subject_input, window, move |this, _, event, window, cx| {
+                if let InputEvent::PressEnter { .. } = event {
+                    this.change_subject(window, cx);
+                };
+            }),
+        );
+
+        subscriptions.push(
+            // Insert the dictated text into the chat input
+            cx.subscribe_in(&speech, window, move |this, _speech, event, window, cx| {
+                match event {
+                    SpeechEvent::Started => {
+                        this.speech_started = Some(instant::Instant::now());
+                        cx.notify();
+                    }
+                    SpeechEvent::Final(text) => {
+                        this.speech_started = None;
+
+                        if !text.is_empty() {
+                            this.input
+                                .update(cx, |input, cx| input.insert(text.clone(), window, cx));
+                        }
+                    }
+                    SpeechEvent::Error(error) => {
+                        this.speech_started = None;
+                        window.push_notification(Notification::error(error.to_string()), cx);
+                    }
+                    SpeechEvent::Cancelled => {
+                        this.speech_started = None;
+                    }
+                    _ => {}
+                };
+            }),
         );
 
         // Define all functions that will run after the current cycle
@@ -206,6 +251,8 @@ impl ChatPanel {
             directory,
             list_state,
             input,
+            speech,
+            speech_started: None,
             subject_input,
             subject_bar,
             replies_to,
@@ -835,6 +882,17 @@ impl ChatPanel {
         self.directory.read(cx).person(public_key, cx)
     }
 
+    fn toggle_dictation(
+        &mut self,
+        _: &ToggleDictation,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.speech.update(cx, |speech, cx| {
+            speech.toggle(cx);
+        });
+    }
+
     fn on_command(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) {
         match command {
             Command::Insert(content) => {
@@ -1390,21 +1448,26 @@ impl ChatPanel {
         }
 
         let reply_id = *id;
-        let copy_id = *id;
         let dropdown_id = *id;
         let public_key = *public_key;
 
-        actions
-            .reply(cx.listener(move |this, _event, _window, cx| {
-                this.reply_to(&reply_id, cx);
-            }))
-            .copy(cx.listener(move |this, _event, _window, cx| {
-                this.copy_message(&copy_id, cx);
-            }))
-            .dropdown(move |menu, _window, _cx| {
-                menu.menu("Copy author", Box::new(Command::Copy(public_key)))
-                    .menu("Seen on", Box::new(Command::Trace(dropdown_id)))
-            })
+        let actions = actions.reply(cx.listener(move |this, _event, _window, cx| {
+            this.reply_to(&reply_id, cx);
+        }));
+
+        let actions = if let Some(message) = self.message(id) {
+            actions.copy(
+                SharedString::from(format!("message-copy-{id}")),
+                message.preview(),
+            )
+        } else {
+            actions
+        };
+
+        actions.dropdown(move |menu, _window, _cx| {
+            menu.menu("Copy author", Box::new(Command::Copy(public_key)))
+                .menu("Seen on", Box::new(Command::Trace(dropdown_id)))
+        })
     }
 
     fn render_attachment(&self, url: &Url, cx: &Context<Self>) -> impl IntoElement {
@@ -1669,7 +1732,12 @@ impl ChatPanel {
         items
     }
 
-    fn render_config_menu(&self, _window: &mut Window, cx: &Context<Self>) -> impl IntoElement {
+    fn render_config_menu(
+        &self,
+        disabled: bool,
+        _window: &mut Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let (backup, signer_kind) = self
             .room
             .read_with(cx, |this, _cx| {
@@ -1682,6 +1750,7 @@ impl ChatPanel {
             .icon(IconName::Settings2)
             .tooltip("Configuration")
             .ghost()
+            .disabled(disabled)
             .dropdown_menu(move |this, _window, _cx| {
                 let auto = matches!(signer_kind, SignerKind::Auto);
                 let encryption = matches!(signer_kind, SignerKind::Encryption);
@@ -1712,7 +1781,12 @@ impl ChatPanel {
             })
     }
 
-    fn render_emoji_menu(&self, _window: &Window, cx: &Context<Self>) -> impl IntoElement {
+    fn render_emoji_menu(
+        &self,
+        disabled: bool,
+        _window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
         let nostr = NostrRegistry::global(cx);
         let current_user = nostr.read(cx).current_user();
 
@@ -1729,6 +1803,7 @@ impl ChatPanel {
         Button::new("emoji")
             .icon(IconName::Emoji)
             .ghost()
+            .disabled(disabled)
             .dropdown_menu_with_anchor(gpui::Anchor::BottomLeft, move |this, _window, _cx| {
                 let menu = REACTION_EMOJIS.iter().fold(this, |this, emoji| {
                     this.menu(*emoji, Box::new(Command::Insert(emoji.to_string())))
@@ -1802,10 +1877,12 @@ impl Render for ChatPanel {
 
         let is_typing = !self.input.read(cx).value().trim().is_empty();
         let pending_attachments = !self.encrypted_attachments.read(cx).is_empty();
+        let dictating = self.speech.read(cx).status().is_active();
 
         v_flex()
             .image_cache(retain_all(self.id.clone()))
             .on_action(cx.listener(Self::on_command))
+            .on_action(cx.listener(Self::toggle_dictation))
             .size_full()
             .when(*self.subject_bar.read(cx), |this| {
                 this.child(
@@ -1879,26 +1956,55 @@ impl Render for ChatPanel {
                             .items_end()
                             .child(
                                 Button::new("upload")
-                                    .icon(IconName::Plus)
+                                    .icon(IconName::Paperclip)
                                     .tooltip("Upload media")
                                     .loading(self.uploading)
-                                    .disabled(self.uploading)
+                                    .disabled(dictating || self.uploading)
                                     .ghost()
                                     .on_click(cx.listener(move |this, _ev, window, cx| {
                                         this.upload(window, cx);
                                     })),
                             )
-                            .child(Textarea::new(&self.input).appearance(false).flex_1())
+                            .when(dictating, |this| {
+                                this.child(
+                                    h_flex()
+                                        .h_8()
+                                        .flex_1()
+                                        .gap_2()
+                                        .pl_1()
+                                        .child(SpeechWaveform::new(&self.speech).small().flex_1())
+                                        .when_some(self.speech_started, |this, started| {
+                                            this.child(speech::elapsed(started, cx))
+                                        }),
+                                )
+                            })
+                            .when(!dictating, |this| {
+                                this.child(
+                                    Textarea::new(&self.input)
+                                        .appearance(false)
+                                        .small()
+                                        .min_h_8()
+                                        .py_1()
+                                        .flex_1(),
+                                )
+                            })
+                            .child(
+                                h_flex()
+                                    .items_end()
+                                    .gap_1()
+                                    .pl_1()
+                                    .child(SpeechButton::new(&self.speech)),
+                            )
                             .child(
                                 h_flex()
                                     .pl_1()
                                     .gap_1()
-                                    .child(self.render_emoji_menu(window, cx))
-                                    .child(self.render_config_menu(window, cx))
+                                    .child(self.render_emoji_menu(dictating, window, cx))
+                                    .child(self.render_config_menu(dictating, window, cx))
                                     .child(
                                         Button::new("send")
                                             .icon(IconName::PaperPlaneFill)
-                                            .disabled(self.uploading)
+                                            .disabled(dictating || self.uploading)
                                             .ghost()
                                             .on_click(cx.listener(move |this, _ev, window, cx| {
                                                 this.send_text_message(window, cx);

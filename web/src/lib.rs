@@ -78,6 +78,11 @@ pub fn run() -> Result<(), JsValue> {
 
     APPLICATION.with(|application| {
         *application.borrow_mut() = Some(app.run_embedded(|cx| {
+            cx.bind_keys([
+                KeyBinding::new("cmd-d", chat_ui::ToggleDictation, None),
+                KeyBinding::new("ctrl-d", chat_ui::ToggleDictation, None),
+            ]);
+
             gpui_kit::init(cx);
 
             load_embedded_fonts(cx);

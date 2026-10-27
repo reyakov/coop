@@ -10,6 +10,7 @@ use gpui::{
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{
     ActiveTheme, InteractiveElementExt as _, Sizable as _, StyledExt as _, h_flex, v_flex,
@@ -602,7 +603,7 @@ pub struct MessageActions {
     style: StyleRefinement,
     reactions: SmallVec<[(&'static str, SharedClickListener); 4]>,
     reply: Option<SharedClickListener>,
-    copy: Option<SharedClickListener>,
+    copy: Option<(ElementId, SharedString)>,
     dropdown: Option<DropdownBuilder>,
 }
 
@@ -634,9 +635,10 @@ impl MessageActions {
         self
     }
 
-    /// Add the copy button.
-    pub fn copy(mut self, handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static) -> Self {
-        self.copy = Some(Rc::new(handler));
+    /// Add the copy button for the given value.
+    /// The id must be unique per bar, the clipboard component keys its copied state on it.
+    pub fn copy(mut self, id: impl Into<ElementId>, value: impl Into<SharedString>) -> Self {
+        self.copy = Some((id.into(), value.into()));
         self
     }
 
@@ -707,15 +709,8 @@ impl RenderOnce for MessageActions {
                         .on_click(move |event, window, cx| reply(event, window, cx)),
                 )
             })
-            .when_some(copy, |this, copy| {
-                this.child(
-                    Button::new("copy")
-                        .icon(IconName::Copy)
-                        .tooltip("Copy")
-                        .small()
-                        .ghost()
-                        .on_click(move |event, window, cx| copy(event, window, cx)),
-                )
+            .when_some(copy, |this, (id, value)| {
+                this.child(Clipboard::new(id).value(value).tooltip("Copy").small())
             })
             .when_some(dropdown, |this, dropdown| {
                 this.child(div().flex_shrink_0().h_4().w_px().bg(cx.theme().border))

@@ -6,14 +6,16 @@ publish.workspace = true
 
 [dependencies]
 state = { path = "../state" }
+speech = { path = "../speech" }
 ui = { path = "../ui" }
-gpui-kit.workspace = true
+gpui-kit = { workspace = true, features = ["speech"] }
 common = { path = "../common" }
 person = { path = "../person" }
 chat = { path = "../chat" }
 settings = { path = "../settings" }
 
 gpui.workspace = true
+instant.workspace = true
 nostr-sdk.workspace = true
 anyhow.workspace = true
 itertools.workspace = true

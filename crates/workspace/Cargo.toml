@@ -15,6 +15,7 @@ chat_ui = { path = "../chat_ui" }
 nip29 = { path = "../nip29" }
 nip29_ui = { path = "../nip29_ui" }
 settings = { path = "../settings" }
+speech = { path = "../speech" }
 person = { path = "../person" }
 auto_update = { path = "../auto_update" }
 

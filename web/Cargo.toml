@@ -14,6 +14,7 @@ ui = { path = "../crates/ui" }
 state = { path = "../crates/state" }
 nip4e = { path = "../crates/nip4e" }
 chat = { path = "../crates/chat" }
+chat_ui = { path = "../crates/chat_ui" }
 nip29 = { path = "../crates/nip29" }
 settings = { path = "../crates/settings" }
 person = { path = "../crates/person" }

@@ -26,6 +26,11 @@ icons = [
     "resources/icon.ico",
 ]
 
+# Merged over the generated Info.plist; required for the speech input to
+# request microphone and speech recognition access on macOS.
+[package.metadata.packager.macos]
+info_plist_path = "resources/Info.plist"
+
 [dependencies]
 assets = { path = "../crates/assets" }
 workspace = { path = "../crates/workspace" }
@@ -33,6 +38,7 @@ ui = { path = "../crates/ui" }
 state = { path = "../crates/state" }
 nip4e = { path = "../crates/nip4e" }
 chat = { path = "../crates/chat" }
+chat_ui = { path = "../crates/chat_ui" }
 nip29 = { path = "../crates/nip29" }
 settings = { path = "../crates/settings" }
 auto_update = { path = "../crates/auto_update" }

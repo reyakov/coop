@@ -10,7 +10,6 @@ use gpui::{
     Window, div, px, uniform_list,
 };
 use gpui_kit::assets::IconName;
-use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{DockArea, DockPlacement, PanelHandle};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
@@ -205,6 +204,7 @@ impl NewChat {
 
                 Ok(())
             }));
+
             return;
         }
 
@@ -369,15 +369,13 @@ impl NewChat {
                     .p_0p5()
                     .rounded_full()
                     .bg(cx.theme().secondary)
-                    .text_xs()
-                    .font_medium()
                     .hover(|this| this.bg(cx.theme().primary))
                     .child(
                         Avatar::new(profile.avatar())
                             .seed(profile.avatar_seed())
                             .xsmall(),
                     )
-                    .child(div().max_w_32().truncate().child(profile.name()))
+                    .child(div().max_w_32().truncate().text_xs().child(profile.name()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.toggle_member(&public_key, cx);
                     }))

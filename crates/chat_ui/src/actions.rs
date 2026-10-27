@@ -1,4 +1,4 @@
-use gpui::Action;
+use gpui::{Action, actions};
 use nostr_sdk::prelude::*;
 use serde::Deserialize;
 use settings::SignerKind;
@@ -15,3 +15,6 @@ pub enum Command {
     Njump(PublicKey),
     Trace(EventId),
 }
+
+// Start or stop dictation in the focused composer
+actions!(chat, [ToggleDictation]);

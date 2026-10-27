@@ -340,7 +340,7 @@ impl Sidebar {
             )
             .child(
                 div()
-                    .text_sm()
+                    .text_xs()
                     .text_color(cx.theme().sidebar_foreground)
                     .child(label),
             )

@@ -11,11 +11,13 @@ common = { path = "../common" }
 nip29 = { path = "../nip29" }
 person = { path = "../person" }
 settings = { path = "../settings" }
+speech = { path = "../speech" }
 state = { path = "../state" }
-gpui-kit.workspace = true
+gpui-kit = { workspace = true, features = ["speech"] }
 ui = { path = "../ui" }
 
 gpui.workspace = true
+instant.workspace = true
 nostr-sdk.workspace = true
 anyhow.workspace = true
 log.workspace = true

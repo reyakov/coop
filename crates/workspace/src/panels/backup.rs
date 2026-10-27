@@ -1,16 +1,14 @@
 use anyhow::Error;
 use gpui::{
-    App, AppContext, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    IntoElement, ParentElement, Render, SharedString, Styled, Task, Window, div,
+    App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
+    ParentElement, Render, SharedString, Styled, Task, Window, div,
 };
-use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::dock::{Panel, PanelEvent};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::separator::Separator;
-use gpui_kit::component::{ActiveTheme, Sizable, v_flex};
-use instant::Duration;
+use gpui_kit::component::{ActiveTheme, v_flex};
 use nostr_sdk::prelude::*;
 use state::USER_KEYRING;
 
@@ -32,9 +30,6 @@ pub struct BackupPanel {
     /// Secret key input
     nsec_input: Entity<InputState>,
 
-    /// Copied status
-    copied: bool,
-
     /// Background tasks
     tasks: Vec<Task<Result<(), Error>>>,
 }
@@ -54,7 +49,6 @@ impl BackupPanel {
             focus_handle: cx.focus_handle(),
             npub_input,
             nsec_input,
-            copied: false,
             tasks: vec![],
         }
     }
@@ -77,31 +71,6 @@ impl BackupPanel {
                     });
                 })?;
             }
-
-            Ok(())
-        }));
-    }
-
-    fn copy_secret(&mut self, cx: &mut Context<Self>) {
-        let value = self.nsec_input.read(cx).value();
-        let item = ClipboardItem::new_string(value.to_string());
-        cx.write_to_clipboard(item);
-
-        // Set the copied status to true
-        self.set_copied(true, cx);
-    }
-
-    fn set_copied(&mut self, status: bool, cx: &mut Context<Self>) {
-        self.copied = status;
-        cx.notify();
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            cx.background_executor().timer(Duration::from_secs(2)).await;
-
-            // Clear the error message after a delay
-            this.update(cx, |this, cx| {
-                this.set_copied(false, cx);
-            })?;
 
             Ok(())
         }));
@@ -174,20 +143,12 @@ impl Render for BackupPanel {
                             .child(Input::new(&self.nsec_input).disabled(true)),
                     )
                     .child(
-                        Button::new("copy")
-                            .icon(IconName::Copy)
-                            .label({
-                                if self.copied {
-                                    "Copied"
-                                } else {
-                                    "Copy secret key"
-                                }
-                            })
-                            .primary()
-                            .small()
-                            .on_click(cx.listener(move |this, _ev, _window, cx| {
-                                this.copy_secret(cx);
-                            })),
+                        Clipboard::new("copy-secret")
+                            .accessibility_label("Copy secret key")
+                            .value_fn({
+                                let nsec_input = self.nsec_input.clone();
+                                move |_, cx| nsec_input.read(cx).value()
+                            }),
                     ),
             )
     }

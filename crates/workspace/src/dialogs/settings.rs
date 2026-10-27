@@ -1,19 +1,30 @@
 #[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
+
+use chat_ui::ToggleDictation;
+#[cfg(not(target_arch = "wasm32"))]
 use gpui::PathPromptOptions;
+#[cfg(not(target_arch = "wasm32"))]
+use gpui::Task;
 use gpui::http_client::Url;
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled, Subscription,
-    Window, div,
+    AnyElement, App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled,
+    Subscription, Window, div,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
+use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
+#[cfg(not(target_arch = "wasm32"))]
+use gpui_kit::component::progress::Progress;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, Sizable, WindowExt, h_flex, v_flex};
 use settings::{AppSettings, AppearanceMode};
+#[cfg(not(target_arch = "wasm32"))]
+use speech::model::{self as speech_model};
 use ui::{settings_block, settings_row};
 
 /// Bounds for the theme number inputs
@@ -29,6 +40,8 @@ pub struct Preferences {
     font_size_input: Entity<InputState>,
     radius_input: Entity<InputState>,
     radius_lg_input: Entity<InputState>,
+    #[cfg(not(target_arch = "wasm32"))]
+    _speech_poll: Task<()>,
     /// Keeps the control subscriptions alive while the dialog is open
     _subscriptions: Vec<Subscription>,
 }
@@ -94,11 +107,40 @@ impl Preferences {
             }),
         ];
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let _speech_poll = cx.spawn_in(window, async move |this, cx| {
+            let timer = Duration::from_millis(500);
+            let mut last = speech_model::status();
+
+            loop {
+                cx.background_executor().timer(timer).await;
+
+                let status = speech_model::status();
+                let error = speech_model::take_error();
+
+                if status == last {
+                    continue;
+                }
+
+                last = status;
+
+                this.update_in(cx, |_, window, cx| {
+                    if let Some(error) = error {
+                        window.push_notification(Notification::error(error).autohide(false), cx);
+                    }
+                    cx.notify();
+                })
+                .ok();
+            }
+        });
+
         Self {
             file_input,
             font_size_input,
             radius_input,
             radius_lg_input,
+            #[cfg(not(target_arch = "wasm32"))]
+            _speech_poll,
             _subscriptions: subscriptions,
         }
     }
@@ -188,10 +230,102 @@ impl Preferences {
             .detach();
         }
     }
+
+    fn render_speech(
+        &mut self,
+        #[cfg_attr(target_arch = "wasm32", allow(unused_variables))] cx: &mut Context<Self>,
+    ) -> AnyElement {
+        #[cfg(target_arch = "wasm32")]
+        {
+            return div().into_any_element();
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let size = speech_model::total_size() / 1_000_000;
+            let status = speech_model::status();
+
+            let (description, control) = match &status {
+                speech_model::Status::NotInstalled => (
+                    format!("{size} MB download"),
+                    Button::new("download-model")
+                        .label("Download")
+                        .secondary()
+                        .small()
+                        .on_click(|_, _window, cx| {
+                            speech_model::start_download();
+                            cx.refresh_windows();
+                        })
+                        .into_any_element(),
+                ),
+                speech_model::Status::Downloading { downloaded, total } => (
+                    format!(
+                        "Downloading · {} of {} MB",
+                        downloaded / 1_000_000,
+                        total / 1_000_000
+                    ),
+                    Button::new("cancel-download")
+                        .label("Cancel")
+                        .ghost()
+                        .small()
+                        .on_click(|_, _window, cx| {
+                            speech_model::cancel_download();
+                            cx.refresh_windows();
+                        })
+                        .into_any_element(),
+                ),
+                speech_model::Status::Installed => (
+                    format!("Parakeet v3 · {size} MB"),
+                    Button::new("remove-model")
+                        .label("Remove")
+                        .secondary()
+                        .small()
+                        .on_click(|_, _window, cx| {
+                            speech_model::delete();
+                            cx.refresh_windows();
+                        })
+                        .into_any_element(),
+                ),
+            };
+
+            let mut block = v_flex().w_full().gap_3().child(settings_row(
+                "Speech model",
+                description,
+                control,
+                cx,
+            ));
+
+            if let speech_model::Status::Downloading { downloaded, total } = &status {
+                let (downloaded, total) = (*downloaded, *total);
+
+                block = block.child(
+                    Progress::new("speech-model-download")
+                        .value(downloaded as f32 / total.max(1) as f32 * 100.)
+                        .small(),
+                );
+            }
+
+            block.into_any_element()
+        }
+    }
+
+    /// Shows the keystroke actually bound to the dictation action at startup
+    fn render_dictation_shortcut(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let control = match Kbd::global_binding_for_action(&ToggleDictation, window) {
+            Some(kbd) => kbd.into_any_element(),
+            None => div().into_any_element(),
+        };
+
+        settings_row("Shortcut", "Press to start or stop dictation", control, cx)
+    }
 }
 
 impl Render for Preferences {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         const SCREENING: &str = "Show an screening dialog to verify the unknown sender.";
         const WOT: &str = "Treat people followed by your contacts as known senders.";
         const AVATAR: &str = "Hide all avatar pictures to improve performance.";
@@ -373,6 +507,9 @@ impl Render for Preferences {
                     }),
                 cx,
             ))
+            .child(Separator::horizontal())
+            .child(self.render_speech(cx))
+            .child(self.render_dictation_shortcut(window, cx))
             .child(Separator::horizontal())
             .child(settings_block(
                 "Media Upload Service",

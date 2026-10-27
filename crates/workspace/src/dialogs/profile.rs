@@ -4,17 +4,17 @@ use anyhow::Error;
 use chat::{ChatRegistry, Room, RoomKind};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, ClipboardItem, Context, Div, Entity, IntoElement, ParentElement, Render,
-    SharedString, Styled, Task, Window, div, retain_all,
+    App, AppContext, Context, Div, Entity, IntoElement, ParentElement, Render, SharedString,
+    Styled, Task, Window, div, retain_all,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::dock::DockPlacement;
 use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
-use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::{Directory, Person, PersonRegistry, shorten_pubkey};
 use settings::AppSettings;
@@ -49,8 +49,6 @@ struct ProfileDialog {
     website_input: Entity<InputState>,
     /// Uploading state
     uploading: bool,
-    /// Copied states
-    copied: bool,
     /// Updating state
     updating: bool,
     /// Tasks
@@ -92,7 +90,6 @@ impl ProfileDialog {
             bio_input,
             website_input,
             uploading: false,
-            copied: false,
             updating: false,
             tasks: vec![],
         }
@@ -139,35 +136,6 @@ impl ProfileDialog {
         }
 
         cx.notify();
-    }
-
-    fn copy(&mut self, value: String, window: &mut Window, cx: &mut Context<Self>) {
-        let item = ClipboardItem::new_string(value);
-        cx.write_to_clipboard(item);
-
-        self.set_copied(true, window, cx);
-    }
-
-    fn set_copied(&mut self, status: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.copied = status;
-        cx.notify();
-
-        if status {
-            self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-                cx.background_executor().timer(Duration::from_secs(2)).await;
-
-                // Reset the copied state after a delay
-                cx.update(|window, cx| {
-                    this.update(cx, |this, cx| {
-                        this.set_copied(false, window, cx);
-                    })
-                    .ok();
-                })
-                .ok();
-
-                Ok(())
-            }));
-        }
     }
 
     fn set_uploading(&mut self, status: bool, cx: &mut Context<Self>) {
@@ -368,7 +336,8 @@ impl Render for ProfileDialog {
                     .w_full()
                     .items_center()
                     .justify_center()
-                    .bg(cx.theme().sidebar)
+                    .rounded(cx.theme().radius_lg)
+                    .bg(cx.theme().muted)
                     .child(Avatar::new(avatar).seed(profile.avatar_seed()).large())
                     .when(self.editing, |this| {
                         this.child(
@@ -393,25 +362,13 @@ impl Render for ProfileDialog {
                         .justify_center()
                         .gap_3()
                         .rounded(cx.theme().radius)
-                        .bg(cx.theme().sidebar)
+                        .bg(cx.theme().muted)
                         .text_xs()
                         .child(shorten_pkey)
-                        .child(
-                            Button::new("copy")
-                                .icon({
-                                    if self.copied {
-                                        IconName::CircleCheck
-                                    } else {
-                                        IconName::Copy
-                                    }
-                                })
-                                .xsmall()
-                                .secondary()
-                                .on_click(cx.listener(move |this, _ev, window, cx| {
-                                    let pk = this.public_key.to_bech32().unwrap();
-                                    this.copy(pk, window, cx)
-                                })),
-                        ),
+                        .child(Clipboard::new("copy").value_fn({
+                            let public_key = self.public_key;
+                            move |_, _| public_key.to_bech32().unwrap_or_default().into()
+                        })),
                 ),
             )
             .when(self.editing, |this| {
@@ -544,7 +501,7 @@ fn field(
     };
 
     v_flex()
-        .gap_1p5()
+        .gap_1()
         .child(label(text, cx))
-        .child(div().text_xs().text_color(color).child(content))
+        .child(div().text_sm().text_color(color).child(content))
 }
