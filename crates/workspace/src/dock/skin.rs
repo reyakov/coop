@@ -1,5 +1,4 @@
 use std::cell::Cell;
-use std::ops::Deref as _;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -166,7 +165,7 @@ impl CoopDockSkin {
             .on_drag(ResizePanel, move |info, _, _, cx| {
                 cx.stop_propagation();
                 shared.resizing_dock().set(Some(placement));
-                cx.new(|_| info.deref().clone())
+                cx.new(|_| info.clone())
             })
     }
 }
