@@ -20,9 +20,6 @@ jobs:
           - platform: windows-arm64
             os: windows-11-arm
             target: aarch64-pc-windows-msvc
-          - platform: macos-x64
-            os: macos-15-intel
-            target: x86_64-apple-darwin
           - platform: macos-arm64
             os: macos-latest
             target: aarch64-apple-darwin

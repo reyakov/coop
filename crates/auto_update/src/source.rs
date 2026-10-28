@@ -37,9 +37,8 @@ pub fn asset_filter_for(os: &str, arch: &str) -> Option<AssetFilter> {
     };
 
     let arch = match (os, arch) {
-        // cargo-packager names the disk images `aarch64`/`x64`.
+        // cargo-packager names the disk images `aarch64`.
         ("macos", "aarch64") => "aarch64",
-        ("macos", "x86_64") => "x64",
         // `script/bundle-linux` names the tarballs `aarch64`/`x86_64`.
         ("linux", "aarch64") => "aarch64",
         ("linux", "x86_64") => "x86_64",
@@ -243,7 +242,7 @@ mod tests {
     #[test]
     fn picks_the_artifact_matching_os_and_architecture() {
         assert_eq!(selected("macos", "aarch64"), Some("Coop_1.0.1_aarch64.dmg"));
-        assert_eq!(selected("macos", "x86_64"), Some("Coop_1.0.1_x64.dmg"));
+        assert_eq!(selected("macos", "x86_64"), None);
         assert_eq!(
             selected("linux", "aarch64"),
             Some("coop-linux-aarch64.tar.gz")
@@ -258,6 +257,7 @@ mod tests {
     fn has_no_target_for_windows_or_unknown_platforms() {
         assert_eq!(asset_filter_for("windows", "x86_64"), None);
         assert_eq!(asset_filter_for("freebsd", "x86_64"), None);
+        assert_eq!(asset_filter_for("macos", "x86_64"), None);
         assert_eq!(asset_filter_for("macos", "riscv64"), None);
     }
 
