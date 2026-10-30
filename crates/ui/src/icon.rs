@@ -30,6 +30,7 @@ pub enum IconName {
     Search,
     Settings,
     Settings2,
+    Unlock,
     Upload,
     Warning,
 }
@@ -63,6 +64,7 @@ impl IconNamed for IconName {
             Self::Search => "icons/search.svg",
             Self::Settings => "icons/settings.svg",
             Self::Settings2 => "icons/settings2.svg",
+            Self::Unlock => "icons/unlock.svg",
             Self::Upload => "icons/upload.svg",
             Self::Warning => "icons/warning.svg",
         }

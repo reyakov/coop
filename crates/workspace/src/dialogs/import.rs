@@ -1,15 +1,18 @@
 use anyhow::Error;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled,
-    Subscription, Task, Window, div, px, relative,
+    App, AppContext, Context, Div, Entity, IntoElement, ParentElement, Render, SharedString,
+    Styled, Subscription, Task, Window, div, px, relative,
 };
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle};
+use gpui_kit::component::form::{field, v_form};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, v_flex};
 use instant::Duration;
 use nostr_connect::prelude::*;
 use state::{NostrRegistry, StateEvent};
+use ui::IconName;
 
 pub fn open(window: &mut Window, cx: &mut App) {
     let import = cx.new(|cx| ImportIdentity::new(window, cx));
@@ -32,7 +35,6 @@ pub fn open_unlock(window: &mut Window, cx: &mut App) {
         this.close_button(false)
             .overlay_closable(false)
             .keyboard(false)
-            .title("Unlock your identity")
             .child(import.clone())
     });
 }
@@ -74,7 +76,15 @@ impl ImportIdentity {
     fn build(mode: Mode, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let nostr = NostrRegistry::global(cx);
         let key_input = cx.new(|cx| InputState::new(window, cx).placeholder("secret or bunker://"));
-        let pass_input = cx.new(|cx| InputState::new(window, cx).masked(true));
+        let pass_input = cx.new(|cx| {
+            let input = InputState::new(window, cx).masked(true);
+
+            if mode == Mode::Unlock {
+                input.placeholder("Passphrase to unlock your identity")
+            } else {
+                input
+            }
+        });
         let repass_input = cx.new(|cx| InputState::new(window, cx).masked(true));
         let error = cx.new(|_| None);
 
@@ -235,14 +245,58 @@ impl ImportIdentity {
             Ok(())
         }));
     }
+
+    fn render_unlock(&self, cx: &mut Context<Self>) -> Div {
+        v_flex()
+            .gap_4()
+            .child(
+                DialogHeader::new()
+                    .child(DialogTitle::new().child("Unlock your identity"))
+                    .child(
+                        DialogDescription::new()
+                            .child("Enter the passphrase used to encrypt this identity."),
+                    ),
+            )
+            .child(
+                v_form().child(
+                    field()
+                        .label("Passphrase")
+                        .required(true)
+                        .child(Input::new(&self.pass_input)),
+                ),
+            )
+            .when_some(self.error.read(cx).as_ref(), |this, error| {
+                this.child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().danger)
+                        .child(error.clone()),
+                )
+            })
+            .child(
+                DialogFooter::new().child(
+                    Button::new("unlock")
+                        .primary()
+                        .icon(IconName::Unlock)
+                        .label("Unlock")
+                        .loading(self.loading)
+                        .disabled(self.loading)
+                        .on_click(cx.listener(move |this, _ev, _window, cx| {
+                            this.login(cx);
+                        })),
+                ),
+            )
+    }
 }
 
 impl Render for ImportIdentity {
     fn render(&mut self, _window: &mut gpui::Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.mode == Mode::Unlock {
+            return self.render_unlock(cx);
+        }
+
         const BUNKER_WARN: &str = "Nostr Connect will usually take more time to get all your messages. Please keep your session open until you see all your messages.";
         const KEY_WARN: &str = "Coop encrypts your key with your passphrase and stores it on this device. You only need the passphrase to sign in next time.";
-
-        let is_unlock = self.mode == Mode::Unlock;
 
         let value = self.key_input.read(cx).value().trim().to_string();
         let require_password = value.starts_with("ncryptsec1");
@@ -257,25 +311,19 @@ impl Render for ImportIdentity {
             .child(
                 v_flex()
                     .gap_2()
-                    .when(!is_unlock, |this| {
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Use secret key or bunker connection")
+                            .child(Input::new(&self.key_input)),
+                    )
+                    .when(require_password, |this| {
                         this.child(
                             v_flex()
                                 .gap_1()
                                 .text_color(cx.theme().muted_foreground)
-                                .child("Use secret key or bunker connection")
-                                .child(Input::new(&self.key_input)),
-                        )
-                    })
-                    .when(is_unlock || require_password, |this| {
-                        this.child(
-                            v_flex()
-                                .gap_1()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(if is_unlock {
-                                    "Passphrase to unlock your identity:"
-                                } else {
-                                    "Decrypt Password:"
-                                })
+                                .child("Decrypt Password:")
                                 .child(Input::new(&self.pass_input)),
                         )
                     })
@@ -323,7 +371,7 @@ impl Render for ImportIdentity {
             .child({
                 let content = v_flex().gap_1().child(
                     Button::new("login")
-                        .label(if is_unlock { "Unlock" } else { "Continue" })
+                        .label("Continue")
                         .primary()
                         .loading(self.loading)
                         .disabled(self.loading)
@@ -333,30 +381,26 @@ impl Render for ImportIdentity {
                 );
 
                 #[cfg(not(target_arch = "wasm32"))]
-                let content = content.when(!is_unlock, |this| {
-                    this.child(
-                        Button::new("proxy")
-                            .label("Connect via Web Extension")
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(move |this, _ev, _window, cx| {
-                                this.proxy(cx);
-                            })),
-                    )
-                });
+                let content = content.child(
+                    Button::new("proxy")
+                        .label("Connect via Web Extension")
+                        .ghost()
+                        .disabled(self.loading)
+                        .on_click(cx.listener(move |this, _ev, _window, cx| {
+                            this.proxy(cx);
+                        })),
+                );
 
                 #[cfg(target_arch = "wasm32")]
-                let content = content.when(!is_unlock, |this| {
-                    this.child(
-                        Button::new("extension")
-                            .label("Continue with Browser Extension")
-                            .ghost()
-                            .disabled(self.loading)
-                            .on_click(cx.listener(move |this, _ev, _window, cx| {
-                                this.extension(cx);
-                            })),
-                    )
-                });
+                let content = content.child(
+                    Button::new("extension")
+                        .label("Continue with Browser Extension")
+                        .ghost()
+                        .disabled(self.loading)
+                        .on_click(cx.listener(move |this, _ev, _window, cx| {
+                            this.extension(cx);
+                        })),
+                );
 
                 content
             })
