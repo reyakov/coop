@@ -2156,6 +2156,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "dyn-clonable"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a36efbb9bfd58e1723780aa04b61aba95ace6a05d9ffabfdb0b43672552f0805"
+dependencies = [
+ "dyn-clonable-impl",
+ "dyn-clone",
+]
+
+[[package]]
+name = "dyn-clonable-impl"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e8671d54058979a37a26f3511fbf8d198ba1aa35ffb202c42587d918d77213a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5939,6 +5960,8 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
 dependencies = [
+ "bitflags 2.13.2",
+ "block2 0.6.2",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
 ]
@@ -6434,6 +6457,15 @@ dependencies = [
  "hmac-sha256",
  "lzma-rust2",
  "ureq",
+]
+
+[[package]]
+name = "oxilangtag"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5d3b4eb570abd4a1dcb062c31fd37b832264d9dc7292c3e69acfe926c87b063f"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -8372,6 +8404,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tts",
  "wasm-bindgen",
  "web-sys",
 ]
@@ -8441,6 +8474,21 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "ssip"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b81f5ada7d4745722e62f8be4aca56abcf0e0e46e409612ac94a4a3a2b471d39"
+
+[[package]]
+name = "ssip-client-async"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2cfbcb0ed774006ab9f14d4595fc02668cd7f5e662a87ff82264e6506238f47f"
+dependencies = [
+ "ssip",
 ]
 
 [[package]]
@@ -9287,6 +9335,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2df906b07856748fa3f6e0ad0cbaa047052d4a7dd609e231c4f72cee8c36f31"
 dependencies = [
  "core_maths",
+]
+
+[[package]]
+name = "tts"
+version = "0.27.0"
+source = "git+https://github.com/ndarilek/tts-rs#8fbcb720cb86c5166a9ed46272e3777f742da18e"
+dependencies = [
+ "block2 0.6.2",
+ "dyn-clonable",
+ "hound",
+ "jni 0.22.4",
+ "libloading",
+ "ndk-context",
+ "objc2 0.6.5",
+ "objc2-avf-audio",
+ "objc2-foundation 0.3.2",
+ "oxilangtag",
+ "parking_lot",
+ "ssip",
+ "ssip-client-async",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tracing",
+ "wasm-bindgen",
+ "web-sys",
+ "windows 0.62.2",
+ "zbus",
 ]
 
 [[package]]

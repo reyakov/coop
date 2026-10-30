@@ -30,13 +30,14 @@ use person::{Directory, Person};
 use regex::Regex;
 use settings::{AppSettings, SignerKind};
 use smallvec::{SmallVec, smallvec};
+use speech::speaker::{END_GRACE, Speaker};
 use state::{
     FileAttachment, LocalFile, NostrRegistry, PickedFile, download_and_decrypt_file, pick_file,
 };
 use ui::{
     Avatar, COMPACT_REACTION_EMOJIS, IconName, MessageActions, MessageMedia, MessageRow,
-    REACTION_EMOJIS, ReactionBar, RenderedText, ReplyPreview, WelcomeMessage, group_reactions,
-    opens_run, rendered_text,
+    REACTION_EMOJIS, ReactionBar, RenderedText, ReplyPreview, RevealText, WelcomeMessage,
+    group_reactions, opens_run, rendered_text,
 };
 
 use crate::file::*;
@@ -45,8 +46,7 @@ use crate::file::*;
 const PRIVATE_NOTICE: &str =
     "This conversation is private. Only members can see each other's messages.";
 
-/// Regex matching strings that consist entirely of emoji characters,
-/// zero-width joiners, variation selectors, and keycap combiners.
+/// Regex matching strings that consist entirely of emoji characters.
 static EMOJI_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^[\p{Emoji}\u{200D}\u{FE0F}\u{20E3}]+$").unwrap());
 
@@ -65,65 +65,49 @@ pub fn init(room: WeakEntity<Room>, window: &mut Window, cx: &mut App) -> Entity
 pub struct ChatPanel {
     id: SharedString,
     focus_handle: FocusHandle,
-
     /// Chat Room
     room: WeakEntity<Room>,
-
     /// Person directory shared with the room
     directory: Entity<Directory>,
-
     /// Message list state
     list_state: ListState,
-
     /// All messages (sorted by created_at)
     messages: Vec<Message>,
-
     /// O(1) message lookup by EventId
     message_index: HashMap<EventId, usize>,
-
     /// All reactions
     reactions: BTreeMap<EventId, Vec<(SharedString, Option<SharedUri>, PublicKey)>>,
-
     /// Mapping message ids to their rendered texts
     rendered_texts_by_id: BTreeMap<EventId, RenderedText>,
-
     /// Mapping message (rumor event) ids to their reports
     reports_by_id: Arc<RwLock<BTreeMap<EventId, Vec<SendReport>>>>,
-
     /// Chat input state
     input: Entity<TextareaState>,
-
     /// Dictation session for the chat input
     speech: Entity<SpeechState>,
-
     /// When the running dictation started, for the elapsed counter
     speech_started: Option<instant::Instant>,
-
+    /// Reads messages aloud
+    speaker: Speaker,
+    /// The message being revealed in step with speech, with its estimated duration
+    speech_reveal: Option<(EventId, Duration)>,
+    /// Fallback reveal end for backends that cannot report utterance end
+    reveal_timeout: Option<Task<Result<(), Error>>>,
     /// Subject input state
     subject_input: Entity<InputState>,
-
     /// Subject bar visibility
     subject_bar: Entity<bool>,
-
     /// Replies to
     replies_to: Entity<HashSet<EventId>>,
-
     /// Media Attachment
     attachments: Entity<Vec<Url>>,
-
     /// Uploaded, encrypted file attachments which are not sent yet
     encrypted_attachments: Entity<Vec<PendingFile>>,
-
     /// Decrypted attachments of file messages, by message id
     decrypted_files: HashMap<EventId, DecryptedFile>,
-
     /// Upload state
     uploading: bool,
-
-    /// Async operations
     tasks: Vec<Task<Result<(), Error>>>,
-
-    /// Event subscriptions
     subscriptions: SmallVec<[Subscription; 4]>,
 }
 
@@ -241,6 +225,20 @@ impl ChatPanel {
             this.get_messages(window, cx);
         });
 
+        // End the speech reveal when the utterance finishes ahead of its estimate
+        let speaker = Speaker::new();
+        let end_events = speaker.end_events();
+        let reveal_end_task = cx.spawn(async move |this, cx| {
+            while end_events.recv_async().await.is_ok() {
+                this.update(cx, |this, cx| {
+                    this.speech_reveal = None;
+                    cx.notify();
+                })?;
+            }
+
+            Ok(())
+        });
+
         Self {
             focus_handle: cx.focus_handle(),
             id,
@@ -253,6 +251,9 @@ impl ChatPanel {
             input,
             speech,
             speech_started: None,
+            speaker,
+            speech_reveal: None,
+            reveal_timeout: None,
             subject_input,
             subject_bar,
             replies_to,
@@ -263,7 +264,7 @@ impl ChatPanel {
             reports_by_id,
             uploading: false,
             subscriptions,
-            tasks: vec![],
+            tasks: vec![reveal_end_task],
         }
     }
 
@@ -1192,6 +1193,15 @@ impl ChatPanel {
             nostr.read(cx).current_user(),
         ));
 
+        let body = match self
+            .speech_reveal
+            .as_ref()
+            .filter(|(reveal_id, _)| *reveal_id == id)
+        {
+            Some((_, duration)) => RevealText::new(message.preview(), *duration).into_any_element(),
+            None => rendered_text,
+        };
+
         MessageRow::new(ix)
             .show_author(show_author)
             .hide_avatar(hide_avatar)
@@ -1216,7 +1226,7 @@ impl ChatPanel {
             .when(has_replies, |this| {
                 this.children(self.render_message_replies(replies, cx))
             })
-            .when(message.file.is_none(), |this| this.child(rendered_text))
+            .when(message.file.is_none(), |this| this.child(body))
             .child(MessageMedia::new(&message.media))
             .when_some(message.file.as_ref(), |this, file| {
                 this.child(self.render_message_file(&id, file, cx))
@@ -1463,6 +1473,43 @@ impl ChatPanel {
         } else {
             actions
         };
+
+        let speaking = self.speech_reveal.is_some();
+        let speech_id = *id;
+
+        let actions = actions.speech(
+            speaking,
+            cx.listener(move |this, _event, window, cx| {
+                let text = this.message(&speech_id).map(|message| message.preview());
+
+                if let Some(text) = text {
+                    match this.speaker.speak(&text) {
+                        Ok(duration) => {
+                            this.speech_reveal = Some((speech_id, duration));
+
+                            // Re-enable speaking when no end event ever arrives
+                            let session = (speech_id, duration);
+                            let timer = cx.background_executor().timer(duration + END_GRACE);
+                            this.reveal_timeout = Some(cx.spawn(async move |this, cx| {
+                                timer.await;
+                                this.update(cx, |this, cx| {
+                                    if this.speech_reveal.as_ref() == Some(&session) {
+                                        this.speech_reveal = None;
+                                        cx.notify();
+                                    }
+                                })?;
+
+                                Ok(())
+                            }));
+                            cx.notify();
+                        }
+                        Err(error) => {
+                            window.push_notification(Notification::error(error.to_string()), cx)
+                        }
+                    }
+                }
+            }),
+        );
 
         actions.dropdown(move |menu, _window, _cx| {
             menu.menu("Copy author", Box::new(Command::Copy(public_key)))

@@ -8,15 +8,17 @@ use gpui::{
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex};
+use gpui_kit::component::notification::Notification;
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, WindowExt, h_flex};
 use nip29::{Activity, Group, Reaction};
 use nostr_sdk::prelude::{EventId, Kind};
 use person::Directory;
 use settings::AppSettings;
+use speech::speaker::END_GRACE;
 use state::NostrRegistry;
 use ui::{
-    Avatar, MessageMedia, MessageRow, REACTION_EMOJIS, ReactionBar, ReplyPreview, group_reactions,
-    react_menu,
+    Avatar, MessageActions, MessageMedia, MessageRow, REACTION_EMOJIS, ReactionBar, ReplyPreview,
+    group_reactions, react_menu,
 };
 
 use crate::GroupPanel;
@@ -26,6 +28,8 @@ pub(crate) struct Actions {
     pub panel: WeakEntity<GroupPanel>,
     pub admin: bool,
     pub pinned: bool,
+    /// Whether a message is currently being spoken, disabling the speech buttons
+    pub speaking: bool,
     pub persons: Entity<Directory>,
 }
 
@@ -87,10 +91,44 @@ pub(crate) fn render(
     let admin = actions.admin;
     let pinned = actions.pinned;
     let group = actions.group;
-    let panel = actions.panel;
+    let speech_panel = actions.panel;
+    let panel = speech_panel.clone();
+    let speech_text = message.preview();
+    let speech_id = message.id;
+    let speaking = actions.speaking;
 
-    // Reading the panel here would re-enter its ongoing update, so resolve
-    // the current user's custom emojis through the shared person directory.
+    let row = row.overlay(
+        MessageActions::new().speech(speaking, move |_event, _window, cx| {
+            _ = speech_panel.update_in(cx, |panel, window, cx| {
+                match panel.speaker.speak(&speech_text) {
+                    Ok(duration) => {
+                        panel.speech_reveal = Some((speech_id, duration));
+
+                        let session = (speech_id, duration);
+                        let timer = cx.background_executor().timer(duration + END_GRACE);
+
+                        panel.reveal_timeout = Some(cx.spawn(async move |this, cx| {
+                            timer.await;
+                            this.update(cx, |this, cx| {
+                                if this.speech_reveal.as_ref() == Some(&session) {
+                                    this.speech_reveal = None;
+                                    cx.notify();
+                                }
+                            })?;
+
+                            Ok(())
+                        }));
+
+                        cx.notify();
+                    }
+                    Err(error) => {
+                        window.push_notification(Notification::error(error.to_string()), cx)
+                    }
+                }
+            });
+        }),
+    );
+
     let custom = nostr
         .read(cx)
         .current_user()

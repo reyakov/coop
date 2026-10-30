@@ -26,8 +26,9 @@ use person::Directory;
 use serde::Deserialize;
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
+use speech::speaker::Speaker;
 use state::{NostrRegistry, pick_file, upload_file};
-use ui::{Avatar, RenderedText, WelcomeMessage, rendered_text};
+use ui::{Avatar, RenderedText, RevealText, WelcomeMessage, rendered_text};
 use util::{attachment_name, display_name, opens_run, pin_label, report};
 
 mod details;
@@ -320,6 +321,12 @@ pub struct GroupPanel {
     speech: Entity<SpeechState>,
     /// When the running dictation started, for the elapsed counter
     speech_started: Option<instant::Instant>,
+    /// Reads messages aloud
+    speaker: Speaker,
+    /// The message being revealed in step with speech, with its estimated duration
+    speech_reveal: Option<(EventId, Duration)>,
+    /// Fallback reveal end for backends that cannot report utterance end
+    reveal_timeout: Option<Task<Result<()>>>,
     /// Uploaded, non-encrypted attachments waiting to be sent.
     attachments: Vec<Url>,
     /// Whether an upload is in flight.
@@ -419,9 +426,24 @@ impl GroupPanel {
                     }
                 },
             ));
+            this.track_participants(cx);
         });
 
-        let mut this = Self {
+        // End the speech reveal when the utterance finishes ahead of its estimate
+        let speaker = Speaker::new();
+        let end_events = speaker.end_events();
+        let reveal_end_task = cx.spawn(async move |this, cx| {
+            while end_events.recv_async().await.is_ok() {
+                this.update(cx, |this, cx| {
+                    this.speech_reveal = None;
+                    cx.notify();
+                })?;
+            }
+
+            Ok(())
+        });
+
+        Self {
             focus_handle: cx.focus_handle(),
             group: group.downgrade(),
             directory: Directory::new(cx),
@@ -433,19 +455,17 @@ impl GroupPanel {
             input,
             speech,
             speech_started: None,
+            speaker,
+            speech_reveal: None,
+            reveal_timeout: None,
             attachments: Vec::new(),
             uploading: false,
-            tasks: smallvec![],
+            tasks: smallvec![reveal_end_task],
             _subscriptions: subscriptions,
-        };
-
-        this.track_participants(cx);
-
-        this
+        }
     }
 
-    /// Track the keys rendered by this panel: members, message authors, and
-    /// activity subjects
+    /// Track the keys rendered by this panel.
     fn track_participants(&mut self, cx: &mut Context<Self>) {
         let Some(group) = self.group.upgrade() else {
             return;
@@ -1023,22 +1043,29 @@ impl GroupPanel {
         let nostr = NostrRegistry::global(cx);
         let directory = self.directory.clone();
 
-        let content = self
-            .rendered_texts_by_id
-            .entry(message.id)
-            .or_insert_with(|| {
-                rendered_text(
-                    &message.content,
-                    message
-                        .mentions
-                        .iter()
-                        .map(|mention| (mention.range.clone(), mention.public_key)),
-                    &message.emojis,
-                    &directory,
-                    cx,
-                )
-            })
-            .element(ix.into(), window, cx);
+        let content = match self
+            .speech_reveal
+            .as_ref()
+            .filter(|(reveal_id, _)| *reveal_id == message.id)
+        {
+            Some((_, duration)) => RevealText::new(message.preview(), *duration).into_any_element(),
+            None => self
+                .rendered_texts_by_id
+                .entry(message.id)
+                .or_insert_with(|| {
+                    rendered_text(
+                        &message.content,
+                        message
+                            .mentions
+                            .iter()
+                            .map(|mention| (mention.range.clone(), mention.public_key)),
+                        &message.emojis,
+                        &directory,
+                        cx,
+                    )
+                })
+                .element(ix.into(), window, cx),
+        };
 
         let admin = nostr
             .read(cx)
@@ -1059,6 +1086,7 @@ impl GroupPanel {
                 panel: cx.weak_entity(),
                 admin,
                 pinned,
+                speaking: self.speech_reveal.is_some(),
                 persons: self.directory.clone(),
             },
             cx,

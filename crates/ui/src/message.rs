@@ -1,19 +1,21 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, ClickEvent, Context, ElementId, InteractiveElement as _, IntoElement,
-    MouseButton, MouseDownEvent, ObjectFit, ParentElement as _, RenderOnce, SharedString,
-    SharedUri, StatefulInteractiveElement as _, StyleRefinement, Styled, StyledImage, Window, div,
-    img, px,
+    Animation, AnimationExt as _, AnyElement, App, ClickEvent, Context, ElementId,
+    InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ObjectFit,
+    ParentElement as _, RenderOnce, SharedString, SharedUri, StatefulInteractiveElement as _,
+    StyleRefinement, Styled, StyledImage, Window, div, img, px,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::menu::{DropdownMenu as _, PopupMenu, PopupMenuItem};
 use gpui_kit::component::{
-    ActiveTheme, InteractiveElementExt as _, Sizable as _, StyledExt as _, h_flex, v_flex,
+    ActiveTheme, Disableable, InteractiveElementExt as _, Sizable as _, StyledExt as _, h_flex,
+    v_flex,
 };
 use smallvec::SmallVec;
 
@@ -597,13 +599,14 @@ pub fn react_menu(
     })
 }
 
-/// A hovered message's action bar: quick reactions, reply, copy, and an overflow menu.
+/// A hovered message's action bar: quick reactions, reply, copy, read aloud, and an overflow menu.
 #[derive(IntoElement)]
 pub struct MessageActions {
     style: StyleRefinement,
     reactions: SmallVec<[(&'static str, SharedClickListener); 4]>,
     reply: Option<SharedClickListener>,
     copy: Option<(ElementId, SharedString)>,
+    speech: Option<(bool, SharedClickListener)>,
     dropdown: Option<DropdownBuilder>,
 }
 
@@ -615,6 +618,7 @@ impl MessageActions {
             reactions: SmallVec::new(),
             reply: None,
             copy: None,
+            speech: None,
             dropdown: None,
         }
     }
@@ -639,6 +643,16 @@ impl MessageActions {
     /// The id must be unique per bar, the clipboard component keys its copied state on it.
     pub fn copy(mut self, id: impl Into<ElementId>, value: impl Into<SharedString>) -> Self {
         self.copy = Some((id.into(), value.into()));
+        self
+    }
+
+    /// Add the read-aloud button, disabled while a message is already being spoken.
+    pub fn speech(
+        mut self,
+        disabled: bool,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.speech = Some((disabled, Rc::new(handler)));
         self
     }
 
@@ -671,10 +685,13 @@ impl RenderOnce for MessageActions {
             reactions,
             reply,
             copy,
+            speech,
             dropdown,
         } = self;
 
-        let has_center = reply.is_some() || copy.is_some();
+        // The leading separator only separates reactions from the center buttons
+        let has_center =
+            !reactions.is_empty() && (reply.is_some() || copy.is_some() || speech.is_some());
 
         h_flex()
             .p_0p5()
@@ -712,6 +729,17 @@ impl RenderOnce for MessageActions {
             .when_some(copy, |this, (id, value)| {
                 this.child(Clipboard::new(id).value(value).tooltip("Copy").small())
             })
+            .when_some(speech, |this, (disabled, speech)| {
+                this.child(
+                    Button::new("speech")
+                        .icon(crate::IconName::Speech)
+                        .tooltip("Read aloud")
+                        .small()
+                        .ghost()
+                        .disabled(disabled)
+                        .on_click(move |event, window, cx| speech(event, window, cx)),
+                )
+            })
             .when_some(dropdown, |this, dropdown| {
                 this.child(div().flex_shrink_0().h_4().w_px().bg(cx.theme().border))
                     .child(
@@ -724,5 +752,46 @@ impl RenderOnce for MessageActions {
             })
             .group_hover("", |this| this.visible())
             .refine_style(&style)
+    }
+}
+
+/// A message's text revealed word by word, paced by the estimated speech duration.
+#[derive(IntoElement)]
+pub struct RevealText {
+    text: SharedString,
+    duration: Duration,
+}
+
+impl RevealText {
+    pub fn new(text: impl Into<SharedString>, duration: Duration) -> Self {
+        Self {
+            text: text.into(),
+            duration,
+        }
+    }
+}
+
+impl RenderOnce for RevealText {
+    fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
+        let words: Vec<SharedString> = self
+            .text
+            .split_whitespace()
+            .map(SharedString::from)
+            .collect();
+        let total = words.len().max(1) as f32;
+
+        div().flex().flex_wrap().gap_x_1().with_animation(
+            "speech-reveal",
+            Animation::new(self.duration).with_max_fps(30.),
+            move |this, progress| {
+                let visible = ((progress * total).ceil() as usize).min(words.len());
+
+                this.children(words.iter().enumerate().map(|(ix, word)| {
+                    div()
+                        .when(ix >= visible, |this| this.invisible())
+                        .child(word.clone())
+                }))
+            },
+        )
     }
 }

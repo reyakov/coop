@@ -2,6 +2,7 @@
 pub mod model;
 #[cfg(not(target_arch = "wasm32"))]
 mod parakeet;
+pub mod speaker;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
