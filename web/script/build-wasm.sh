@@ -21,12 +21,12 @@ if [[ "$1" == "--release" ]]; then
     echo -e "${YELLOW}Building in release mode${NC}"
 fi
 
-# wasm_thread requires a nightly compiler for its atomics features
-CARGO="cargo +nightly"
+NIGHTLY="nightly-2026-10-31"
+CARGO="cargo +$NIGHTLY"
 
 # Step 0: Toolchain prerequisites
 echo -e "${GREEN}Step 0: Checking toolchain...${NC}"
-rustup target add wasm32-unknown-unknown --toolchain nightly
+rustup target add wasm32-unknown-unknown --toolchain "$NIGHTLY"
 
 if [[ "$(uname)" == "Darwin" ]]; then
     # secp256k1-sys compiles C for wasm; Apple clang has the wasm32 target and
@@ -35,7 +35,7 @@ if [[ "$(uname)" == "Darwin" ]]; then
         echo -e "${RED}Apple clang not found. Install the Xcode command line tools: xcode-select --install${NC}"
         exit 1
     fi
-    rustup component add llvm-tools-preview --toolchain nightly
+    rustup component add llvm-tools-preview --toolchain "$NIGHTLY"
 
     RUSTUP_HOME=$(rustup show home)
     if [[ "$(uname -m)" == "arm64" ]]; then
@@ -43,7 +43,7 @@ if [[ "$(uname)" == "Darwin" ]]; then
     else
         HOST_ARCH="x86_64-apple-darwin"
     fi
-    LLVM_BIN="$RUSTUP_HOME/toolchains/nightly-$HOST_ARCH/lib/rustlib/$HOST_ARCH/bin"
+    LLVM_BIN="$RUSTUP_HOME/toolchains/$NIGHTLY-$HOST_ARCH/lib/rustlib/$HOST_ARCH/bin"
 
     export CC_wasm32_unknown_unknown=clang
     export AR_wasm32_unknown_unknown="$LLVM_BIN/llvm-ar"

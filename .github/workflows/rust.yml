@@ -39,8 +39,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust nightly
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: nightly-2026-10-31
           targets: wasm32-unknown-unknown
           components: llvm-tools-preview
 
@@ -51,4 +52,4 @@ jobs:
         env:
           CC_wasm32_unknown_unknown: clang
           AR_wasm32_unknown_unknown: llvm-ar
-        run: cargo +nightly check -p coop_web --target wasm32-unknown-unknown
+        run: cargo +nightly-2026-10-31 check -p coop_web --target wasm32-unknown-unknown
