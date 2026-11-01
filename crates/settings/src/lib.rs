@@ -330,22 +330,40 @@ impl AppSettings {
         });
     }
 
-    /// Apply the persisted theme tuning on top of the active theme
     pub fn apply_theme_style(cx: &mut App) {
+        Self::apply_theme_tuning(Self::get_theme(cx), cx);
+    }
+
+    fn apply_theme_tuning(tuning: ThemeSettings, cx: &mut App) {
         use gpui_kit::component::Theme;
 
-        let theme = Self::get_theme(cx);
-        let styled = Theme::global_mut(cx);
-        styled.font_size = px(theme.font_size);
-        styled.focus_ring = theme.focus_ring;
-        if let Some(radius) = theme.radius {
-            styled.radius = px(radius);
+        {
+            let styled = Theme::global_mut(cx);
+            styled.font_size = px(tuning.font_size);
+            styled.focus_ring = tuning.focus_ring;
+            if let Some(radius) = tuning.radius {
+                styled.radius = px(radius);
+            }
+            if let Some(radius_lg) = tuning.radius_lg {
+                styled.radius_lg = px(radius_lg);
+            }
         }
-        if let Some(radius_lg) = theme.radius_lg {
-            styled.radius_lg = px(radius_lg);
-        }
-        Theme::sync_base(cx);
-        cx.refresh_windows();
+
+        Theme::update(cx, |styled| {
+            let background = styled.background;
+            let foreground = styled.foreground;
+            let (hover_alpha, active_alpha) = if styled.is_dark() {
+                (0.08, 0.12)
+            } else {
+                (0.04, 0.06)
+            };
+            if styled.list_hover == background {
+                styled.list_hover = foreground.alpha(hover_alpha);
+            }
+            if styled.tab_active == background {
+                styled.tab_active = foreground.alpha(active_alpha);
+            }
+        });
     }
 
     /// Load settings
@@ -416,7 +434,8 @@ impl AppSettings {
             AppearanceMode::Light => Theme::change(gpui_kit::component::ThemeMode::Light, None, cx),
             AppearanceMode::Dark => Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx),
         }
-        cx.refresh_windows();
+        let tuning = self.inner.read(cx).theme;
+        Self::apply_theme_tuning(tuning, cx);
     }
 
     /// Check if decoupling encryption key is enabled

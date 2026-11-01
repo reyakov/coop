@@ -91,11 +91,12 @@ impl Workspace {
         let workspace = cx.entity().downgrade();
         let mut subscriptions = smallvec![];
 
-        if AppSettings::get_appearance_mode(cx) == AppearanceMode::System {
-            subscriptions.push(cx.observe_window_appearance(window, |_this, window, cx| {
+        subscriptions.push(cx.observe_window_appearance(window, |_this, window, cx| {
+            if AppSettings::get_appearance_mode(cx) == AppearanceMode::System {
                 Theme::sync_system_appearance(Some(window), cx);
-            }));
-        }
+                AppSettings::apply_theme_style(cx);
+            }
+        }));
 
         subscriptions.push(
             // Subscribe to the nostr events

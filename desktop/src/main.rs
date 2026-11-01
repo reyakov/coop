@@ -72,14 +72,13 @@ fn main() {
 
             let appearance = settings::persisted_appearance_mode();
             let font_size = settings::persisted_theme().font_size;
-            match apply_native_theme(appearance, font_size, cx) {
-                Ok(()) => start_theme_watcher(appearance, cx),
-                Err(error) => {
-                    log::warn!("native theme unavailable ({error})");
-                    apply_appearance(appearance, cx);
-                    AppSettings::apply_theme_style(cx);
-                }
+
+            if let Err(error) = apply_native_theme(appearance, font_size, cx) {
+                log::warn!("native theme unavailable ({error})");
+                apply_appearance(appearance, cx);
+                AppSettings::apply_theme_style(cx);
             }
+            start_theme_watcher(cx);
 
             // Initialize the nostr client
             state::init(cx, cli_key);
@@ -213,14 +212,12 @@ fn apply_appearance(appearance: AppearanceMode, cx: &mut App) {
 /// Holds the watcher subscription so it lives as long as the app.
 struct ThemeWatcher {
     _subscription: ThemeSubscription,
-    /// The appearance mode the observer in `workspace` was registered with.
-    appearance: std::cell::Cell<AppearanceMode>,
 }
 
 impl Global for ThemeWatcher {}
 
 /// Start a background task to watch for OS theme changes and re-apply the native theme.
-fn start_theme_watcher(initial_appearance: AppearanceMode, cx: &mut App) {
+fn start_theme_watcher(cx: &mut App) {
     let (sender, receiver) = flume::unbounded();
     match native_theme::watch::on_theme_change(move |event| {
         if let Err(error) = sender.send(event) {
@@ -230,7 +227,6 @@ fn start_theme_watcher(initial_appearance: AppearanceMode, cx: &mut App) {
         Ok(subscription) => {
             cx.set_global(ThemeWatcher {
                 _subscription: subscription,
-                appearance: std::cell::Cell::new(initial_appearance),
             });
             cx.spawn(async move |cx| {
                 while receiver.recv_async().await.is_ok() {
@@ -238,9 +234,6 @@ fn start_theme_watcher(initial_appearance: AppearanceMode, cx: &mut App) {
                     cx.update(|cx| {
                         let appearance = AppSettings::get_appearance_mode(cx);
                         let font_size = AppSettings::get_theme(cx).font_size;
-                        if let Some(watcher) = cx.try_global::<ThemeWatcher>() {
-                            watcher.appearance.set(appearance);
-                        }
                         if let Err(error) = apply_native_theme(appearance, font_size, cx) {
                             log::warn!("failed to apply updated OS theme ({error})");
                         }
