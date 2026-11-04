@@ -2,11 +2,11 @@
 use auto_update::AutoUpdater;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Anchor, App, Context, Div, InteractiveElement, ParentElement, SharedString, Stateful, Styled,
-    Window, div, px,
+    Anchor, App, Context, Div, InteractiveElement, IntoElement, ParentElement, SharedString,
+    Stateful, Styled, Window, div, px,
 };
 #[cfg(not(target_arch = "wasm32"))]
-use gpui::{AnyElement, Entity, IntoElement};
+use gpui::{AnyElement, Entity};
 use gpui_kit::base::StyledExt as _;
 #[cfg(not(target_arch = "wasm32"))]
 use gpui_kit::component::Disableable;
