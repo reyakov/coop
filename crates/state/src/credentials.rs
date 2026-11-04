@@ -5,8 +5,8 @@ use gpui::{App, AppContext as _, Task};
 
 use crate::USER_KEYRING;
 
-/// The storage key for the NIP-4e app keys
-const APP_KEYS_KEY: &str = "coop/nip4e/app-keys";
+/// The storage key for the log of handled NIP-4e key-sync request ids
+const PROCESSED_REQUESTS_KEY: &str = "coop/nip4e/processed-requests";
 
 /// Read the stored credential as `(username, secret)`
 #[allow(clippy::type_complexity)]
@@ -94,12 +94,12 @@ fn write_named(cx: &App, key: &str, secret: &[u8]) -> Task<Result<()>> {
     }
 }
 
-/// Load the NIP-4e app keys from storage, as raw secret bytes
-pub fn read_app_keys(cx: &App) -> Task<Result<Option<Vec<u8>>>> {
-    read_named(cx, APP_KEYS_KEY)
+/// Read the log of handled key-sync request ids, as concatenated hex ids
+pub fn read_processed_requests(cx: &App) -> Task<Result<Option<Vec<u8>>>> {
+    read_named(cx, PROCESSED_REQUESTS_KEY)
 }
 
-/// Persist the NIP-4e app keys, as raw secret bytes
-pub fn write_app_keys(cx: &App, secret: &[u8]) -> Task<Result<()>> {
-    write_named(cx, APP_KEYS_KEY, secret)
+/// Persist the log of handled key-sync request ids, as concatenated hex ids
+pub fn write_processed_requests(cx: &App, ids: &[u8]) -> Task<Result<()>> {
+    write_named(cx, PROCESSED_REQUESTS_KEY, ids)
 }

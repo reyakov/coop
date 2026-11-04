@@ -100,7 +100,12 @@ pub fn persisted_theme() -> ThemeSettings {
 
 const DEFAULT_FILE_SERVER: &str = "https://nostr.download/";
 const LEGACY_FILE_SERVER: &str = "blossom.band";
-
+/// Minimum days between automatic encryption key rotations
+pub const NIP4E_ROTATION_MIN_DAYS: u32 = 1;
+/// Maximum days between automatic encryption key rotations
+pub const NIP4E_ROTATION_MAX_DAYS: u32 = 90;
+/// Days between automatic encryption key rotations when enabled
+pub const NIP4E_ROTATION_DEFAULT_DAYS: u32 = 30;
 /// Built-in image shown behind chat and group panels
 pub const DEFAULT_BACKGROUND: &str = "brand/default-bg.jpg";
 
@@ -147,6 +152,7 @@ setting_accessors! {
     pub screening: bool,
     pub wot_auto_trust: bool,
     pub nip4e: bool,
+    pub nip4e_rotation_days: Option<u32>,
     pub hide_group_notice: bool,
     pub file_server: Url,
     pub panel_background: bool,
@@ -222,6 +228,9 @@ pub struct Settings {
     pub wot_auto_trust: bool,
     /// Enable decoupling encryption key
     pub nip4e: bool,
+    /// Days between automatic encryption key rotations; None disables rotation
+    #[serde(default)]
+    pub nip4e_rotation_days: Option<u32>,
     /// Hide the notice that messages in public groups are not encrypted
     #[serde(default)]
     pub hide_group_notice: bool,
@@ -254,6 +263,7 @@ impl Default for Settings {
             screening: true,
             wot_auto_trust: true,
             nip4e: false,
+            nip4e_rotation_days: None,
             hide_group_notice: false,
             theme: ThemeSettings::default(),
             panel_background: true,

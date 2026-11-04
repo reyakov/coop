@@ -1,9 +1,10 @@
 use std::cell::Cell;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::{Context as AnyhowContext, Error, anyhow};
 use gpui::{
@@ -16,12 +17,14 @@ use gpui_kit::component::notification::{Notification, NotificationType};
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use nostr_sdk::prelude::*;
 use person::Directory;
-use settings::AppSettings;
+use settings::{AppSettings, NIP4E_ROTATION_MAX_DAYS, NIP4E_ROTATION_MIN_DAYS};
 use smallvec::{SmallVec, smallvec};
 use state::{Announcement, NostrRegistry, UniversalSigner, credentials};
 use ui::Avatar;
 
-const IDENTIFIER: &str = "coop:device";
+mod storage;
+
+use storage::{SECONDS_PER_DAY, archive_key, get_keys, load_device_keys, set_keys};
 
 pub fn init(cx: &mut App) {
     DeviceRegistry::set_global(cx.new(DeviceRegistry::new), cx);
@@ -59,10 +62,18 @@ impl DeviceEvent {
 #[derive(Debug)]
 pub struct DeviceRegistry {
     signer: Entity<Option<UniversalSigner>>,
-    /// Whether there is a pending request for encryption key approval
-    pub(crate) pending_request: bool,
+    /// Ephemeral client key for the in-flight key request; never persisted
+    app_keys: Option<Keys>,
+    /// The key request currently awaiting user approval on this device
+    pending_request: Option<PendingRequest>,
+    /// Handled key-sync request ids, bounded and persisted
+    processed_requests: VecDeque<EventId>,
     /// Whether an announcement has been made for this device
     pub(crate) announcement_existed: Arc<AtomicBool>,
+    /// Whether the local key is stale against the current announcement.
+    resync: Arc<AtomicBool>,
+    /// Whether a key rotation is in flight, to coalesce overlapping requests
+    rotating: bool,
     /// Person directory for requesters shown in notifications
     directory: Entity<Directory>,
     /// Relay notification listener
@@ -108,6 +119,21 @@ impl DeviceRegistry {
                 if event.signer_changed() && settings.read(cx).is_nip4e_enabled(cx) {
                     // The old account's state must not leak into the new one
                     this.announcement_existed.store(false, Ordering::Relaxed);
+                    this.resync.store(false, Ordering::Relaxed);
+                    // The in-flight request and client key belong to the old account
+                    this.app_keys = None;
+
+                    if this.pending_request.take().is_some() {
+                        // The old approval must not target the new account's signer
+                        if let Some(window) = cx.windows().first().copied() {
+                            window
+                                .update(cx, |_view, window, cx| {
+                                    window.remove_notification::<DeviceNotification>(cx);
+                                })
+                                .ok();
+                        }
+                    }
+
                     this.handle_notifications(cx);
                     this.get_announcement(cx);
                 }
@@ -115,15 +141,19 @@ impl DeviceRegistry {
         );
 
         cx.defer(move |cx| {
-            entity
-                .update(cx, |this, cx| this.handle_notifications(cx))
-                .ok();
+            let _ = entity.update(cx, |this, cx| {
+                this.handle_notifications(cx);
+            });
         });
 
         Self {
             signer,
-            pending_request: false,
+            app_keys: None,
+            pending_request: None,
+            processed_requests: VecDeque::new(),
             announcement_existed: Arc::new(AtomicBool::new(false)),
+            resync: Arc::new(AtomicBool::new(false)),
+            rotating: false,
             directory: Directory::new(cx),
             notification_listener: None,
             tasks: vec![],
@@ -140,6 +170,8 @@ impl DeviceRegistry {
 
         let announcement_existed = self.announcement_existed.clone();
         let (tx, rx) = flume::bounded::<Event>(100);
+
+        let read = credentials::read_processed_requests(cx);
 
         self.notification_listener = Some(cx.background_spawn(async move {
             let mut notifications = client.notifications();
@@ -175,6 +207,21 @@ impl DeviceRegistry {
         }));
 
         self.tasks.push(cx.spawn(async move |this, cx| {
+            // Hydrate the processed-request log before routing any events
+            match read.await {
+                Ok(bytes) => {
+                    let processed = bytes
+                        .map(|bytes| parse_processed_requests(&bytes))
+                        .unwrap_or_default();
+
+                    this.update(cx, |this, _cx| {
+                        this.processed_requests = processed;
+                    })
+                    .ok();
+                }
+                Err(e) => log::error!("Failed to read processed key-sync requests: {e}"),
+            }
+
             while let Ok(event) = rx.recv_async().await {
                 match event.kind {
                     Kind::Custom(10044) => {
@@ -191,7 +238,7 @@ impl DeviceRegistry {
                     // New response event from the master device
                     Kind::Custom(4455) => {
                         this.update(cx, |this, cx| {
-                            this.extract_encryption(event, cx);
+                            this.handle_transfer(event, cx);
                         })?;
                     }
                     _ => {}
@@ -201,10 +248,60 @@ impl DeviceRegistry {
         }));
     }
 
-    /// Set whether there is a pending request for encryption key approval
-    fn set_pending_request(&mut self, pending: bool, cx: &mut Context<Self>) {
-        self.pending_request = pending;
+    /// Record a handled key-sync request id, persisting a bounded log
+    fn mark_request_processed(&mut self, event_id: EventId, cx: &mut Context<Self>) {
+        if self.processed_requests.contains(&event_id) {
+            return;
+        }
+        self.processed_requests.push_back(event_id);
+        while self.processed_requests.len() > PROCESSED_REQUESTS_LIMIT {
+            self.processed_requests.pop_front();
+        }
+
+        let bytes: Vec<u8> = self
+            .processed_requests
+            .iter()
+            .flat_map(|id| id.to_hex().into_bytes())
+            .collect();
+        let write = credentials::write_processed_requests(cx, &bytes);
+        cx.background_spawn(async move {
+            if let Err(e) = write.await {
+                log::error!("Failed to persist processed key-sync requests: {e}");
+            }
+        })
+        .detach();
+    }
+
+    /// Withdraw the pending approval.
+    fn resolve_pending_request(&mut self, cx: &mut Context<Self>) {
+        let Some(pending) = self.pending_request.take() else {
+            return;
+        };
+        self.mark_request_processed(pending.event.id, cx);
+
+        if let Some(window) = cx.windows().first().copied() {
+            window
+                .update(cx, |_view, window, cx| {
+                    window.remove_notification::<DeviceNotification>(cx);
+                })
+                .ok();
+        }
         cx.notify();
+    }
+
+    /// Route a key transfer.
+    fn handle_transfer(&mut self, event: Event, cx: &mut Context<Self>) {
+        let resolved = self
+            .pending_request
+            .as_ref()
+            .is_some_and(|pending| transfer_addresses(&event, pending.client_key));
+
+        if resolved {
+            self.resolve_pending_request(cx);
+            return;
+        }
+
+        self.extract_encryption(event, cx);
     }
 
     /// Get the signer
@@ -218,7 +315,14 @@ impl DeviceRegistry {
             *this = Some(UniversalSigner::new(new_signer));
             cx.notify();
         });
+        // The local key is now consistent with the announcement
+        self.resync.store(false, Ordering::Release);
         cx.emit(DeviceEvent::Set);
+    }
+
+    /// Whether the local encryption key is stale against the current announcement.
+    pub fn is_resyncing(&self) -> bool {
+        self.resync.load(Ordering::Acquire)
     }
 
     /// Backup the encryption's secret key, returning the `nsec1...` content
@@ -323,6 +427,88 @@ impl DeviceRegistry {
         }));
     }
 
+    /// Replace the encryption key with a new one, archiving the old key.
+    pub fn rotate(&mut self, cx: &mut Context<Self>) {
+        if self.rotating {
+            return;
+        }
+        self.rotating = true;
+
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let result: Result<Keys, Error> = async {
+                // Archive the current key before replacing it
+                if let Ok(old) = get_keys(&client, &signer).await {
+                    archive_key(&client, &signer, &old.secret_key().to_secret_hex()).await?;
+                }
+
+                let created = this
+                    .update(cx, |this, cx| this.create_encryption(Keys::generate(), cx))?
+                    .await?;
+
+                this.update(cx, |this, cx| {
+                    this.set_signer(created.clone(), cx);
+                    this.wait_for_request(cx);
+                })?;
+
+                Ok(created)
+            }
+            .await;
+
+            this.update(cx, |this, cx| {
+                this.rotating = false;
+                if let Err(e) = result {
+                    cx.emit(DeviceEvent::error(e.to_string()));
+                }
+            })
+            .ok();
+
+            Ok(())
+        }));
+    }
+
+    /// Rotate the encryption key when the configured interval has elapsed.
+    ///
+    /// Runs after the announcement reconciled, outside the blocking boot path.
+    pub fn rotate_if_due(&mut self, cx: &mut Context<Self>) {
+        let Some(interval_days) = AppSettings::get_nip4e_rotation_days(cx) else {
+            return;
+        };
+        let interval_days = interval_days.clamp(NIP4E_ROTATION_MIN_DAYS, NIP4E_ROTATION_MAX_DAYS);
+
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let Ok(keys) = load_device_keys(&client, &signer).await else {
+                return Ok(());
+            };
+
+            let elapsed = Timestamp::now()
+                .as_secs()
+                .saturating_sub(keys.created_at.as_secs());
+            if elapsed < u64::from(interval_days) * SECONDS_PER_DAY {
+                return Ok(());
+            }
+
+            this.update(cx, |this, cx| this.rotate(cx)).ok();
+
+            Ok(())
+        }));
+    }
+
+    /// Load encryption keys retired by a rotation from the local database.
+    pub async fn archived_keys<S>(client: &Client, signer: &S) -> Result<Vec<Keys>, Error>
+    where
+        S: AsyncGetPublicKey + AsyncNip44 + ?Sized,
+    {
+        storage::archived_keys(client, signer).await
+    }
+
     /// Create new encryption key and announce it to user's relay list
     fn create_encryption(&self, keys: Keys, cx: &App) -> Task<Result<Keys, Error>> {
         let nostr = NostrRegistry::global(cx);
@@ -331,6 +517,7 @@ impl DeviceRegistry {
 
         let secret = keys.secret_key().to_secret_hex();
         let n = keys.public_key();
+        let created_at = Timestamp::now();
 
         cx.background_spawn(async move {
             // Construct an announcement event
@@ -340,7 +527,7 @@ impl DeviceRegistry {
                 .await?;
 
             // Persist the key locally before announcing it
-            set_keys(&client, &signer, &secret).await?;
+            set_keys(&client, &signer, &secret, created_at).await?;
 
             // Publish announcement
             client
@@ -383,10 +570,12 @@ impl DeviceRegistry {
                 this.update(cx, |this, cx| {
                     this.set_signer(keys, cx);
                     this.wait_for_request(cx);
+                    this.rotate_if_due(cx);
                 })?;
             } else {
                 this.update(cx, |this, cx| {
-                    this.request(cx);
+                    this.resync.store(true, Ordering::Release);
+                    this.request(Some(device_pubkey), cx);
                 })?;
             }
             Ok(())
@@ -414,15 +603,17 @@ impl DeviceRegistry {
     }
 
     /// Request encryption keys from other device
-    pub(crate) fn request(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn request(
+        &mut self,
+        expected_encryption: Option<PublicKey>,
+        cx: &mut Context<Self>,
+    ) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
-
-        let app_keys_task = get_or_init_app_keys(cx);
+        let app_keys = self.app_keys.get_or_insert_with(Keys::generate).clone();
 
         let task: Task<Result<Option<Event>, Error>> = cx.background_spawn(async move {
-            let app_keys = app_keys_task.await?;
             let app_pubkey = app_keys.public_key();
             let public_key = signer.get_public_key_async().await?;
 
@@ -434,8 +625,7 @@ impl DeviceRegistry {
                 .limit(1);
 
             if let Some(event) = client.database().query(filter).await?.into_iter().next() {
-                // Only reuse the stored approval if its key is still valid,
-                // otherwise it's stale and a fresh request is needed
+                // Only reuse the stored approval if its key is still valid
                 if decrypt_approval(&client, &app_keys, public_key, &event)
                     .await
                     .is_ok()
@@ -444,9 +634,26 @@ impl DeviceRegistry {
                 }
             }
 
-            // No usable approval event found, construct a request event
+            // No usable approval event found, construct a request event.
+            //
+            // The `pubkey` tag is a compatibility alias for the draft's `P`,
+            // `relay` hints tell other devices where the response is accepted,
+            // `n` names the exact key this device expects to be transferred
+            let mut tags = vec![
+                Tag::custom("P", vec![app_pubkey]),
+                Tag::custom("pubkey", vec![app_pubkey]),
+            ];
+
+            for url in write_relay_hints(&client, public_key).await? {
+                tags.push(Tag::custom("relay", vec![url.to_string()]));
+            }
+
+            if let Some(expected) = expected_encryption {
+                tags.push(Tag::custom("n", vec![expected]));
+            }
+
             let event = EventBuilder::new(Kind::Custom(4454), "")
-                .tags(vec![Tag::custom("P", vec![app_pubkey])])
+                .tags(tags)
                 .finalize_async(&signer)
                 .await?;
 
@@ -483,19 +690,13 @@ impl DeviceRegistry {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
-        let app_keys_task = get_or_init_app_keys(cx);
+
+        let Some(app_keys) = self.app_keys.clone() else {
+            log::warn!("Cannot wait for approval without a client key");
+            return;
+        };
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            let app_keys = match app_keys_task.await {
-                Ok(app_keys) => app_keys,
-                Err(e) => {
-                    this.update(cx, |_this, cx| {
-                        cx.emit(DeviceEvent::error(e.to_string()));
-                    })?;
-                    return Ok(());
-                }
-            };
-
             this.update(cx, |_this, cx| {
                 cx.emit(DeviceEvent::Requesting(authorization_code(
                     &app_keys.public_key(),
@@ -505,7 +706,7 @@ impl DeviceRegistry {
             let task: Task<Result<(), Error>> = cx.background_spawn(async move {
                 let public_key = signer.get_public_key_async().await?;
 
-                // Only approvals addressed to this device's app key matter
+                // Only approvals addressed to this device's client key matter
                 let filter = Filter::new()
                     .kind(Kind::Custom(4455))
                     .author(public_key)
@@ -529,15 +730,18 @@ impl DeviceRegistry {
 
     /// Parse the approval event to get encryption key then set it
     fn extract_encryption(&mut self, event: Event, cx: &mut Context<Self>) {
-        let app_keys_task = get_or_init_app_keys(cx);
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
 
+        let Some(app_keys) = self.app_keys.clone() else {
+            log::warn!("Ignoring key transfer addressed to another device");
+            return;
+        };
+
         let approval_id = event.id;
 
         let task: Task<Result<Keys, Error>> = cx.background_spawn(async move {
-            let app_keys = app_keys_task.await?;
             let identity = signer.get_public_key_async().await?;
             let keys = decrypt_approval(&client, &app_keys, identity, &event).await?;
 
@@ -549,14 +753,14 @@ impl DeviceRegistry {
                 Ok(keys) => {
                     this.update(cx, |this, cx| {
                         this.set_signer(keys, cx);
+                        // The client key was consumed; start fresh on the next request
+                        this.app_keys = None;
                         // Clean up our request and the approval event from relays
                         this.cleanup_sync_events(approval_id, cx);
                     })?;
                 }
                 Err(e) => {
-                    this.update(cx, |_this, cx| {
-                        cx.emit(DeviceEvent::error(e.to_string()));
-                    })?;
+                    log::warn!("Ignoring key transfer: {e}");
                 }
             }
             Ok(())
@@ -610,40 +814,58 @@ impl DeviceRegistry {
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
 
-        // Get user's write relays
         let event = event.clone();
+        let request_id = event.id;
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             // Get device keys
             let keys = get_keys(&client, &signer).await?;
             let secret = keys.secret_key().to_secret_hex();
+            let identity = signer.get_public_key_async().await?;
 
             // Extract the target public key from the event tags
-            let target = event
-                .tags
-                .iter()
-                .find(|tag| tag.kind() == "P")
-                .and_then(|tag| tag.content())
-                .and_then(|content| PublicKey::parse(content).ok())
-                .context("Target is not a valid public key")?;
+            let target =
+                client_pubkey_from_event(&event).context("Target is not a valid public key")?;
 
-            // Encrypt the device keys with the user's signer
-            let payload = keys.nip44_encrypt_async(&target, &secret).await?;
+            // The requester may pin the exact key it expects
+            if let Some(requested) = requested_encryption_key(&event)
+                && requested != keys.public_key()
+            {
+                return Err(anyhow!(
+                    "The requesting device expects an encryption key this device no longer holds"
+                ));
+            }
+
+            // Encrypt to a fresh one-time keypair so the transfer event
+            // can never be decrypted with the long-lived encryption key.
+            let sender = Keys::generate();
+            let payload = sender.nip44_encrypt_async(&target, &secret).await?;
 
             // Construct the response event
             //
-            // P tag: the current device's public key
-            // p tag: the requester's public key
-            let event = EventBuilder::new(Kind::Custom(4455), payload)
+            // P tag: the one-time sender key used for the encryption
+            // p tag: the account identity, for inbox routing
+            // p tag: the requester's client key
+            let response = EventBuilder::new(Kind::Custom(4455), payload)
                 .tags(vec![
-                    Tag::custom("P", vec![keys.public_key().to_hex()]),
+                    Tag::custom("P", vec![sender.public_key().to_hex()]),
+                    Tag::public_key(identity),
                     Tag::public_key(target),
                 ])
                 .finalize_async(&signer)
                 .await?;
 
-            // Send the response event to the user's relay list
-            client.send_event(&event).to_nip65().await?;
+            let relays = merge_relays(
+                write_relay_hints(&client, identity).await?,
+                request_relay_hints(&event),
+            );
+
+            let send = client.send_event(&response);
+            if relays.is_empty() {
+                send.to_nip65().await?;
+            } else {
+                send.to(relays).await?;
+            }
 
             Ok(())
         });
@@ -652,8 +874,11 @@ impl DeviceRegistry {
             match task.await {
                 Ok(_) => {
                     this.update(cx, |this, cx| {
+                        // Record the request as handled so it cannot resurface
+                        this.mark_request_processed(request_id, cx);
                         // Allow future requests to surface again
-                        this.set_pending_request(false, cx);
+                        this.pending_request = None;
+                        cx.notify();
                     })?;
 
                     cx.update(|window, cx| {
@@ -678,20 +903,69 @@ impl DeviceRegistry {
 
     /// Handle encryption request
     fn ask_for_approval(&mut self, event: Event, cx: &mut Context<Self>) {
-        // Ignore if there is already a pending request
-        if self.pending_request {
+        let Some(client_key) = client_pubkey_from_event(&event) else {
+            log::warn!("Ignoring invalid encryption key request: no valid requester key");
             return;
-        }
-        self.set_pending_request(true, cx);
+        };
 
-        let notification = match self.notification(event, cx) {
+        let read = credentials::read_processed_requests(cx);
+        cx.spawn(async move |this, cx| {
+            let processed = match read.await {
+                Ok(bytes) => bytes
+                    .map(|bytes| parse_processed_requests(&bytes).contains(&event.id))
+                    .unwrap_or(false),
+                Err(e) => {
+                    log::error!("Failed to read processed key-sync requests: {e}");
+                    false
+                }
+            };
+
+            this.update(cx, |this, cx| {
+                if processed || this.processed_requests.contains(&event.id) {
+                    return;
+                }
+
+                match this.pending_request.take() {
+                    // A retry signs a new request id but keeps the same client key
+                    Some(mut pending) if pending.client_key == client_key => {
+                        this.mark_request_processed(event.id, cx);
+                        pending.event = event;
+                        this.pending_request = Some(pending);
+                    }
+
+                    // A different client key is a remounted requester
+                    other => {
+                        if let Some(pending) = other {
+                            this.mark_request_processed(pending.event.id, cx);
+                            if let Some(window) = cx.windows().first().copied() {
+                                window
+                                    .update(cx, |_view, window, cx| {
+                                        window.remove_notification::<DeviceNotification>(cx);
+                                    })
+                                    .ok();
+                            }
+                        }
+                        this.show_approval(event, client_key, cx);
+                    }
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+
+    /// Build and surface the approval notification for a key request
+    fn show_approval(&mut self, event: Event, client_key: PublicKey, cx: &mut Context<Self>) {
+        let notification = match self.notification(event.clone(), cx) {
             Ok(notification) => notification,
             Err(e) => {
                 log::warn!("Ignoring invalid encryption key request: {e}");
-                self.set_pending_request(false, cx);
                 return;
             }
         };
+
+        self.pending_request = Some(PendingRequest { event, client_key });
+        cx.notify();
 
         if let Some(window) = cx.windows().first().copied() {
             if let Err(error) = window.update(cx, |_view, window, cx| {
@@ -715,18 +989,16 @@ impl DeviceRegistry {
                            compare the code with the one shown on the requesting \
                            device.";
 
-        let requester = event
-            .tags
-            .iter()
-            .find(|tag| tag.kind() == "P")
-            .and_then(|tag| tag.content())
-            .and_then(|content| PublicKey::parse(content).ok())
-            .context("Request has no valid requester key")?;
+        let requester =
+            client_pubkey_from_event(&event).context("Request has no valid requester key")?;
 
         let code = authorization_code(&requester);
-        let directory = self.directory.clone();
-        directory.update(cx, |directory, cx| directory.track([requester], cx));
         let code_label = code.clone();
+
+        let directory = self.directory.clone();
+        directory.update(cx, |directory, cx| {
+            directory.track([requester], cx);
+        });
 
         let entity = cx.entity().downgrade();
         let loading = Rc::new(Cell::new(false));
@@ -831,40 +1103,116 @@ impl DeviceRegistry {
 
 struct DeviceNotification;
 
+/// A key request awaiting user approval on this device
+#[derive(Debug)]
+struct PendingRequest {
+    event: Event,
+    client_key: PublicKey,
+}
+
+/// Keep the durable processed-request log bounded
+const PROCESSED_REQUESTS_LIMIT: usize = 256;
+
+/// Parse concatenated hex event ids
+fn parse_processed_requests(bytes: &[u8]) -> VecDeque<EventId> {
+    let Ok(hex) = std::str::from_utf8(bytes) else {
+        return VecDeque::new();
+    };
+
+    hex.as_bytes()
+        .as_chunks::<64>()
+        .0
+        .iter()
+        .filter_map(|chunk| EventId::from_hex(std::str::from_utf8(chunk).ok()?).ok())
+        .collect()
+}
+
+/// Extract the client public key from an event.
+fn client_pubkey_from_event(event: &Event) -> Option<PublicKey> {
+    let key = event
+        .tags
+        .iter()
+        .find(|tag| tag.kind() == "P")
+        .and_then(|tag| tag.content())
+        .and_then(|content| PublicKey::parse(content).ok());
+
+    key.or_else(|| {
+        event
+            .tags
+            .iter()
+            .find(|tag| tag.kind() == "pubkey")
+            .and_then(|tag| tag.content())
+            .and_then(|content| PublicKey::parse(content).ok())
+    })
+}
+
+/// Whether the transfer event is p-tagged to the given client key
+fn transfer_addresses(event: &Event, client_key: PublicKey) -> bool {
+    event.tags.iter().any(|tag| {
+        tag.kind() == "p"
+            && tag
+                .content()
+                .and_then(|content| PublicKey::parse(content).ok())
+                .is_some_and(|key| key == client_key)
+    })
+}
+
+/// Parse the `relay` hints attached to a key request.
+fn request_relay_hints(event: &Event) -> Vec<RelayUrl> {
+    event
+        .tags
+        .iter()
+        .filter(|tag| tag.kind() == "relay")
+        .filter_map(|tag| {
+            tag.content()
+                .and_then(|content| RelayUrl::parse(content).ok())
+        })
+        .collect()
+}
+
+/// Parse the optional `n` tag of a key request.
+fn requested_encryption_key(event: &Event) -> Option<PublicKey> {
+    event
+        .tags
+        .iter()
+        .find(|tag| tag.kind() == "n")
+        .and_then(|tag| tag.content())
+        .and_then(|content| PublicKey::parse(content).ok())
+}
+
+/// Collect the user's NIP-65 write relays.
+async fn write_relay_hints(client: &Client, identity: PublicKey) -> Result<Vec<RelayUrl>, Error> {
+    let filter = Filter::new()
+        .kind(Kind::RelayList)
+        .author(identity)
+        .limit(1);
+
+    let Some(event) = client.database().query(filter).await?.into_iter().next() else {
+        return Ok(vec![]);
+    };
+
+    // Unmarked relays serve both reads and writes
+    Ok(nip65::extract_relay_list(&event)
+        .filter(|(_, metadata)| *metadata != Some(RelayMetadata::Read))
+        .map(|(url, _)| url)
+        .collect())
+}
+
+/// Merge relay lists, dropping duplicates
+fn merge_relays(first: Vec<RelayUrl>, second: Vec<RelayUrl>) -> Vec<RelayUrl> {
+    first
+        .into_iter()
+        .chain(second)
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 /// The first eight hexadecimal characters of the client public key.
 fn authorization_code(public_key: &PublicKey) -> SharedString {
     let hex = public_key.to_hex();
     let code = hex[..8].to_uppercase();
     SharedString::from(format!("{} {}", &code[..4], &code[4..]))
-}
-
-/// Get or create new app keys (async, returns a task)
-fn get_or_init_app_keys(cx: &App) -> Task<Result<Keys, Error>> {
-    let read = credentials::read_app_keys(cx);
-
-    cx.spawn(async move |cx| {
-        if let Ok(Some(secret)) = read.await
-            && let Ok(keys) = SecretKey::from_slice(&secret).map(Keys::new)
-        {
-            return Ok(keys);
-        }
-
-        // No stored keys found or invalid — generate new ones
-        let keys = Keys::generate();
-        let secret = keys.secret_key().to_secret_bytes();
-
-        cx.update(|cx| {
-            let write = credentials::write_app_keys(cx, &secret);
-            cx.background_spawn(async move {
-                if let Err(e) = write.await {
-                    log::error!("Failed to persist app keys: {e}")
-                }
-            })
-            .detach();
-        });
-
-        Ok(keys)
-    })
 }
 
 /// Decrypt and validate an approval event against the current announcement.
@@ -874,13 +1222,7 @@ async fn decrypt_approval(
     identity: PublicKey,
     event: &Event,
 ) -> Result<Keys, Error> {
-    let master = event
-        .tags
-        .iter()
-        .find(|tag| tag.kind() == "P")
-        .and_then(|tag| tag.content())
-        .and_then(|content| PublicKey::parse(content).ok())
-        .context("Invalid event's tags")?;
+    let master = client_pubkey_from_event(event).context("Invalid event's tags")?;
 
     let decrypted = app_keys
         .nip44_decrypt_async(&master, event.content.as_str())
@@ -889,71 +1231,52 @@ async fn decrypt_approval(
     let secret = SecretKey::from_hex(&decrypted)?;
     let keys = Keys::new(secret);
 
-    // Reject approvals carrying a key that no longer matches the published announcement.
+    // Reject approvals carrying a key that no longer matches the published announcement
     let filter = Filter::new()
         .kind(Kind::Custom(10044))
         .author(identity)
         .limit(1);
 
-    if let Some(announcement) = client.database().query(filter).await?.into_iter().next() {
-        let announced = announcement
-            .tags
-            .iter()
-            .find(|tag| tag.kind() == "n")
-            .and_then(|tag| tag.content())
-            .and_then(|content| PublicKey::parse(content).ok())
-            .context("Announcement has no valid encryption key")?;
+    let announcement = client
+        .database()
+        .query(filter.clone())
+        .await?
+        .into_iter()
+        .next();
 
-        if keys.public_key() != announced {
-            return Err(anyhow!("Approval key doesn't match the announcement"));
+    let announcement = match announcement {
+        Some(announcement) => Some(announcement),
+        None => {
+            let mut stream = client
+                .stream_events(filter)
+                .timeout(Duration::from_secs(3))
+                .await?;
+
+            stream
+                .next()
+                .await
+                .map(|(_url, result)| result)
+                .transpose()?
         }
+    };
+
+    let Some(announcement) = announcement else {
+        return Err(anyhow!(
+            "No encryption announcement available to validate the approval"
+        ));
+    };
+
+    let announced = announcement
+        .tags
+        .iter()
+        .find(|tag| tag.kind() == "n")
+        .and_then(|tag| tag.content())
+        .and_then(|content| PublicKey::parse(content).ok())
+        .context("Announcement has no valid encryption key")?;
+
+    if keys.public_key() != announced {
+        return Err(anyhow!("Approval key doesn't match the announcement"));
     }
 
     Ok(keys)
-}
-
-/// Encrypt and store device keys in the local database.
-async fn set_keys<S>(client: &Client, signer: &S, secret: &str) -> Result<(), Error>
-where
-    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
-{
-    let public_key = signer.get_public_key_async().await?;
-    let content = signer.nip44_encrypt_async(&public_key, secret).await?;
-
-    // Construct the application data event
-    let event = EventBuilder::new(Kind::ApplicationSpecificData, content)
-        .tag(Tag::identifier(IDENTIFIER))
-        .finalize_async(signer)
-        .await?;
-
-    // Save the event to the database
-    client.database().save_event(&event).await?;
-
-    Ok(())
-}
-
-/// Get device keys from the local database.
-async fn get_keys<S>(client: &Client, signer: &S) -> Result<Keys, Error>
-where
-    S: AsyncGetPublicKey + AsyncNip44 + ?Sized,
-{
-    let public_key = signer.get_public_key_async().await?;
-
-    let filter = Filter::new()
-        .kind(Kind::ApplicationSpecificData)
-        .identifier(IDENTIFIER)
-        .author(public_key);
-
-    if let Some(event) = client.database().query(filter).await?.first() {
-        let content = signer
-            .nip44_decrypt_async(&public_key, &event.content)
-            .await?;
-
-        let secret = SecretKey::parse(&content)?;
-        let keys = Keys::new(secret);
-
-        Ok(keys)
-    } else {
-        Err(anyhow!("Key not found"))
-    }
 }

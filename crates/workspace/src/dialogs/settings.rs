@@ -22,7 +22,7 @@ use gpui_kit::component::progress::Progress;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{Disableable, Sizable, WindowExt, h_flex, v_flex};
-use settings::{AppSettings, AppearanceMode};
+use settings::{AppSettings, AppearanceMode, NIP4E_ROTATION_DEFAULT_DAYS};
 #[cfg(not(target_arch = "wasm32"))]
 use speech::model::{self as speech_model};
 use ui::{settings_block, settings_row};
@@ -337,6 +337,7 @@ impl Render for Preferences {
             "Corner radius for large elements like dialogs. Empty follows the OS theme.";
         const FOCUS_RING: &str = "Draw a ring around focused controls.";
         const NIP4E: &str = "Use a dedicated key to encrypt and decrypt messages.";
+        const NIP4E_ROTATION: &str = "Automatically rotate the encryption key every 30 days, keeping the previous key for messages still sealed to it.";
         const BACKGROUND: &str = "Show an image behind chat and group panels.";
         const MEDIA: &str = "Server for media attachments. Only blossom services are supported.";
 
@@ -344,6 +345,7 @@ impl Render for Preferences {
         let wot_auto_trust = AppSettings::get_wot_auto_trust(cx);
         let hide_avatar = AppSettings::get_hide_avatar(cx);
         let nip4e = AppSettings::get_nip4e(cx);
+        let nip4e_rotation_days = AppSettings::get_nip4e_rotation_days(cx);
         let appearance_mode = AppSettings::get_appearance_mode(cx);
         let theme = AppSettings::get_theme(cx);
         let panel_background = AppSettings::get_panel_background(cx);
@@ -355,7 +357,7 @@ impl Render for Preferences {
         };
 
         v_flex()
-            .mt_2()
+            .my_2()
             .gap_4()
             .w_full()
             .child(
@@ -504,6 +506,22 @@ impl Render for Preferences {
                     .checked(nip4e)
                     .on_click(move |_, _window, cx| {
                         AppSettings::update_nip4e(!nip4e, cx);
+                    }),
+                cx,
+            ))
+            .child(settings_row(
+                "Rotate Encryption Key",
+                NIP4E_ROTATION,
+                Switch::new("nip4e_rotation")
+                    .checked(nip4e_rotation_days.is_some())
+                    .on_click(move |_, _window, cx| {
+                        let enabled = AppSettings::get_nip4e_rotation_days(cx).is_some();
+                        let days = if enabled {
+                            None
+                        } else {
+                            Some(NIP4E_ROTATION_DEFAULT_DAYS)
+                        };
+                        AppSettings::update_nip4e_rotation_days(days, cx);
                     }),
                 cx,
             ))

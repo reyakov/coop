@@ -21,6 +21,7 @@ use nostr_sdk::prelude::*;
 use person::{Directory, PersonRegistry};
 pub(crate) use rows::open_room;
 use search::SearchResult;
+use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
 use state::{FIND_DELAY, NostrRegistry, StateEvent};
 use ui::title_bar_drag_handlers;
@@ -104,6 +105,8 @@ impl Sidebar {
         let chat = ChatRegistry::global(cx);
         let groups = GroupsRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
+        let settings = AppSettings::global(cx);
+        let directory = Directory::new(cx);
 
         let find_input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -206,6 +209,11 @@ impl Sidebar {
             },
         ));
 
+        // The user header reads settings and the tracked profiles on render, so
+        // the encryption button reacts to toggles and announcement arrivals
+        subscriptions.push(cx.observe(&settings, |_, _, cx| cx.notify()));
+        subscriptions.push(cx.observe(&directory, |_, _, cx| cx.notify()));
+
         tasks.push(cx.spawn(async move |this, cx| {
             let timer = Duration::from_millis(PROGRESS_TICK_MS);
             loop {
@@ -229,7 +237,7 @@ impl Sidebar {
             chats_open: None,
             contacts_open: false,
             contacts: None,
-            directory: Directory::new(cx),
+            directory,
             selected_contacts: HashSet::new(),
             requests_open: false,
             new_requests: false,

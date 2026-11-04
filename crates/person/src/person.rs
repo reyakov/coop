@@ -144,6 +144,13 @@ impl Person {
 
     /// Set profile encryption keys announcement
     pub(crate) fn set_announcement(&mut self, announcement: Announcement) {
+        // A delayed or repeated announcement must not roll the key back
+        if let Some(current) = &self.announcement
+            && !announcement.is_newer_than(current)
+        {
+            return;
+        }
+
         self.announcement = Some(announcement);
     }
 

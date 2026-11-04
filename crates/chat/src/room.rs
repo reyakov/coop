@@ -16,6 +16,7 @@ use crate::{FileAttachment, KIND_FILE_MESSAGE, NewMessage};
 
 const NO_DEKEY: &str = "User hasn't set up a decoupled encryption key yet.";
 const USER_NO_DEKEY: &str = "You haven't set up a decoupled encryption key yet. Set one up in the settings to message them.";
+const KEY_STALE: &str = "Your encryption key is out of date; sync it from another device in the settings to keep messaging.";
 
 /// The outcome of delivering an encrypted rumor to a single receiver.
 #[derive(Debug, Clone)]
@@ -553,6 +554,7 @@ impl Room {
         let config = self.config.clone();
 
         let device = DeviceRegistry::global(cx);
+        let resyncing = device.read(cx).is_resyncing();
         let encryption_signer = device.read(cx).signer(cx);
 
         let nostr = NostrRegistry::global(cx);
@@ -573,6 +575,28 @@ impl Room {
 
         Some(cx.background_spawn(async move {
             let signer_kind = config.signer_kind();
+
+            // Block sends while the local encryption key is stale against the
+            // current announcement; the replacement is being synced from
+            // another device
+            if resyncing && matches!(signer_kind, SignerKind::Auto | SignerKind::Encryption) {
+                let mut reports: Vec<SendReport> = receivers
+                    .into_iter()
+                    .map(|receiver| SendReport {
+                        receiver: receiver.public_key(),
+                        result: Err(KEY_STALE.into()),
+                    })
+                    .collect();
+
+                if config.backup() {
+                    reports.push(SendReport {
+                        receiver: sender.public_key(),
+                        result: Err(KEY_STALE.into()),
+                    });
+                }
+
+                return reports;
+            }
 
             // Deliver to every receiver concurrently
             let sends = receivers.into_iter().map(|receiver| {

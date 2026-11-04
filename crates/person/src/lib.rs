@@ -54,7 +54,7 @@ impl EventEmitter<PersonEvent> for PersonRegistry {}
 
 #[derive(Debug, Clone)]
 enum Dispatch {
-    Person(Person),
+    Person(Box<Person>),
     Announcement(Event),
     Relays(Event),
     Emojis(Event),
@@ -111,7 +111,7 @@ impl PersonRegistry {
                 this.update(cx, |this, cx| {
                     match event {
                         Dispatch::Person(person) => {
-                            this.insert(person, cx);
+                            this.insert(*person, cx);
                         }
                         Dispatch::Announcement(event) => {
                             this.set_announcement(&event, cx);
@@ -175,7 +175,11 @@ impl PersonRegistry {
                         let metadata = Metadata::from_json(&event.content).unwrap_or_default();
                         let person = Person::new(event.pubkey, metadata);
 
-                        if tx.send_async(Dispatch::Person(person)).await.is_err() {
+                        if tx
+                            .send_async(Dispatch::Person(Box::new(person)))
+                            .await
+                            .is_err()
+                        {
                             log::warn!("Channel closed, dropping metadata event");
                         }
                     }

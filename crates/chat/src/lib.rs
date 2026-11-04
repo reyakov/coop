@@ -947,7 +947,11 @@ async fn extract_rumor(
             let Some(device_signer) = device_signer else {
                 return Err(error);
             };
-            try_unwrap_with(device_signer, gift_wrap).await?
+            match try_unwrap_with(device_signer, gift_wrap).await {
+                Ok(unwrapped) => unwrapped,
+                // The wrap may be sealed to a key retired by a rotation
+                Err(_) => try_unwrap_archived(client, signer, gift_wrap).await?,
+            }
         }
     };
     let mut rumor = unwrapped.rumor;
@@ -1001,6 +1005,25 @@ async fn try_unwrap_with(
         sender: seal.pubkey,
         rumor,
     })
+}
+
+/// Unwrap with an encryption key retired by a rotation; peers may still seal
+/// to the previous key until their announcement cache refreshes
+async fn try_unwrap_archived(
+    client: &Client,
+    signer: &UniversalSigner,
+    gift_wrap: &Event,
+) -> Result<UnwrappedGift, Error> {
+    for keys in DeviceRegistry::archived_keys(client, signer).await? {
+        let archived = UniversalSigner::new(keys);
+        if let Ok(unwrapped) = try_unwrap_with(&archived, gift_wrap).await {
+            return Ok(unwrapped);
+        }
+    }
+
+    Err(anyhow!(
+        "No archived encryption key could unwrap the gift wrap"
+    ))
 }
 
 /// Stores an unwrapped event in local database with reference to original
