@@ -6131,12 +6131,23 @@ dependencies = [
 name = "nip60"
 version = "2.0.0-alpha3"
 dependencies = [
+ "anyhow",
  "cdk",
  "cdk-nostr",
  "cdk-redb",
+ "common",
+ "flume 0.11.1",
  "gpui-pre",
+ "gpui_tokio",
+ "hkdf",
+ "log",
  "nostr",
  "nostr-sdk",
+ "serde_json",
+ "sha2 0.10.9",
+ "smallvec",
+ "state",
+ "tokio",
 ]
 
 [[package]]

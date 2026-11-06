@@ -193,13 +193,27 @@ wired into desktop. `cargo check -p nip60` and the full desktop check pass.
 The remaining spike code in `crates/nip60/src/lib.rs` is deleted in
 phase 1.
 
-### Phase 1 — bootstrap + load + balance
+### Phase 1 — bootstrap + load + balance (done)
 
-1. `crates/nip60` skeleton: registry, `init`, signer-changed reset.
-2. `keys.rs`: wallet key generation, seed derivation, `17375` parse/build.
-3. Load path: query cached + subscribed events, build the unspent set,
-   open cdk wallets, import proofs, expose `balance()` and emit `Updated`.
-4. `setup(mint_url)` + mint list update (republish `17375`).
+Implemented in `crates/nip60` (`lib.rs`, `keys.rs`):
+
+- `WalletRegistry` follows the nip29/nip4e pattern: global entity, signer
+  reset, flume notification listener, task + subscription SmallVecs.
+- `keys.rs`: wallet key generation, HKDF seed derivation, `17375`
+  encrypt/parse through the signer (works with bunkers), unit tests.
+- Load: subscribe + query cache for 17375/7375/7376 and kind 5 `k:7375`,
+  decrypt via signer, prune deleted (`k:7375` deletes) and superseded
+  (`del` chains) token events, expose `has_wallet()`/`balance()`.
+- cdk: redb store per wallet pubkey under `config_dir()/cashu`, one `Wallet`
+  per mint (`sat`), unspent proofs imported/diffed against the store on
+  every sync, `recover_incomplete_sagas` + `mint_unissued_quotes` fire on
+  first store open.
+- `setup(mint)` creates the wallet (first mint) or adds a mint, publishing
+  `17375` and saving it to the local cache.
+
+Deferred to later phases: token rollover publishing (phase 2), remote
+proof validation at the mint (phase 2 reconciliation), replacing proofs
+reserved by local in-flight operations (phase 2 guard).
 
 ### Phase 2 — moving money
 
@@ -240,6 +254,8 @@ phase 1.
 - Concurrent spends from two devices double-spend; recovery is the spec's
   Appendix-1 validation (check proofs at the mint, roll over survivors) —
   implemented as reconciliation on sync, not real-time locking.
+- Import replaces the unspent proof set wholesale; a guard for proofs
+  reserved by local in-flight operations lands with phase 2 operations.
 - Tracking cdk via git main is a moving target; the lockfile pins a rev
   and must be bumped deliberately (same policy as the rust-nostr git dep).
   Watch for the next cdk release line built against nostr 0.45.x — moving
