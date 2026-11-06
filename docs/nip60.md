@@ -215,12 +215,36 @@ Deferred to later phases: token rollover publishing (phase 2), remote
 proof validation at the mint (phase 2 reconciliation), replacing proofs
 reserved by local in-flight operations (phase 2 guard).
 
-### Phase 2 — moving money
+### Phase 2 — moving money (done)
 
-1. `ops.rs` sync tail: rollover `7375`, NIP-09 deletes (`k` tag), `7376`
-   history.
-2. `create_mint_quote` (+ claim-on-load), `melt`, `send_token`,
-   `receive_token`, each with error propagation to the registry event.
+Implemented in `crates/nip60/src/ops.rs` plus registry wiring:
+
+- All store mutations go through a serialized job queue
+  (`schedule_job`): one job at a time on the background executor,
+  snapshots taken at schedule time, one queued job slot. This keeps ops
+  and relay-driven imports from interleaving on the store, which a loose
+  sync tail would not guarantee.
+- Jobs: `Reconcile` (claim paid quotes via `mint_unissued_quotes`, then
+  converge each mint — publish the store's unspent set when it diverges
+  from the relay view, and import relay-only proofs into the store),
+  `ClaimQuote`, `Melt`, `SendToken`, `Receive`.
+- The sync tail (`sync_token_events`) publishes a fresh `7375` with the
+  store's unspent proofs, NIP-09-deletes the previous token events with
+  the required `k: 7375` tag, and publishes a `7376` history event with
+  `created`/`destroyed` markers.
+- Registry API: `create_mint_quote(amount)` (invoice stored in
+  `mint_quotes()`, UI polls `claim_mint_quote(id)`), `melt(invoice)`,
+  `send_token(amount)` (token delivered via `WalletEvent::TokenCreated`),
+  `receive_token(token)` (mint resolved from the token).
+- Claim-on-load moved from a fire-and-forget task into `Reconcile`:
+  the fire-and-forget variant raced the import pass, which could wipe
+  freshly claimed proofs from the store before they were published.
+- History amounts: mint/receive record what was received; melt records
+  invoice amount + fee (`FinalizedMelt::total_amount`); send records the
+  sent amount.
+
+Deferred: NUT-20/quote events (`7374`, per spec local state is fine),
+sending tokens in-chat (v1 copies the token string).
 
 ### Phase 3 — NIP-61 redemption (cdk-nostr)
 
@@ -254,8 +278,9 @@ reserved by local in-flight operations (phase 2 guard).
 - Concurrent spends from two devices double-spend; recovery is the spec's
   Appendix-1 validation (check proofs at the mint, roll over survivors) —
   implemented as reconciliation on sync, not real-time locking.
-- Import replaces the unspent proof set wholesale; a guard for proofs
-  reserved by local in-flight operations lands with phase 2 operations.
+- Import replaces the unspent proof set wholesale; the serialized job
+  queue closes the in-flight-operation window, and mint-side double-spend
+  rejection remains the backstop.
 - Tracking cdk via git main is a moving target; the lockfile pins a rev
   and must be bumped deliberately (same policy as the rust-nostr git dep).
   Watch for the next cdk release line built against nostr 0.45.x — moving

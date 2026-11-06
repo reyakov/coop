@@ -1,18 +1,15 @@
 #![cfg(not(target_arch = "wasm32"))]
 
 mod keys;
+mod ops;
 
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::Error;
-use cdk::Amount;
-use cdk::cdk_database::WalletDatabase;
 use cdk::mint_url::MintUrl;
-use cdk::nuts::{CurrencyUnit, Id, Proof, State};
-use cdk::secret::Secret;
-use cdk::wallet::types::ProofInfo;
+use cdk::nuts::CurrencyUnit;
 use cdk::wallet::{Wallet, WalletBuilder};
 use cdk_redb::WalletRedbDatabase;
 use common::config_dir;
@@ -34,22 +31,33 @@ impl Global for GlobalWalletRegistry {}
 #[derive(Debug, Clone)]
 pub enum WalletEvent {
     Updated,
+    TokenCreated(String),
     Error(String),
 }
 
 impl EventEmitter<WalletEvent> for WalletRegistry {}
+
+/// A pending lightning invoice waiting to be paid and claimed.
+#[derive(Debug, Clone)]
+pub struct MintQuoteEntry {
+    pub quote_id: String,
+    pub request: String,
+    pub amount: u64,
+    pub mint: Url,
+}
 
 pub struct WalletRegistry {
     wallet: Option<keys::WalletData>,
     tokens: HashMap<EventId, TokenEvent>,
     /// Token events killed by a kind 5 delete or superseded by a `del` chain
     stale: HashSet<EventId>,
+    quotes: Vec<MintQuoteEntry>,
     store: Option<Arc<WalletRedbDatabase>>,
     wallets: HashMap<MintUrl, Wallet>,
     loading: bool,
     store_opening: bool,
-    importing: bool,
-    import_queued: bool,
+    job_running: bool,
+    job_queued: Vec<ops::Job>,
     notification_listener: Option<Task<()>>,
     tasks: SmallVec<[Task<()>; 2]>,
     _subscriptions: SmallVec<[Subscription; 2]>,
@@ -86,12 +94,13 @@ impl WalletRegistry {
             wallet: None,
             tokens: HashMap::new(),
             stale: HashSet::new(),
+            quotes: Vec::new(),
             store: None,
             wallets: HashMap::new(),
             loading: false,
             store_opening: false,
-            importing: false,
-            import_queued: false,
+            job_running: false,
+            job_queued: Vec::new(),
             notification_listener: None,
             tasks: smallvec![],
             _subscriptions: subscriptions,
@@ -108,6 +117,167 @@ impl WalletRegistry {
             .values()
             .map(|token| token.proofs.iter().map(|proof| proof.amount).sum::<u64>())
             .sum()
+    }
+
+    /// Lightning invoices waiting to be paid and claimed.
+    pub fn mint_quotes(&self) -> &[MintQuoteEntry] {
+        &self.quotes
+    }
+
+    /// Create a lightning invoice that funds the wallet once paid.
+    pub fn create_mint_quote(&mut self, amount: u64, cx: &mut Context<Self>) {
+        let Some(mint) = self
+            .wallet
+            .as_ref()
+            .and_then(|wallet| wallet.mints.first().cloned())
+        else {
+            self.emit_error("No wallet is set up".to_string(), cx);
+            return;
+        };
+
+        let Ok(mint_url) = MintUrl::from_str(mint.as_str()) else {
+            self.emit_error("Invalid mint URL".to_string(), cx);
+            return;
+        };
+
+        let Some(wallet) = self.wallets.get(&mint_url).cloned() else {
+            self.emit_error("Wallet is not ready".to_string(), cx);
+            return;
+        };
+
+        let created = cx.background_spawn(async move {
+            let quote = wallet
+                .mint_quote(
+                    cdk::nuts::PaymentMethod::Known(cdk::nuts::nut00::KnownMethod::Bolt11),
+                    Some(cdk::Amount::from(amount)),
+                    None,
+                    None,
+                )
+                .await?;
+
+            Ok::<_, Error>((quote.id, quote.request))
+        });
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let (quote_id, request) = match created.await {
+                Ok(quote) => quote,
+                Err(error) => {
+                    this.update(cx, |this, cx| {
+                        this.emit_error(format!("{error:#}"), cx);
+                    })
+                    .ok();
+                    return;
+                }
+            };
+
+            this.update(cx, |this, cx| {
+                this.quotes.push(MintQuoteEntry {
+                    quote_id,
+                    request,
+                    amount,
+                    mint: mint.clone(),
+                });
+                this.emit_updated(cx);
+            })
+            .ok();
+        }));
+    }
+
+    /// Check a mint quote with the mint and claim it once it is paid.
+    pub fn claim_mint_quote(&mut self, quote_id: String, cx: &mut Context<Self>) {
+        let Some(entry) = self.quotes.iter().find(|quote| quote.quote_id == quote_id) else {
+            self.emit_error("Unknown mint quote".to_string(), cx);
+            return;
+        };
+
+        let Ok(mint_url) = MintUrl::from_str(entry.mint.as_str()) else {
+            self.emit_error("Invalid mint URL".to_string(), cx);
+            return;
+        };
+
+        self.schedule_job(
+            ops::Job::ClaimQuote {
+                mint: mint_url,
+                quote_id,
+            },
+            cx,
+        );
+    }
+
+    /// Pay a lightning invoice from the wallet.
+    pub fn melt(&mut self, invoice: String, cx: &mut Context<Self>) {
+        let Some(mint) = self
+            .wallet
+            .as_ref()
+            .and_then(|wallet| wallet.mints.first().cloned())
+        else {
+            self.emit_error("No wallet is set up".to_string(), cx);
+            return;
+        };
+
+        let Ok(mint_url) = MintUrl::from_str(mint.as_str()) else {
+            self.emit_error("Invalid mint URL".to_string(), cx);
+            return;
+        };
+
+        self.schedule_job(
+            ops::Job::Melt {
+                mint: mint_url,
+                invoice,
+            },
+            cx,
+        );
+    }
+
+    /// Send ecash as a token string the recipient can paste anywhere.
+    pub fn send_token(&mut self, amount: u64, cx: &mut Context<Self>) {
+        let Some(mint) = self
+            .wallet
+            .as_ref()
+            .and_then(|wallet| wallet.mints.first().cloned())
+        else {
+            self.emit_error("No wallet is set up".to_string(), cx);
+            return;
+        };
+
+        let Ok(mint_url) = MintUrl::from_str(mint.as_str()) else {
+            self.emit_error("Invalid mint URL".to_string(), cx);
+            return;
+        };
+
+        self.schedule_job(
+            ops::Job::SendToken {
+                mint: mint_url,
+                amount,
+            },
+            cx,
+        );
+    }
+
+    /// Receive a cashu token created elsewhere.
+    pub fn receive_token(&mut self, token: String, cx: &mut Context<Self>) {
+        let mint = match cdk::nuts::Token::from_str(&token) {
+            Ok(token) => token.mint_url(),
+            Err(_) => {
+                self.emit_error("Invalid token".to_string(), cx);
+                return;
+            }
+        };
+
+        let mint = match mint {
+            Ok(mint) => mint,
+            Err(_) => {
+                self.emit_error("Token has no mint".to_string(), cx);
+                return;
+            }
+        };
+
+        if !self.wallets.contains_key(&mint) {
+            self.emit_error("Token mint is not in the wallet".to_string(), cx);
+            return;
+        }
+
+        self.schedule_job(ops::Job::Receive { mint, token }, cx);
     }
 
     /// Create the wallet (first mint) or add a mint to an existing one.
@@ -191,12 +361,13 @@ impl WalletRegistry {
         self.wallet = None;
         self.tokens.clear();
         self.stale.clear();
+        self.quotes.clear();
         self.store = None;
         self.wallets.clear();
         self.loading = false;
         self.store_opening = false;
-        self.importing = false;
-        self.import_queued = false;
+        self.job_running = false;
+        self.job_queued.clear();
         self.notification_listener = None;
         self.tasks.clear();
         cx.notify();
@@ -339,7 +510,7 @@ impl WalletRegistry {
                 }
                 this.tokens.insert(event_id, token);
                 this.emit_updated(cx);
-                this.schedule_import(cx);
+                this.schedule_job(ops::Job::Reconcile, cx);
             })
             .ok();
         }));
@@ -363,7 +534,7 @@ impl WalletRegistry {
         }
         if removed_any {
             self.emit_updated(cx);
-            self.schedule_import(cx);
+            self.schedule_job(ops::Job::Reconcile, cx);
         }
     }
 
@@ -416,7 +587,7 @@ impl WalletRegistry {
             }
 
             cx.notify();
-            self.schedule_import(cx);
+            self.schedule_job(ops::Job::Reconcile, cx);
 
             return;
         }
@@ -443,7 +614,7 @@ impl WalletRegistry {
 
                         this.store_opening = false;
                         cx.notify();
-                        this.schedule_import(cx);
+                        this.schedule_job(ops::Job::Reconcile, cx);
                     })
                     .ok();
                 }
@@ -458,110 +629,117 @@ impl WalletRegistry {
         }));
     }
 
-    /// Mirror the active token events into the cdk store.
-    fn schedule_import(&mut self, cx: &mut Context<Self>) {
-        if self.importing {
-            self.import_queued = true;
+    /// Queue a store-touching job.
+    fn schedule_job(&mut self, job: ops::Job, cx: &mut Context<Self>) {
+        if let Some(queued) = self.job_queued.last_mut()
+            && matches!(queued, ops::Job::Reconcile)
+            && matches!(job, ops::Job::Reconcile)
+        {
             return;
         }
 
-        let Some(store) = self.store.clone() else {
-            return;
-        };
-
-        if self.wallets.is_empty() {
+        if self.job_running {
+            self.job_queued.push(job);
             return;
         }
 
-        let mut active: Vec<(MintUrl, Vec<Proof>)> = Vec::new();
-        for token in self.tokens.values() {
-            let Ok(mint_url) = MintUrl::from_str(token.mint.as_str()) else {
-                continue;
-            };
+        self.start_job(job, cx);
+    }
 
-            let mut proofs = Vec::new();
-            for proof in &token.proofs {
-                let Ok(keyset_id) = Id::from_str(&proof.id) else {
-                    continue;
-                };
-
-                let Ok(c) = cdk::nuts::PublicKey::from_str(&proof.c) else {
-                    continue;
-                };
-
-                proofs.push(Proof::new(
-                    Amount::from(proof.amount),
-                    keyset_id,
-                    Secret::new(proof.secret.clone()),
-                    c,
-                ));
-            }
-
-            active.push((mint_url, proofs));
+    fn start_job(&mut self, job: ops::Job, cx: &mut Context<Self>) {
+        if self.store.is_none() || self.wallets.is_empty() {
+            self.emit_error("Wallet is not ready".to_string(), cx);
+            return;
         }
 
-        self.importing = true;
+        let wallets = self.wallets.clone();
+        let tokens = self.tokens.clone();
+
+        let signer = NostrRegistry::global(cx).read(cx).signer().clone();
+        let client = NostrRegistry::global(cx).read(cx).client().clone();
+        self.job_running = true;
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             let result = Tokio::spawn_result(cx, async move {
-                let mut added = Vec::new();
-                let mut ys = HashSet::new();
+                let ctx = ops::JobCtx {
+                    wallets,
+                    signer,
+                    client,
+                    tokens,
+                };
 
-                for (mint_url, proofs) in active {
-                    for proof in proofs {
-                        let info = match ProofInfo::new(
-                            proof,
-                            mint_url.clone(),
-                            State::Unspent,
-                            CurrencyUnit::Sat,
-                        ) {
-                            Ok(info) => info,
-                            Err(error) => {
-                                log::warn!("skipping proof: {error:#}");
-                                continue;
-                            }
-                        };
-                        if ys.insert(info.y) {
-                            added.push(info);
-                        }
-                    }
-                }
-
-                let existing = store
-                    .get_proofs(
-                        None,
-                        Some(CurrencyUnit::Sat),
-                        Some(vec![State::Unspent]),
-                        None,
-                    )
-                    .await?;
-
-                let removed = existing
-                    .iter()
-                    .filter(|info| !ys.contains(&info.y))
-                    .map(|info| info.y)
-                    .collect();
-
-                store.update_proofs(added, removed).await?;
-
-                Ok(())
+                ops::run_job(job, ctx).await
             })
             .await;
 
             this.update(cx, |this, cx| {
-                this.importing = false;
+                this.job_running = false;
+                this.apply_outcome(result, cx);
 
-                if this.import_queued {
-                    this.import_queued = false;
-                    this.schedule_import(cx);
-                }
-
-                if let Err(error) = result {
-                    this.emit_error(format!("{error:#}"), cx);
+                for job in std::mem::take(&mut this.job_queued) {
+                    this.schedule_job(job, cx);
                 }
             })
             .ok();
         }));
+    }
+
+    fn apply_outcome(&mut self, result: Result<ops::Outcome, Error>, cx: &mut Context<Self>) {
+        let outcome = match result {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                self.emit_error(format!("{error:#}"), cx);
+                return;
+            }
+        };
+
+        match outcome {
+            ops::Outcome::Idle => {}
+            ops::Outcome::Reconciled { updates } => {
+                let changed = !updates.is_empty();
+
+                for update in updates {
+                    self.apply_token_update(update);
+                }
+
+                if changed {
+                    self.emit_updated(cx);
+                }
+            }
+            ops::Outcome::QuoteMinted {
+                quote_id,
+                update,
+                amount,
+            } => {
+                self.quotes.retain(|quote| quote.quote_id != quote_id);
+                self.apply_token_update(update);
+                self.emit_updated(cx);
+                log::info!("minted {amount} sats from quote {quote_id}");
+            }
+            ops::Outcome::Melted { update, amount } => {
+                self.apply_token_update(update);
+                self.emit_updated(cx);
+                log::info!("melted {amount} sats");
+            }
+            ops::Outcome::Sent { update, token } => {
+                self.apply_token_update(update);
+                cx.emit(WalletEvent::TokenCreated(token));
+                self.emit_updated(cx);
+            }
+            ops::Outcome::Received { update, amount } => {
+                self.apply_token_update(update);
+                self.emit_updated(cx);
+                log::info!("received {amount} sats");
+            }
+        }
+    }
+
+    fn apply_token_update(&mut self, update: ops::TokenUpdate) {
+        for id in &update.destroyed {
+            self.tokens.remove(id);
+            self.stale.insert(*id);
+        }
+        self.tokens.insert(update.event_id, update.token);
     }
 
     fn apply_loaded(&mut self, state: LoadedState, cx: &mut Context<Self>) {
@@ -570,7 +748,7 @@ impl WalletRegistry {
         self.stale = state.stale;
         cx.notify();
         self.ensure_wallets(cx);
-        self.schedule_import(cx);
+        self.schedule_job(ops::Job::Reconcile, cx);
     }
 
     fn load(&mut self, cx: &mut Context<Self>) {
@@ -749,18 +927,6 @@ async fn open_store(
             .build()?;
         wallets.insert(mint_url, wallet);
     }
-
-    let recovery = wallets.clone();
-    tokio::spawn(async move {
-        for (_, wallet) in recovery {
-            if let Err(error) = wallet.recover_incomplete_sagas().await {
-                log::warn!("saga recovery failed: {error:#}");
-            }
-            if let Err(error) = wallet.mint_unissued_quotes().await {
-                log::warn!("minting unissued quotes failed: {error:#}");
-            }
-        }
-    });
 
     Ok((store, wallets))
 }

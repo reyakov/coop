@@ -136,6 +136,79 @@ where
         .await?)
 }
 
+pub(crate) async fn build_token_event<S>(
+    signer: &S,
+    me: &PublicKey,
+    token: &TokenEvent,
+) -> Result<Event, Error>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
+{
+    let content = signer
+        .nip44_encrypt_async(me, &serde_json::to_string(token)?)
+        .await?;
+
+    Ok(EventBuilder::new(Kind::CashuWalletUnspentProof, content)
+        .finalize_async(signer)
+        .await?)
+}
+
+/// NIP-09 deletion carrying the `k: 7375` tag required by NIP-60.
+pub(crate) async fn build_token_deletion<S>(signer: &S, ids: &[EventId]) -> Result<Event, Error>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
+{
+    let mut tags: Vec<Tag> = ids.iter().map(|id| Tag::event(*id)).collect();
+    tags.push(Tag::custom("k", ["7375".to_string()]));
+
+    Ok(EventBuilder::new(Kind::EventDeletion, "")
+        .tags(tags)
+        .finalize_async(signer)
+        .await?)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn build_history_event<S>(
+    signer: &S,
+    me: &PublicKey,
+    direction: TransactionDirection,
+    amount: u64,
+    created: EventId,
+    destroyed: &[EventId],
+) -> Result<Event, Error>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
+{
+    let mut rows = vec![
+        vec!["direction".to_string(), direction.to_string()],
+        vec!["amount".to_string(), amount.to_string()],
+    ];
+
+    for id in destroyed {
+        rows.push(vec![
+            "e".to_string(),
+            id.to_hex(),
+            String::new(),
+            "destroyed".to_string(),
+        ]);
+    }
+
+    rows.push(vec![
+        "e".to_string(),
+        created.to_hex(),
+        String::new(),
+        "created".to_string(),
+    ]);
+
+    let content = signer
+        .nip44_encrypt_async(me, &serde_json::to_string(&rows)?)
+        .await?;
+
+    Ok(EventBuilder::new(Kind::CashuWalletSpendingHistory, content)
+        .finalize_async(signer)
+        .await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
