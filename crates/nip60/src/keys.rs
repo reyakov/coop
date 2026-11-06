@@ -159,6 +159,83 @@ where
         .await?)
 }
 
+/// Decrypted 7376 payload, enough for the wallet panel's history list.
+pub(crate) struct HistoryPayload {
+    pub(crate) direction: TransactionDirection,
+    pub(crate) amount: u64,
+}
+
+pub(crate) async fn decrypt_history_event<S>(
+    signer: &S,
+    me: &PublicKey,
+    event: &Event,
+) -> Result<HistoryPayload, Error>
+where
+    S: AsyncNip44 + ?Sized,
+{
+    if event.pubkey != *me {
+        return Err(anyhow!("history event was not published by this account"));
+    }
+
+    let content = signer.nip44_decrypt_async(me, &event.content).await?;
+    let rows: Vec<Vec<String>> = serde_json::from_str(&content)
+        .map_err(|error| anyhow!("invalid history event: {error}"))?;
+
+    let mut direction = None;
+    let mut amount = None;
+    for row in rows {
+        let (Some(key), Some(value)) = (row.first(), row.get(1)) else {
+            continue;
+        };
+        match key.as_str() {
+            "direction" if direction.is_none() => direction = value.parse().ok(),
+            "amount" if amount.is_none() => amount = value.parse().ok(),
+            _ => {}
+        }
+    }
+
+    let Some(direction) = direction else {
+        return Err(anyhow!("history event is missing the direction"));
+    };
+    let Some(amount) = amount else {
+        return Err(anyhow!("history event is missing the amount"));
+    };
+
+    Ok(HistoryPayload { direction, amount })
+}
+
+/// Build the public kind 9321 nutzap event carrying P2PK-locked proofs.
+pub(crate) async fn build_nutzap_event<S>(
+    signer: &S,
+    recipient: PublicKey,
+    mint: &str,
+    proofs: &[String],
+    target: Option<EventId>,
+    comment: &str,
+) -> Result<Event, Error>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+{
+    let mut tags: Vec<Tag> = vec![
+        Tag::custom("p", [recipient.to_hex()]),
+        Tag::custom("u", [mint.to_string()]),
+        Tag::custom("unit", ["sat".to_string()]),
+    ];
+
+    for proof in proofs {
+        tags.push(Tag::custom("proof", [proof.clone()]));
+    }
+
+    if let Some(target) = target {
+        tags.push(Tag::custom("e", [target.to_hex()]));
+    }
+
+    Ok(EventBuilder::new(Kind::Custom(9321), comment)
+        .tags(tags)
+        .finalize_async(signer)
+        .await?)
+}
+
 /// Encrypted 7376 history payload for one state change.
 pub(crate) struct History {
     pub(crate) direction: TransactionDirection,

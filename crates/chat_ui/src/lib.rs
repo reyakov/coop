@@ -681,6 +681,41 @@ impl ChatPanel {
         });
     }
 
+    /// Open the nutzap dialog for the room's peer; direct chats only
+    fn open_nutzap(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        #[cfg(target_arch = "wasm32")]
+        let _ = (window, cx);
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(room) = self.room.upgrade() else {
+                return;
+            };
+
+            let nostr = NostrRegistry::global(cx);
+            let Some(me) = nostr.read(cx).current_user() else {
+                return;
+            };
+
+            let peers: Vec<PublicKey> = room
+                .read(cx)
+                .members()
+                .iter()
+                .copied()
+                .filter(|key| *key != me)
+                .collect();
+
+            if let [recipient] = peers[..] {
+                nip60_ui::open_nutzap(window, cx, recipient, None);
+            } else {
+                window.push_notification(
+                    Notification::warning("Nutzaps can only be sent in direct chats"),
+                    cx,
+                );
+            }
+        }
+    }
+
     fn upload(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // Get the user's configured blossom server
         let server = AppSettings::get_file_server(cx);
@@ -2012,6 +2047,18 @@ impl Render for ChatPanel {
                                         this.upload(window, cx);
                                     })),
                             )
+                            .when(cfg!(not(target_arch = "wasm32")), |this| {
+                                this.child(
+                                    Button::new("nutzap")
+                                        .icon(gpui_kit::assets::IconName::Coins)
+                                        .tooltip("Send eCash")
+                                        .disabled(dictating)
+                                        .ghost()
+                                        .on_click(cx.listener(move |this, _ev, window, cx| {
+                                            this.open_nutzap(window, cx);
+                                        })),
+                                )
+                            })
                             .when(dictating, |this| {
                                 this.child(
                                     h_flex()

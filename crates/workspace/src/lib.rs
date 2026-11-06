@@ -61,6 +61,8 @@ enum Command {
     ShowContactList,
     ShowInbox,
     ShowBrowse,
+    #[cfg(not(target_arch = "wasm32"))]
+    ShowWallet,
     NewChat,
     NewGroup,
     JoinGroup,
@@ -196,6 +198,30 @@ impl Workspace {
             }),
         );
 
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let wallet = ::nip60::WalletRegistry::global(cx);
+
+            subscriptions.push(cx.subscribe_in(
+                &wallet,
+                window,
+                |_this, _wallet, event, window, cx| match event {
+                    ::nip60::WalletEvent::Error(error) => {
+                        window.push_notification(Notification::error(error.clone()), cx);
+                    }
+                    ::nip60::WalletEvent::TokenCreated(_) => {
+                        window.push_notification(
+                            Notification::new()
+                                .message("Cashu token created, copy it from the wallet panel")
+                                .with_type(NotificationType::Success),
+                            cx,
+                        );
+                    }
+                    ::nip60::WalletEvent::Updated => {}
+                },
+            ));
+        }
+
         App::on_action(cx, {
             let workspace = workspace.clone();
             move |action, cx| {
@@ -305,6 +331,11 @@ impl Workspace {
             }
             Command::ShowBrowse => {
                 let panel = browse::init(self.dock.downgrade(), window, cx);
+                self.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Command::ShowWallet => {
+                let panel = nip60_ui::wallet::init(window, cx);
                 self.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
             }
             Command::NewChat => {

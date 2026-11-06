@@ -1,11 +1,11 @@
+use std::rc::Rc;
+
+use gpui::{App, AppContext, ClickEvent, ParentElement, Styled, Window, px};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{WindowExt, h_flex, v_flex};
-use std::rc::Rc;
-
-use gpui::{App, AppContext, ClickEvent, ParentElement, Styled, Window, px};
 use nip29::{GroupReference, GroupsRegistry};
 
 type SubmitFn = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool>;

@@ -46,12 +46,23 @@ pub struct MintQuoteEntry {
     pub mint: MintUrl,
 }
 
+/// One spending history entry, newest first in `WalletRegistry::history`.
+#[derive(Debug, Clone)]
+pub struct HistoryEntry {
+    pub id: EventId,
+    pub direction: TransactionDirection,
+    pub amount: u64,
+    pub created_at: Timestamp,
+}
+
 pub struct WalletRegistry {
     wallet: Option<keys::WalletData>,
     tokens: HashMap<EventId, TokenEvent>,
     /// Token events killed by a kind 5 delete or superseded by a `del` chain
     stale: HashSet<EventId>,
     quotes: Vec<MintQuoteEntry>,
+    /// Spending history entries, newest first
+    history: Vec<HistoryEntry>,
     /// NIP-61 nutzap events already claimed, recorded by our 7376 events
     redeemed: HashSet<EventId>,
     /// Nutzaps seen but not yet redeemed (wallet was not ready)
@@ -73,6 +84,7 @@ struct LoadedState {
     wallet: Option<keys::WalletData>,
     tokens: HashMap<EventId, TokenEvent>,
     stale: HashSet<EventId>,
+    history: Vec<HistoryEntry>,
     redeemed: HashSet<EventId>,
     nutzaps: Vec<Event>,
 }
@@ -103,6 +115,7 @@ impl WalletRegistry {
             tokens: HashMap::new(),
             stale: HashSet::new(),
             quotes: Vec::new(),
+            history: Vec::new(),
             redeemed: HashSet::new(),
             pending_nutzaps: Vec::new(),
             redeeming: HashSet::new(),
@@ -133,6 +146,11 @@ impl WalletRegistry {
     /// Lightning invoices waiting to be paid and claimed.
     pub fn mint_quotes(&self) -> &[MintQuoteEntry] {
         &self.quotes
+    }
+
+    /// Spending history, newest first.
+    pub fn history(&self) -> &[HistoryEntry] {
+        &self.history
     }
 
     /// Create a lightning invoice that funds the wallet once paid.
@@ -191,6 +209,31 @@ impl WalletRegistry {
             ops::Job::SendToken {
                 mint: mint_url,
                 amount,
+            },
+            cx,
+        );
+    }
+
+    /// Send a NIP-61 nutzap to a peer, optionally nutzapping one of their events.
+    pub fn send_nutzap(
+        &mut self,
+        recipient: PublicKey,
+        amount: u64,
+        target: Option<EventId>,
+        comment: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.wallet.is_none() {
+            self.emit_error("No wallet is set up".to_string(), cx);
+            return;
+        }
+
+        self.schedule_job(
+            ops::Job::SendNutzap {
+                recipient,
+                amount,
+                target,
+                comment,
             },
             cx,
         );
@@ -331,6 +374,7 @@ impl WalletRegistry {
         self.tokens.clear();
         self.stale.clear();
         self.quotes.clear();
+        self.history.clear();
         self.redeemed.clear();
         self.pending_nutzaps.clear();
         self.redeeming.clear();
@@ -412,7 +456,7 @@ impl WalletRegistry {
         match event.kind {
             Kind::CashuWallet => self.absorb_wallet(event, cx),
             Kind::CashuWalletUnspentProof => self.absorb_token(event, cx),
-            Kind::CashuWalletSpendingHistory => {}
+            Kind::CashuWalletSpendingHistory => self.absorb_history(event, cx),
             Kind::EventDeletion => self.absorb_deletion(event, cx),
             Kind::Custom(9321) => self.absorb_nutzap(event, cx),
             _ => {}
@@ -525,6 +569,46 @@ impl WalletRegistry {
             self.emit_updated(cx);
             self.schedule_job(ops::Job::Reconcile, cx);
         }
+    }
+
+    fn absorb_history(&mut self, event: Event, cx: &mut Context<Self>) {
+        let event_id = event.id;
+        let created_at = event.created_at;
+
+        if self.history.iter().any(|entry| entry.id == event_id) {
+            return;
+        }
+
+        let nostr = NostrRegistry::global(cx);
+        let signer = nostr.read(cx).signer().clone();
+
+        let decrypted = cx.background_spawn(async move {
+            let me = signer.get_public_key_async().await?;
+            keys::decrypt_history_event(&signer, &me, &event).await
+        });
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let payload = match decrypted.await {
+                Ok(payload) => payload,
+                Err(error) => {
+                    log::warn!("skipping unreadable history event {event_id}: {error:#}");
+                    return;
+                }
+            };
+
+            this.update(cx, |this, cx| {
+                this.history.push(HistoryEntry {
+                    id: event_id,
+                    direction: payload.direction,
+                    amount: payload.amount,
+                    created_at,
+                });
+                this.history
+                    .sort_by_key(|entry| std::cmp::Reverse(entry.created_at));
+                this.emit_updated(cx);
+            })
+            .ok();
+        }));
     }
 
     /// Claim a NIP-61 nutzap.
@@ -805,6 +889,11 @@ impl WalletRegistry {
                 cx.emit(WalletEvent::TokenCreated(token));
                 self.emit_updated(cx);
             }
+            ops::Outcome::NutzapSent { update, amount } => {
+                self.apply_token_update(update);
+                self.emit_updated(cx);
+                log::info!("sent {amount} sats as a nutzap");
+            }
             ops::Outcome::Received { update, amount } => {
                 self.apply_token_update(update);
                 self.emit_updated(cx);
@@ -836,6 +925,7 @@ impl WalletRegistry {
         self.wallet = state.wallet;
         self.tokens = state.tokens;
         self.stale = state.stale;
+        self.history = state.history;
         self.redeemed = state.redeemed;
         cx.notify();
         self.ensure_wallets(cx);
@@ -996,11 +1086,30 @@ impl LoadedState {
 
         // Nutzap events tagged redeemed in our history events are already claimed
         let mut redeemed = HashSet::new();
-        for event in history_events {
+        for event in &history_events {
             for id in redeemed_ids(event) {
                 redeemed.insert(id);
             }
         }
+
+        let mut history = Vec::new();
+        for event in &history_events {
+            let payload = match keys::decrypt_history_event(signer, &me, event).await {
+                Ok(payload) => payload,
+                Err(error) => {
+                    log::warn!("skipping unreadable history event {}: {error:#}", event.id);
+                    continue;
+                }
+            };
+
+            history.push(HistoryEntry {
+                id: event.id,
+                direction: payload.direction,
+                amount: payload.amount,
+                created_at: event.created_at,
+            });
+        }
+        history.sort_by_key(|entry| std::cmp::Reverse(entry.created_at));
 
         let nutzaps = nutzap_events
             .into_iter()
@@ -1063,6 +1172,7 @@ impl LoadedState {
             wallet,
             tokens,
             stale,
+            history,
             redeemed,
             nutzaps,
         })

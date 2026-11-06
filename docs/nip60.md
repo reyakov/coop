@@ -312,7 +312,10 @@ handling, struct/impl blocks over standalone functions. Applied:
   collapsed the mint-resolution boilerplate shared by quote/melt/send
   into `primary_mint`, and `MintQuoteEntry.mint` is now a `cdk::MintUrl`.
 - Reconcile now calls `recover_incomplete_sagas` (the plan promised it;
-  it was missing), before `mint_unissued_quotes`.
+  it was missing), before `mint_unissued_quotes`. It is best-effort: the
+  cdk-redb fresh-store init does not create the `wallet_sagas` table
+  (upstream bug), so the first recovery attempts fail with "table does
+  not exist" until a saga is written — logged, never fatal.
 
 Not changed, deliberately: per-outcome `Outcome` variants, the bounded
 notification dedup set, the single queued Reconcile collapse, and the
@@ -320,12 +323,35 @@ remaining small conversion helpers in `ops.rs` (`cashu_proof`,
 `proof_info`, `nostr_mint`) — they are simple, and further abstraction
 would be over-engineering.
 
-### Phase 4 — UI
+### Phase 4 — UI (done)
 
-- Settings entry for the mint URL (`settings` crate pattern).
-- Minimal wallet surface in the workspace (balance, receive invoice,
-  paste-token receive, send-token, history list) subscribing to
-  `WalletEvent`. Follows `nip29_ui`'s split if it grows beyond a panel.
+Implemented in a new `crates/nip60_ui` (crate-level wasm gate, so it
+compiles to nothing on web; consumers list it under
+`[target.'cfg(not(target_arch = "wasm32"))'.dependencies]`):
+
+- Backend additions: `WalletRegistry::history()` (`HistoryEntry` list,
+  newest first, from live + cached `7376`s), and `send_nutzap(recipient,
+  amount, target, comment)` — `Job::SendNutzap` fetches the recipient's
+  `10019` from the local database (falling back to `stream_events`),
+  picks the first shared mint, P2PK-locks a `prepare_send` to their
+  wallet pubkey, publishes a public `9321` (`p`/`u`/`unit`/`proof` tags,
+  optional `e`), then runs the usual sync tail with an out-history.
+- `wallet.rs` — `WalletPanel` in the left dock: balance, setup/add-mint,
+  send-token (token shown for copy), receive (invoice per quote with
+  copy + claim, paste-token redeem), history list. Subscribes to
+  `WalletEvent`; errors surface as notifications here and, via a
+  workspace-level subscription, even when the panel is closed.
+- `lib.rs` — `open_nutzap` dialog (amount prompt) reused by chat.
+- Sidebar: "Wallet" row under Browse (gated off on wasm), dispatching
+  `Command::ShowWallet` -> dock the panel.
+- `chat_ui`: a coins button in the composer opens the nutzap dialog for
+  the room's peer; group rooms are declined with a warning (v1 is
+  direct-chat only).
+- `nip29_ui`: "Send Nutzap" context-menu item on messages, nutzapping
+  the author with an `e` tag on the message.
+
+Not rendered yet: nutzaps/tokens do not appear in the chat timeline; the
+wallet panel history is the only transaction view.
 
 ## Tests
 

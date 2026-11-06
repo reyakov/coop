@@ -1462,6 +1462,7 @@ dependencies = [
  "gpui-pre",
  "instant",
  "itertools 0.13.0",
+ "nip60_ui",
  "nostr-sdk",
  "person",
  "regex",
@@ -6123,6 +6124,7 @@ dependencies = [
  "cdk-redb",
  "common",
  "flume 0.11.1",
+ "futures",
  "gpui-pre",
  "gpui_tokio",
  "hkdf",
@@ -6134,6 +6136,19 @@ dependencies = [
  "smallvec",
  "state",
  "tokio",
+]
+
+[[package]]
+name = "nip60_ui"
+version = "2.0.0-alpha3"
+dependencies = [
+ "anyhow",
+ "common",
+ "gpui-kit",
+ "gpui-pre",
+ "nip60",
+ "nostr-sdk",
+ "smallvec",
 ]
 
 [[package]]
@@ -11944,6 +11959,8 @@ dependencies = [
  "nip29",
  "nip29_ui",
  "nip4e",
+ "nip60",
+ "nip60_ui",
  "nostr-connect",
  "nostr-sdk",
  "person",

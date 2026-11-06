@@ -1,0 +1,15 @@
+[package]
+name = "nip60_ui"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+common = { path = "../common" }
+nip60 = { path = "../nip60" }
+
+gpui.workspace = true
+gpui-kit.workspace = true
+nostr-sdk.workspace = true
+anyhow.workspace = true
+smallvec.workspace = true

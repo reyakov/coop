@@ -43,6 +43,19 @@ impl Sidebar {
         // Whether to show the create button for the contact picker
         let create_button = contacts_open && !self.selected_contacts.is_empty();
 
+        #[cfg(not(target_arch = "wasm32"))]
+        let wallet_row = Some(
+            Nav::new("wallet")
+                .prefix(Icon::new(gpui_kit::assets::IconName::Wallet).small())
+                .label("Wallet")
+                .text_sm()
+                .on_click(|_, window, cx| {
+                    window.dispatch_action(Box::new(crate::Command::ShowWallet), cx)
+                }),
+        );
+        #[cfg(target_arch = "wasm32")]
+        let wallet_row: Option<Nav> = None;
+
         let (list_id, title) = if contacts_open {
             ("sidebar-contacts", Some("Contacts"))
         } else if requests_open {
@@ -75,6 +88,7 @@ impl Sidebar {
                                 window.dispatch_action(Box::new(Command::ShowBrowse), cx)
                             }),
                     )
+                    .when_some(wallet_row, |this, row| this.child(row))
                     .child(
                         Nav::new("reqs")
                             .prefix(Icon::new(IconName::Invite).small())

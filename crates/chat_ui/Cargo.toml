@@ -23,3 +23,6 @@ smallvec.workspace = true
 serde.workspace = true
 
 regex = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nip60_ui = { path = "../nip60_ui" }
