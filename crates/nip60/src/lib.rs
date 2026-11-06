@@ -43,7 +43,7 @@ pub struct MintQuoteEntry {
     pub quote_id: String,
     pub request: String,
     pub amount: u64,
-    pub mint: Url,
+    pub mint: MintUrl,
 }
 
 pub struct WalletRegistry {
@@ -137,61 +137,17 @@ impl WalletRegistry {
 
     /// Create a lightning invoice that funds the wallet once paid.
     pub fn create_mint_quote(&mut self, amount: u64, cx: &mut Context<Self>) {
-        let Some(mint) = self
-            .wallet
-            .as_ref()
-            .and_then(|wallet| wallet.mints.first().cloned())
-        else {
-            self.emit_error("No wallet is set up".to_string(), cx);
+        let Some(mint_url) = self.primary_mint(cx) else {
             return;
         };
 
-        let Ok(mint_url) = MintUrl::from_str(mint.as_str()) else {
-            self.emit_error("Invalid mint URL".to_string(), cx);
-            return;
-        };
-
-        let Some(wallet) = self.wallets.get(&mint_url).cloned() else {
-            self.emit_error("Wallet is not ready".to_string(), cx);
-            return;
-        };
-
-        let created = cx.background_spawn(async move {
-            let quote = wallet
-                .mint_quote(
-                    cdk::nuts::PaymentMethod::Known(cdk::nuts::nut00::KnownMethod::Bolt11),
-                    Some(cdk::Amount::from(amount)),
-                    None,
-                    None,
-                )
-                .await?;
-
-            Ok::<_, Error>((quote.id, quote.request))
-        });
-
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            let (quote_id, request) = match created.await {
-                Ok(quote) => quote,
-                Err(error) => {
-                    this.update(cx, |this, cx| {
-                        this.emit_error(format!("{error:#}"), cx);
-                    })
-                    .ok();
-                    return;
-                }
-            };
-
-            this.update(cx, |this, cx| {
-                this.quotes.push(MintQuoteEntry {
-                    quote_id,
-                    request,
-                    amount,
-                    mint: mint.clone(),
-                });
-                this.emit_updated(cx);
-            })
-            .ok();
-        }));
+        self.schedule_job(
+            ops::Job::CreateQuote {
+                mint: mint_url,
+                amount,
+            },
+            cx,
+        );
     }
 
     /// Check a mint quote with the mint and claim it once it is paid.
@@ -201,14 +157,9 @@ impl WalletRegistry {
             return;
         };
 
-        let Ok(mint_url) = MintUrl::from_str(entry.mint.as_str()) else {
-            self.emit_error("Invalid mint URL".to_string(), cx);
-            return;
-        };
-
         self.schedule_job(
             ops::Job::ClaimQuote {
-                mint: mint_url,
+                mint: entry.mint.clone(),
                 quote_id,
             },
             cx,
@@ -217,17 +168,7 @@ impl WalletRegistry {
 
     /// Pay a lightning invoice from the wallet.
     pub fn melt(&mut self, invoice: String, cx: &mut Context<Self>) {
-        let Some(mint) = self
-            .wallet
-            .as_ref()
-            .and_then(|wallet| wallet.mints.first().cloned())
-        else {
-            self.emit_error("No wallet is set up".to_string(), cx);
-            return;
-        };
-
-        let Ok(mint_url) = MintUrl::from_str(mint.as_str()) else {
-            self.emit_error("Invalid mint URL".to_string(), cx);
+        let Some(mint_url) = self.primary_mint(cx) else {
             return;
         };
 
@@ -242,17 +183,7 @@ impl WalletRegistry {
 
     /// Send ecash as a token string the recipient can paste anywhere.
     pub fn send_token(&mut self, amount: u64, cx: &mut Context<Self>) {
-        let Some(mint) = self
-            .wallet
-            .as_ref()
-            .and_then(|wallet| wallet.mints.first().cloned())
-        else {
-            self.emit_error("No wallet is set up".to_string(), cx);
-            return;
-        };
-
-        let Ok(mint_url) = MintUrl::from_str(mint.as_str()) else {
-            self.emit_error("Invalid mint URL".to_string(), cx);
+        let Some(mint_url) = self.primary_mint(cx) else {
             return;
         };
 
@@ -263,6 +194,22 @@ impl WalletRegistry {
             },
             cx,
         );
+    }
+
+    /// The first wallet mint; the UI is effectively single-mint in v1.
+    fn primary_mint(&self, cx: &mut Context<Self>) -> Option<MintUrl> {
+        let Some(mint) = self.wallet.as_ref().and_then(|wallet| wallet.mints.first()) else {
+            self.emit_error("No wallet is set up".to_string(), cx);
+            return None;
+        };
+
+        match MintUrl::from_str(mint.as_str()) {
+            Ok(mint_url) => Some(mint_url),
+            Err(error) => {
+                self.emit_error(format!("invalid mint url: {error}"), cx);
+                None
+            }
+        }
     }
 
     /// Receive a cashu token created elsewhere.
@@ -306,19 +253,15 @@ impl WalletRegistry {
             }
         };
 
-        let (privkey, mints) = match self
-            .wallet
-            .as_ref()
-            .map(|wallet| (wallet.privkey.clone(), wallet.mints.clone()))
-        {
-            Some((privkey, mut mints)) => {
-                if mints.contains(&mint) {
+        let mut data = match self.wallet.clone() {
+            Some(mut data) => {
+                if data.mints.contains(&mint) {
                     return;
                 }
-                mints.push(mint.clone());
-                (privkey, mints)
+                data.mints.push(mint.clone());
+                data
             }
-            None => (keys::generate_privkey(), vec![mint.clone()]),
+            None => keys::WalletData::generate(mint.clone()),
         };
 
         let nostr = NostrRegistry::global(cx);
@@ -328,24 +271,30 @@ impl WalletRegistry {
         let publish = cx.background_spawn(async move {
             let me = signer.get_public_key_async().await?;
 
-            let event = keys::build_wallet_event(&signer, &me, &privkey, &mints).await?;
+            let event = data.to_event(&signer, &me).await?;
             client.send_event(&event).await?;
+
+            let filter = Filter::new().kind(Kind::RelayList).author(me).limit(1);
+            let relays = match client.database().query(filter).await?.into_iter().next() {
+                Some(list) => nip65::extract_relay_list(&list)
+                    .map(|(relay, _)| relay)
+                    .collect::<Vec<_>>(),
+                None => Vec::new(),
+            };
 
             let info = keys::build_nutzap_info_event(
                 &signer,
-                &mints,
-                &state::BOOTSTRAP_RELAYS,
-                Keys::new(privkey.clone()).public_key(),
+                &data.mints,
+                &relays,
+                Keys::new(data.privkey.clone()).public_key(),
             )
             .await?;
             client.send_event(&info).await?;
 
-            Ok::<_, Error>(keys::WalletData {
-                event_id: event.id,
-                created_at: event.created_at,
-                privkey,
-                mints,
-            })
+            data.event_id = event.id;
+            data.created_at = event.created_at;
+
+            Ok::<_, Error>(data)
         });
 
         self.tasks.push(cx.spawn(async move |this, cx| {
@@ -406,10 +355,10 @@ impl WalletRegistry {
         let (tx, rx) = flume::bounded::<Event>(100);
 
         self.notification_listener = Some(cx.background_spawn(async move {
+            const MAX_PROCESSED: usize = 1000;
+
             let me = signer.get_public_key_async().await.ok();
             let mut notifications = client.notifications();
-
-            const MAX_PROCESSED: usize = 1000;
             let mut processed_events = HashSet::new();
 
             while let Some(notification) = notifications.next().await {
@@ -417,13 +366,15 @@ impl WalletRegistry {
                     && let RelayMessage::Event { event, .. } = *message
                 {
                     let ours = me == Some(event.pubkey);
-                    let wallet_event = ours
-                        && (matches!(
-                            event.kind,
-                            Kind::CashuWallet
-                                | Kind::CashuWalletUnspentProof
-                                | Kind::CashuWalletSpendingHistory
-                        ) || is_token_deletion(&event));
+                    let is_cashu = matches!(
+                        event.kind,
+                        Kind::CashuWallet
+                            | Kind::CashuWalletUnspentProof
+                            | Kind::CashuWalletSpendingHistory
+                    );
+
+                    let wallet_event = ours && is_cashu || is_token_deletion(&event);
+
                     let nutzap = event.kind == Kind::Custom(9321)
                         && me.is_some_and(|me| event.tags.public_keys().any(|key| key == me));
 
@@ -483,7 +434,7 @@ impl WalletRegistry {
 
         let decrypted = cx.background_spawn(async move {
             let me = signer.get_public_key_async().await?;
-            keys::decrypt_wallet_event(&signer, &me, &event).await
+            keys::WalletData::decrypt(&signer, &me, &event).await
         });
 
         self.tasks.push(cx.spawn(async move |this, cx| {
@@ -499,9 +450,17 @@ impl WalletRegistry {
             };
 
             this.update(cx, |this, cx| {
-                this.wallet = Some(data);
-                this.ensure_wallets(cx);
-                this.emit_updated(cx);
+                // A stale decrypt may land after a newer wallet event
+                let take_over = match &this.wallet {
+                    Some(current) => data.created_at >= current.created_at,
+                    None => true,
+                };
+
+                if take_over {
+                    this.wallet = Some(data);
+                    this.ensure_wallets(cx);
+                    this.emit_updated(cx);
+                }
             })
             .ok();
         }));
@@ -525,10 +484,7 @@ impl WalletRegistry {
             let token = match decrypted.await {
                 Ok(token) => token,
                 Err(error) => {
-                    this.update(cx, |this, cx| {
-                        this.emit_error(format!("{error:#}"), cx);
-                    })
-                    .ok();
+                    log::warn!("skipping unreadable token event {event_id}: {error:#}");
                     return;
                 }
             };
@@ -577,46 +533,33 @@ impl WalletRegistry {
             return;
         }
 
+        let Some(wallet) = self.wallet.as_ref() else {
+            log::warn!("dropping nutzap {}: no wallet is set up", event.id);
+            return;
+        };
+
         if self.store.is_none() || self.wallets.is_empty() {
             self.pending_nutzaps.push(event);
             return;
         }
 
-        let Some(wallet) = self.wallet.as_ref() else {
-            return;
-        };
-
-        let Some(mint) = nutzap_mint(&event) else {
-            log::warn!("nutzap {} has no mint", event.id);
-            return;
-        };
-
-        let Ok(mint_url) = MintUrl::from_str(&mint) else {
-            log::warn!("nutzap {} has an invalid mint: {mint}", event.id);
-            return;
-        };
-
-        if !self.wallets.contains_key(&mint_url) {
-            log::warn!("nutzap {} is on an unlisted mint: {mint_url}", event.id);
-            return;
-        }
-
-        let proofs = match nutzap_proofs(&event) {
-            Ok(proofs) => proofs,
-            Err(error) => {
-                log::warn!("nutzap {} has no usable proofs: {error:#}", event.id);
-                return;
-            }
-        };
-
         let target = format!(
             "02{}",
             Keys::new(wallet.privkey.clone()).public_key().to_hex()
         );
-        if !proofs.iter().all(|proof| locked_to(proof, &target)) {
+        let nutzap = match Nutzap::from_event(&event, &target) {
+            Ok(nutzap) => nutzap,
+            Err(error) => {
+                log::warn!("skipping nutzap {}: {error:#}", event.id);
+                return;
+            }
+        };
+
+        if !self.wallets.contains_key(&nutzap.mint) {
             log::warn!(
-                "nutzap {} proofs are not locked to the wallet key",
-                event.id
+                "nutzap {} is on an unlisted mint: {}",
+                event.id,
+                nutzap.mint
             );
             return;
         }
@@ -624,8 +567,8 @@ impl WalletRegistry {
         self.redeeming.insert(event.id);
         self.schedule_job(
             ops::Job::RedeemNutzap {
-                mint: mint_url,
-                proofs,
+                mint: nutzap.mint,
+                proofs: nutzap.proofs,
                 nutzap_id: event.id,
                 sender: event.pubkey,
             },
@@ -661,7 +604,7 @@ impl WalletRegistry {
         }
 
         if let Some(store) = self.store.clone() {
-            let seed = match keys::derive_seed(&data.privkey) {
+            let seed = match keys::WalletData::derive_seed(&data.privkey) {
                 Ok(seed) => seed,
                 Err(error) => {
                     self.emit_error(format!("{error:#}"), cx);
@@ -703,7 +646,7 @@ impl WalletRegistry {
         let mints = data.mints.clone();
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            match Tokio::spawn_result(cx, open_store(privkey, mints)).await {
+            match Tokio::spawn_result(cx, Self::open_store(privkey, mints)).await {
                 Ok((store, wallets)) => {
                     this.update(cx, |this, cx| {
                         if this.store.is_none() {
@@ -751,15 +694,16 @@ impl WalletRegistry {
 
     fn start_job(&mut self, job: ops::Job, cx: &mut Context<Self>) {
         if self.store.is_none() || self.wallets.is_empty() {
-            self.emit_error("Wallet is not ready".to_string(), cx);
+            self.job_queued.push(job);
             return;
         }
 
         let wallets = self.wallets.clone();
         let tokens = self.tokens.clone();
 
-        let signer = NostrRegistry::global(cx).read(cx).signer().clone();
-        let client = NostrRegistry::global(cx).read(cx).client().clone();
+        let nostr = NostrRegistry::global(cx);
+        let signer = nostr.read(cx).signer().clone();
+        let client = nostr.read(cx).client().clone();
 
         let wallet_key = match self
             .wallet
@@ -789,7 +733,7 @@ impl WalletRegistry {
                     tokens,
                 };
 
-                ops::run_job(job, ctx).await
+                job.run(ctx).await
             })
             .await;
 
@@ -826,6 +770,20 @@ impl WalletRegistry {
                 if changed {
                     self.emit_updated(cx);
                 }
+            }
+            ops::Outcome::QuoteCreated {
+                mint,
+                quote_id,
+                request,
+                amount,
+            } => {
+                self.quotes.push(MintQuoteEntry {
+                    quote_id,
+                    request,
+                    amount,
+                    mint,
+                });
+                self.emit_updated(cx);
             }
             ops::Outcome::QuoteMinted {
                 quote_id,
@@ -881,7 +839,6 @@ impl WalletRegistry {
         self.redeemed = state.redeemed;
         cx.notify();
         self.ensure_wallets(cx);
-        self.schedule_job(ops::Job::Reconcile, cx);
 
         // Claimed once the wallets are open; live redemptions continue
         // through the notification listener
@@ -903,7 +860,7 @@ impl WalletRegistry {
         let subscribe_client = client.clone();
         let cached = cx.background_spawn(async move {
             let me = signer.get_public_key_async().await?;
-            let state = load_inner(&me, &client, &signer).await?;
+            let state = LoadedState::load(me, &client, &signer).await?;
             Ok::<_, Error>((me, state))
         });
 
@@ -933,12 +890,11 @@ impl WalletRegistry {
             })
             .ok();
 
-            // Subscribe only after the cache snapshot; from then on the state
-            // advances exclusively through the notification listener.
             let subscribed = cx.background_spawn(async move {
-                subscribe_client.subscribe(wallet_filter(me)).await?;
-                subscribe_client.subscribe(nutzap_filter(me)).await
+                subscribe_client.subscribe(Self::wallet_filter(me)).await?;
+                subscribe_client.subscribe(Self::nutzap_filter(me)).await
             });
+
             if let Err(error) = subscribed.await {
                 log::warn!("wallet subscription failed: {error:#}");
             }
@@ -954,154 +910,163 @@ impl WalletRegistry {
         log::error!("wallet: {message}");
         cx.emit(WalletEvent::Error(message));
     }
+
+    /// Open the cdk store and build a wallet per mint.
+    async fn open_store(
+        privkey: SecretKey,
+        mints: Vec<Url>,
+    ) -> Result<(Arc<WalletRedbDatabase>, HashMap<MintUrl, Wallet>), Error> {
+        let dir = config_dir()
+            .join("cashu")
+            .join(Keys::new(privkey.clone()).public_key().to_hex());
+        std::fs::create_dir_all(&dir)?;
+
+        let store = Arc::new(WalletRedbDatabase::new(&dir.join("wallet.redb"))?);
+        let seed = keys::WalletData::derive_seed(&privkey)?;
+
+        let mut wallets = HashMap::new();
+        for mint in mints {
+            let mint_url = MintUrl::from_str(mint.as_str())?;
+            let wallet = WalletBuilder::new()
+                .mint_url(mint_url.clone())
+                .unit(CurrencyUnit::Sat)
+                .localstore(store.clone())
+                .seed(seed)
+                .build()?;
+            wallets.insert(mint_url, wallet);
+        }
+
+        Ok((store, wallets))
+    }
+
+    fn wallet_filter(author: PublicKey) -> Filter {
+        Filter::new().author(author).kinds([
+            Kind::CashuWallet,
+            Kind::CashuWalletUnspentProof,
+            Kind::CashuWalletSpendingHistory,
+            Kind::EventDeletion,
+        ])
+    }
+
+    /// NIP-61 nutzaps: public kind 9321 events p-tagging our identity pubkey
+    fn nutzap_filter(me: PublicKey) -> Filter {
+        Filter::new()
+            .kinds([Kind::Custom(9321)])
+            .custom_tag(SingleLetterTag::LOWERCASE_P, me.to_hex())
+    }
 }
 
-async fn load_inner<S>(me: &PublicKey, client: &Client, signer: &S) -> Result<LoadedState, Error>
-where
-    S: AsyncNip44 + ?Sized,
-{
-    let events = client.database().query(wallet_filter(*me)).await?;
-    let nutzap_events = client.database().query(nutzap_filter(*me)).await?;
+impl LoadedState {
+    async fn load<S>(me: PublicKey, client: &Client, signer: &S) -> Result<Self, Error>
+    where
+        S: AsyncNip44 + ?Sized,
+    {
+        let events = client
+            .database()
+            .query(WalletRegistry::wallet_filter(me))
+            .await?;
+        let nutzap_events = client
+            .database()
+            .query(WalletRegistry::nutzap_filter(me))
+            .await?;
 
-    let mut wallet_event: Option<&Event> = None;
-    let mut token_events = Vec::new();
-    let mut history_events = Vec::new();
-    let mut deletions = Vec::new();
+        let mut wallet_event: Option<&Event> = None;
+        let mut token_events = Vec::new();
+        let mut history_events = Vec::new();
+        let mut deletions = Vec::new();
 
-    for event in &events {
-        match event.kind {
-            Kind::CashuWallet => {
-                let replace = match &wallet_event {
-                    Some(current) => event.created_at > current.created_at,
-                    None => true,
+        for event in &events {
+            match event.kind {
+                Kind::CashuWallet => {
+                    let replace = match &wallet_event {
+                        Some(current) => event.created_at > current.created_at,
+                        None => true,
+                    };
+
+                    if replace {
+                        wallet_event = Some(event);
+                    }
+                }
+                Kind::CashuWalletUnspentProof => token_events.push(event),
+                Kind::CashuWalletSpendingHistory => history_events.push(event),
+                Kind::EventDeletion if is_token_deletion(event) => deletions.push(event),
+                _ => {}
+            }
+        }
+
+        // Nutzap events tagged redeemed in our history events are already claimed
+        let mut redeemed = HashSet::new();
+        for event in history_events {
+            for id in redeemed_ids(event) {
+                redeemed.insert(id);
+            }
+        }
+
+        let nutzaps = nutzap_events
+            .into_iter()
+            .filter(|event| !redeemed.contains(&event.id))
+            .collect();
+
+        let mut stale = HashSet::new();
+        for event in deletions {
+            for tag in event.tags.iter() {
+                if tag.kind() != "e" {
+                    continue;
+                }
+
+                let Some(hex) = tag.content() else {
+                    continue;
                 };
 
-                if replace {
-                    wallet_event = Some(event);
+                if let Ok(id) = EventId::from_hex(hex) {
+                    stale.insert(id);
                 }
             }
-            Kind::CashuWalletUnspentProof => token_events.push(event),
-            Kind::CashuWalletSpendingHistory => history_events.push(event),
-            Kind::EventDeletion if is_token_deletion(event) => deletions.push(event),
-            _ => {}
         }
-    }
 
-    // Nutzap events tagged redeemed in our history events are already claimed
-    let mut redeemed = HashSet::new();
-    for event in history_events {
-        for id in redeemed_ids(event) {
-            redeemed.insert(id);
-        }
-    }
-
-    let nutzaps = nutzap_events
-        .into_iter()
-        .filter(|event| !redeemed.contains(&event.id))
-        .collect();
-
-    let mut stale = HashSet::new();
-    for event in deletions {
-        for tag in event.tags.iter() {
-            if tag.kind() != "e" {
+        let mut tokens = HashMap::new();
+        for event in token_events {
+            if stale.contains(&event.id) {
                 continue;
             }
-
-            let Some(hex) = tag.content() else {
-                continue;
+            let token = match keys::decrypt_token_event(signer, &me, event).await {
+                Ok(token) => token,
+                Err(error) => {
+                    log::warn!("skipping unreadable token event {}: {error:#}", event.id);
+                    continue;
+                }
             };
-
-            if let Ok(id) = EventId::from_hex(hex) {
-                stale.insert(id);
-            }
+            tokens.insert(event.id, token);
         }
-    }
 
-    let mut tokens = HashMap::new();
-    for event in token_events {
-        if stale.contains(&event.id) {
-            continue;
-        }
-        let token = match keys::decrypt_token_event(signer, me, event).await {
-            Ok(token) => token,
-            Err(error) => {
-                log::warn!("skipping unreadable token event {}: {error:#}", event.id);
-                continue;
-            }
+        let superseded: HashSet<EventId> = tokens
+            .values()
+            .flat_map(|token| token.del.iter())
+            .filter_map(|hex| EventId::from_hex(hex).ok())
+            .collect();
+
+        tokens.retain(|id, _| !stale.contains(id) && !superseded.contains(id));
+        stale.extend(superseded);
+
+        let wallet = match wallet_event {
+            Some(event) => match keys::WalletData::decrypt(signer, &me, event).await {
+                Ok(wallet) => Some(wallet),
+                Err(error) => {
+                    log::warn!("skipping wallet event {}: {error:#}", event.id);
+                    None
+                }
+            },
+            None => None,
         };
-        tokens.insert(event.id, token);
+
+        Ok(Self {
+            wallet,
+            tokens,
+            stale,
+            redeemed,
+            nutzaps,
+        })
     }
-
-    let superseded: HashSet<EventId> = tokens
-        .values()
-        .flat_map(|token| token.del.iter())
-        .filter_map(|hex| EventId::from_hex(hex).ok())
-        .collect();
-
-    tokens.retain(|id, _| !stale.contains(id) && !superseded.contains(id));
-    stale.extend(superseded);
-
-    let wallet = match wallet_event {
-        Some(event) => match keys::decrypt_wallet_event(signer, me, event).await {
-            Ok(wallet) => Some(wallet),
-            Err(error) => {
-                log::warn!("skipping wallet event {}: {error:#}", event.id);
-                None
-            }
-        },
-        None => None,
-    };
-
-    Ok(LoadedState {
-        wallet,
-        tokens,
-        stale,
-        redeemed,
-        nutzaps,
-    })
-}
-
-async fn open_store(
-    privkey: SecretKey,
-    mints: Vec<Url>,
-) -> Result<(Arc<WalletRedbDatabase>, HashMap<MintUrl, Wallet>), Error> {
-    let dir = config_dir()
-        .join("cashu")
-        .join(Keys::new(privkey.clone()).public_key().to_hex());
-    std::fs::create_dir_all(&dir)?;
-
-    let store = Arc::new(WalletRedbDatabase::new(&dir.join("wallet.redb"))?);
-    let seed = keys::derive_seed(&privkey)?;
-
-    let mut wallets = HashMap::new();
-    for mint in &mints {
-        let mint_url = MintUrl::from_str(mint.as_str())?;
-        let wallet = WalletBuilder::new()
-            .mint_url(mint_url.clone())
-            .unit(CurrencyUnit::Sat)
-            .localstore(store.clone())
-            .seed(seed)
-            .build()?;
-        wallets.insert(mint_url, wallet);
-    }
-
-    Ok((store, wallets))
-}
-
-fn wallet_filter(author: PublicKey) -> Filter {
-    Filter::new().author(author).kinds([
-        Kind::CashuWallet,
-        Kind::CashuWalletUnspentProof,
-        Kind::CashuWalletSpendingHistory,
-        Kind::EventDeletion,
-    ])
-}
-
-/// NIP-61 nutzaps: public kind 9321 events p-tagging our identity pubkey
-fn nutzap_filter(me: PublicKey) -> Filter {
-    Filter::new()
-        .kinds([Kind::Custom(9321)])
-        .custom_tag(SingleLetterTag::LOWERCASE_P, me.to_hex())
 }
 
 fn is_token_deletion(event: &Event) -> bool {
@@ -1110,57 +1075,6 @@ fn is_token_deletion(event: &Event) -> bool {
             .tags
             .iter()
             .any(|tag| tag.kind() == "k" && tag.content() == Some("7375"))
-}
-
-/// The `u` tag carries the mint URL; fall back to the older `mint` tag
-fn nutzap_mint(event: &Event) -> Option<String> {
-    let tag = event
-        .tags
-        .iter()
-        .find(|tag| tag.kind() == "u" && tag.content().is_some())
-        .or_else(|| {
-            event
-                .tags
-                .iter()
-                .find(|tag| tag.kind() == "mint" && tag.content().is_some())
-        })?;
-
-    tag.content().map(str::to_string)
-}
-
-fn nutzap_proofs(event: &Event) -> Result<Proofs, Error> {
-    let mut proofs = Vec::new();
-    for tag in event.tags.iter() {
-        if tag.kind() != "proof" {
-            continue;
-        }
-
-        let Some(value) = tag.content() else {
-            continue;
-        };
-
-        let proof: Proof =
-            serde_json::from_str(value).map_err(|error| anyhow!("invalid proof tag: {error}"))?;
-        proofs.push(proof);
-    }
-
-    if proofs.is_empty() {
-        return Err(anyhow!("no proofs"));
-    }
-
-    Ok(Proofs::from(proofs))
-}
-
-/// NIP-61 requires nutzap proofs to be P2PK-locked to the wallet pubkey.
-fn locked_to(proof: &Proof, target: &str) -> bool {
-    let Ok(conditions) = SpendingConditions::try_from(&proof.secret) else {
-        return false;
-    };
-
-    conditions
-        .pubkeys()
-        .map(|keys| keys.iter().any(|key| key.to_string() == target))
-        .unwrap_or(false)
 }
 
 /// Nutzap event ids our history events marked as redeemed.
@@ -1175,4 +1089,60 @@ fn redeemed_ids(event: &Event) -> Vec<EventId> {
         .filter_map(|tag| tag.content())
         .filter_map(|hex| EventId::from_hex(hex).ok())
         .collect()
+}
+
+/// A NIP-61 nutzap's proofs, validated against the wallet pubkey.
+struct Nutzap {
+    mint: MintUrl,
+    proofs: Proofs,
+}
+
+impl Nutzap {
+    fn from_event(event: &Event, wallet_target: &str) -> Result<Self, Error> {
+        let mint = event
+            .tags
+            .iter()
+            .find(|tag| tag.kind() == "u" && tag.content().is_some())
+            .and_then(|tag| tag.content())
+            .ok_or_else(|| anyhow!("nutzap is missing the mint tag"))?;
+        let mint = MintUrl::from_str(mint).map_err(|error| anyhow!("invalid mint url: {error}"))?;
+
+        let mut proofs = Vec::new();
+        for tag in event.tags.iter() {
+            if tag.kind() != "proof" {
+                continue;
+            }
+
+            let Some(value) = tag.content() else {
+                continue;
+            };
+
+            let proof: Proof = serde_json::from_str(value)
+                .map_err(|error| anyhow!("invalid proof tag: {error}"))?;
+            proofs.push(proof);
+        }
+
+        if proofs.is_empty() {
+            return Err(anyhow!("nutzap has no proofs"));
+        }
+
+        let proofs = Proofs::from(proofs);
+        let locked = proofs.iter().all(|proof| locked_to(proof, wallet_target));
+        if !locked {
+            return Err(anyhow!("proofs are not locked to the wallet key"));
+        }
+
+        Ok(Self { mint, proofs })
+    }
+}
+
+/// NIP-61 requires nutzap proofs to be P2PK-locked to the wallet pubkey.
+fn locked_to(proof: &Proof, target: &str) -> bool {
+    let Ok(conditions) = SpendingConditions::try_from(&proof.secret) else {
+        return false;
+    };
+
+    conditions
+        .pubkeys()
+        .is_some_and(|keys| keys.iter().any(|key| key.to_string() == target))
 }

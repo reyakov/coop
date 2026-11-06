@@ -143,43 +143,46 @@ Spike findings (all resolved and verified with `cargo check`):
 - One subscription: `authors: [me], kinds: [17375, 7375, 7376]` plus
   kind `5` with `k: 7375`, on the existing client (bootstrap relays).
   Notifications flow through the nip29-style flume channel.
-- Published relays: the same client/relays coop already uses. Publishing a
-  `10019` wallet relay list with those relays is a one-liner for interop;
-  reading `10019` from other clients is skipped in v1 (coop always uses
+- Published relays: the `10019` nutzap info event advertises the user's
+  NIP-65 relay list (queried from the local database), never the bootstrap
+  relays; subscriptions and publishes ride the SDK's NIP-65 handling.
+  Reading `10019` from other clients is skipped in v1 (coop always uses
   its own relay set).
 
 ### Operations
 
 Each op runs on tokio and ends with the same `sync` tail:
 read unspent proofs from cdk -> publish one `7375` per changed mint
-(rolling up previous event ids into `del`) -> NIP-09 delete old events with
+(with `del` set to the previous event ids) -> NIP-09 delete old events with
 a `k:7375` tag -> publish `7376` history -> update registry state and emit.
 
 - `setup(mint_url)`: create wallet key + seed, publish `17375`, build cdk
   `Wallet`, open subscription.
-- `create_mint_quote(amount)`: `wallet.mint_quote` -> return invoice to UI;
-  poll / subscribe quote state, then `wallet.mint(quote_id)` -> sync.
+- `create_mint_quote(amount)`: a job in the queue — `wallet.mint_quote` ->
+  invoice recorded in `mint_quotes()` for the UI; poll /
+  `claim_mint_quote(id)`, then `wallet.mint(quote_id)` -> sync.
   On load, `mint_unissued_quotes` claims quotes paid elsewhere.
 - `melt(invoice)`: `wallet.melt` -> sync (change proofs roll over).
 - `send_token(amount)`: `wallet.send` -> return token string for the user
   to share -> sync. (No in-chat token delivery in v1.)
 - `receive_token(token)`: `wallet.receive` -> sync.
-- Redeem nutzap (NIP-61): verify the gift-wrapped proofs are P2PK-locked to
+- Redeem nutzap (NIP-61): verify the proofs are P2PK-locked to
   the wallet pubkey, then `wallet.receive_proofs(proofs, ReceiveOptions {
   p2pk_signing_keys: [wallet_key] })` -> `7376` with unencrypted
   `e <nutzap-id> "" redeemed` tag -> sync.
 - Remote `7375` from another device: import its unspent proofs into the
   cdk store as the new local truth (cdk proof insertion + state check via
   `check_proofs_spent`); superseded `7375`s reconcile through `del`/NIP-09.
-- On every load: `recover_incomplete_sagas` and `mint_unissued_quotes`
-  (required by cdk to clear interrupted operations), then re-derive the
-  unspent set from `7375` minus deletes.
+- On every reconcile: `recover_incomplete_sagas` and
+  `mint_unissued_quotes` (required by cdk to clear interrupted operations),
+  then converge the unspent set from `7375` minus deletes.
 
 ### Crate layout (3 files, kept small on purpose)
 
 - `lib.rs` — `init`, `WalletRegistry`, `WalletEvent` (`Updated`, `Error`),
   subscription/notification handling, `reset` on signer change.
-- `keys.rs` — wallet key/seed derivation, `17375` build/parse via signer.
+- `keys.rs` — wallet key/seed derivation, `17375` build/parse via signer,
+  `7375`/deletion/`7376` event builders, the `History` payload.
 - `ops.rs` — cdk operations + the shared `sync` tail (rollover, deletes,
   history), NIP-61 redemption.
 
@@ -276,6 +279,46 @@ Implemented:
   unencrypted tags mark the nutzap `redeemed` and tag the sender.
 - Already-redeemed nutzaps (from cached `7376` tags) and ones with a job
   in flight are skipped; failed redemptions are retried on relay echo.
+
+### Audit (post phase 3) — done
+
+Backend review before Phase 4: keep it simple, no premature edge-case
+handling, struct/impl blocks over standalone functions. Applied:
+
+- Code shape: `keys::WalletData` carries generate/derive_seed/decrypt/
+  to_event as an impl block; `ops::Job::run` and the `JobCtx` helpers
+  (`wallet`, `previous_ids`, `sync_token_events`, `reconcile`) are impl
+  methods; `LoadedState::load`, `WalletRegistry::open_store` and the
+  filters are associated functions; nutzap tag parsing moved into a
+  `Nutzap` struct (dropped the speculative `mint` tag fallback for the
+  current `u` tag). `History` moved to `keys.rs` so `build_history_event`
+  takes one struct instead of eight arguments.
+- Spec gap: the sync tail never set `TokenEvent.del` — new `7375`s now
+  carry the previous event ids, so superseded tokens stay pruned even if
+  a NIP-09 delete is dropped by a relay.
+- Bug: `start_job` errored "Wallet is not ready" for the auto `Reconcile`
+  scheduled before the redb store finished opening. Jobs scheduled while
+  the store is opening now queue and run once `ensure_wallets` completes;
+  `apply_loaded` no longer schedules a redundant `Reconcile`.
+- Bug: a late-landing stale wallet decrypt could overwrite a newer
+  `17375`; `absorb_wallet` now re-checks `created_at` when applying.
+- Consistency: an unreadable live token event logs a warning instead of
+  surfacing an error event (same as the load path); nutzaps arriving with
+  no wallet set up are dropped (a fresh setup would generate a different
+  key, so they were unredeemable anyway).
+- Invariant: quote creation moved into the serialized job queue
+  (`Job::CreateQuote` / `Outcome::QuoteCreated`) — `mint_quote` writes to
+  the cdk store, so it must not interleave with running jobs. This also
+  collapsed the mint-resolution boilerplate shared by quote/melt/send
+  into `primary_mint`, and `MintQuoteEntry.mint` is now a `cdk::MintUrl`.
+- Reconcile now calls `recover_incomplete_sagas` (the plan promised it;
+  it was missing), before `mint_unissued_quotes`.
+
+Not changed, deliberately: per-outcome `Outcome` variants, the bounded
+notification dedup set, the single queued Reconcile collapse, and the
+remaining small conversion helpers in `ops.rs` (`cashu_proof`,
+`proof_info`, `nostr_mint`) — they are simple, and further abstraction
+would be over-engineering.
 
 ### Phase 4 — UI
 

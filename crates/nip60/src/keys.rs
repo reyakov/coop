@@ -7,6 +7,8 @@ use sha2::Sha256;
 const SEED_SALT: &[u8] = b"coop nip60 seed salt";
 const SEED_INFO: &[u8] = b"coop cashu seed";
 
+/// Parsed 17375 wallet event: the wallet key and its mint list.
+#[derive(Clone)]
 pub(crate) struct WalletData {
     pub(crate) event_id: EventId,
     pub(crate) created_at: Timestamp,
@@ -14,32 +16,68 @@ pub(crate) struct WalletData {
     pub(crate) mints: Vec<Url>,
 }
 
-impl Clone for WalletData {
-    fn clone(&self) -> Self {
+impl WalletData {
+    /// A new wallet with a fresh key.
+    pub(crate) fn generate(first_mint: Url) -> Self {
         Self {
-            event_id: self.event_id,
-            created_at: self.created_at,
-            privkey: self.privkey.clone(),
-            mints: self.mints.clone(),
+            event_id: EventId::from_byte_array([0; 32]),
+            created_at: Timestamp::from_secs(0),
+            privkey: SecretKey::generate(),
+            mints: vec![first_mint],
         }
+    }
+
+    /// The cdk seed, derived deterministically from the wallet key.
+    pub(crate) fn derive_seed(privkey: &SecretKey) -> Result<[u8; 64], Error> {
+        let ikm = privkey.to_secret_bytes();
+        let hk = Hkdf::<Sha256>::new(Some(SEED_SALT), &ikm);
+        let mut seed = [0u8; 64];
+        hk.expand(SEED_INFO, &mut seed)
+            .map_err(|error| anyhow!("seed derivation failed: {error}"))?;
+        Ok(seed)
+    }
+
+    /// Decrypt and parse a 17375 event published by this account.
+    pub(crate) async fn decrypt<S>(signer: &S, me: &PublicKey, event: &Event) -> Result<Self, Error>
+    where
+        S: AsyncNip44 + ?Sized,
+    {
+        if event.pubkey != *me {
+            return Err(anyhow!("wallet event was not published by this account"));
+        }
+
+        let content = signer.nip44_decrypt_async(me, &event.content).await?;
+        let (privkey, mints) = parse_wallet_content(&content)?;
+
+        Ok(Self {
+            event_id: event.id,
+            created_at: event.created_at,
+            privkey,
+            mints,
+        })
+    }
+
+    /// Build the encrypted 17375 event for this wallet data.
+    pub(crate) async fn to_event<S>(&self, signer: &S, me: &PublicKey) -> Result<Event, Error>
+    where
+        S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
+    {
+        let mut rows = vec![vec!["privkey".to_string(), self.privkey.to_secret_hex()]];
+        for mint in &self.mints {
+            rows.push(vec!["mint".to_string(), mint.to_string()]);
+        }
+
+        let content = signer
+            .nip44_encrypt_async(me, &serde_json::to_string(&rows)?)
+            .await?;
+
+        Ok(EventBuilder::new(Kind::CashuWallet, content)
+            .finalize_async(signer)
+            .await?)
     }
 }
 
-pub(crate) fn generate_privkey() -> SecretKey {
-    SecretKey::generate()
-}
-
-/// Derive the cdk seed from the wallet key.
-pub(crate) fn derive_seed(privkey: &SecretKey) -> Result<[u8; 64], Error> {
-    let ikm = privkey.to_secret_bytes();
-    let hk = Hkdf::<Sha256>::new(Some(SEED_SALT), &ikm);
-    let mut seed = [0u8; 64];
-    hk.expand(SEED_INFO, &mut seed)
-        .map_err(|error| anyhow!("seed derivation failed: {error}"))?;
-    Ok(seed)
-}
-
-pub(crate) fn parse_wallet_content(content: &str) -> Result<(SecretKey, Vec<Url>), Error> {
+fn parse_wallet_content(content: &str) -> Result<(SecretKey, Vec<Url>), Error> {
     let rows: Vec<Vec<String>> =
         serde_json::from_str(content).map_err(|error| anyhow!("invalid wallet event: {error}"))?;
 
@@ -70,29 +108,6 @@ pub(crate) fn parse_wallet_content(content: &str) -> Result<(SecretKey, Vec<Url>
     Ok((privkey, mints))
 }
 
-pub(crate) async fn decrypt_wallet_event<S>(
-    signer: &S,
-    me: &PublicKey,
-    event: &Event,
-) -> Result<WalletData, Error>
-where
-    S: AsyncNip44 + ?Sized,
-{
-    if event.pubkey != *me {
-        return Err(anyhow!("wallet event was not published by this account"));
-    }
-
-    let content = signer.nip44_decrypt_async(me, &event.content).await?;
-    let (privkey, mints) = parse_wallet_content(&content)?;
-
-    Ok(WalletData {
-        event_id: event.id,
-        created_at: event.created_at,
-        privkey,
-        mints,
-    })
-}
-
 pub(crate) async fn decrypt_token_event<S>(
     signer: &S,
     me: &PublicKey,
@@ -111,29 +126,6 @@ where
         serde_json::from_str(&content).map_err(|error| anyhow!("invalid token event: {error}"))?;
 
     Ok(token)
-}
-
-pub(crate) async fn build_wallet_event<S>(
-    signer: &S,
-    me: &PublicKey,
-    privkey: &SecretKey,
-    mints: &[Url],
-) -> Result<Event, Error>
-where
-    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
-{
-    let mut rows = vec![vec!["privkey".to_string(), privkey.to_secret_hex()]];
-    for mint in mints {
-        rows.push(vec!["mint".to_string(), mint.to_string()]);
-    }
-
-    let content = signer
-        .nip44_encrypt_async(me, &serde_json::to_string(&rows)?)
-        .await?;
-
-    Ok(EventBuilder::new(Kind::CashuWallet, content)
-        .finalize_async(signer)
-        .await?)
 }
 
 pub(crate) async fn build_token_event<S>(
@@ -167,23 +159,29 @@ where
         .await?)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Encrypted 7376 history payload for one state change.
+pub(crate) struct History {
+    pub(crate) direction: TransactionDirection,
+    pub(crate) amount: u64,
+    /// NIP-61 nutzap events redeemed by this state change
+    pub(crate) redeemed: Vec<EventId>,
+    /// Author of the redeemed nutzap, for the unencrypted `p` tag
+    pub(crate) sender: Option<PublicKey>,
+}
+
 pub(crate) async fn build_history_event<S>(
     signer: &S,
     me: &PublicKey,
-    direction: TransactionDirection,
-    amount: u64,
+    history: &History,
     created: EventId,
     destroyed: &[EventId],
-    redeemed: &[EventId],
-    sender: Option<PublicKey>,
 ) -> Result<Event, Error>
 where
     S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
 {
     let mut rows = vec![
-        vec!["direction".to_string(), direction.to_string()],
-        vec!["amount".to_string(), amount.to_string()],
+        vec!["direction".to_string(), history.direction.to_string()],
+        vec!["amount".to_string(), history.amount.to_string()],
     ];
 
     for id in destroyed {
@@ -202,12 +200,13 @@ where
         "created".to_string(),
     ]);
 
-    let mut tags: Vec<Tag> = redeemed
+    let mut tags: Vec<Tag> = history
+        .redeemed
         .iter()
         .map(|id| Tag::custom("e", [id.to_hex(), String::new(), "redeemed".to_string()]))
         .collect();
 
-    if let Some(sender) = sender {
+    if let Some(sender) = history.sender {
         tags.push(Tag::custom("p", [sender.to_hex()]));
     }
 
@@ -224,7 +223,7 @@ where
 pub(crate) async fn build_nutzap_info_event<S>(
     signer: &S,
     mints: &[Url],
-    relays: &[&str],
+    relays: &[RelayUrl],
     wallet_pubkey: PublicKey,
 ) -> Result<Event, Error>
 where
@@ -282,11 +281,12 @@ mod tests {
     #[test]
     fn seed_is_deterministic_per_key() {
         let key = SecretKey::generate();
-        let first = derive_seed(&key).expect("seed derivation cannot fail");
-        let second = derive_seed(&key).expect("seed derivation cannot fail");
+        let first = WalletData::derive_seed(&key).expect("seed derivation cannot fail");
+        let second = WalletData::derive_seed(&key).expect("seed derivation cannot fail");
         assert_eq!(first, second);
 
-        let other = derive_seed(&SecretKey::generate()).expect("seed derivation cannot fail");
+        let other =
+            WalletData::derive_seed(&SecretKey::generate()).expect("seed derivation cannot fail");
         assert_ne!(first, other);
     }
 }

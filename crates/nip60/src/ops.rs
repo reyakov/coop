@@ -22,6 +22,10 @@ use crate::keys;
 #[derive(Debug, Clone)]
 pub(crate) enum Job {
     Reconcile,
+    CreateQuote {
+        mint: MintUrl,
+        amount: u64,
+    },
     ClaimQuote {
         mint: MintUrl,
         quote_id: String,
@@ -46,14 +50,181 @@ pub(crate) enum Job {
     },
 }
 
-/// History event payload for a token state change
-pub(crate) struct History {
-    pub(crate) direction: TransactionDirection,
-    pub(crate) amount: u64,
-    /// NIP-61 nutzap events redeemed by this state change
-    pub(crate) redeemed: Vec<EventId>,
-    /// Author of the redeemed nutzap, for the unencrypted `p` tag
-    pub(crate) sender: Option<PublicKey>,
+impl Job {
+    pub(crate) async fn run<S>(self, ctx: JobCtx<S>) -> Result<Outcome, Error>
+    where
+        S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + Send + Sync + 'static,
+    {
+        match self {
+            Job::Reconcile => ctx.reconcile().await,
+            Job::CreateQuote { mint, amount } => {
+                let wallet = ctx.wallet(&mint)?;
+                let quote = wallet
+                    .mint_quote(
+                        PaymentMethod::Known(KnownMethod::Bolt11),
+                        Some(Amount::from(amount)),
+                        None,
+                        None,
+                    )
+                    .await?;
+
+                Ok(Outcome::QuoteCreated {
+                    mint,
+                    quote_id: quote.id,
+                    request: quote.request,
+                    amount,
+                })
+            }
+            Job::ClaimQuote { mint, quote_id } => {
+                let wallet = ctx.wallet(&mint)?;
+                let quote = wallet.check_mint_quote(&quote_id).await?;
+
+                if quote.state != MintQuoteState::Paid {
+                    return Ok(Outcome::Idle);
+                }
+
+                let proofs = wallet.mint(&quote_id, SplitTarget::default(), None).await?;
+                let amount: u64 = proofs.iter().map(|proof| u64::from(proof.amount)).sum();
+
+                let update = ctx
+                    .sync_token_events(
+                        wallet,
+                        nostr_mint(&mint)?,
+                        &ctx.previous_ids(&mint),
+                        Some(keys::History {
+                            direction: TransactionDirection::In,
+                            amount: u64::from(quote.amount.unwrap_or_default()),
+                            redeemed: Vec::new(),
+                            sender: None,
+                        }),
+                    )
+                    .await?;
+
+                Ok(Outcome::QuoteMinted {
+                    quote_id,
+                    update,
+                    amount,
+                })
+            }
+            Job::Melt { mint, invoice } => {
+                let wallet = ctx.wallet(&mint)?;
+                let quote = wallet
+                    .melt_quote(
+                        PaymentMethod::Known(KnownMethod::Bolt11),
+                        invoice,
+                        None,
+                        None,
+                    )
+                    .await?;
+
+                let finalized = wallet
+                    .prepare_melt(&quote.id, HashMap::new())
+                    .await?
+                    .confirm()
+                    .await?;
+
+                if finalized.state() != MeltQuoteState::Paid {
+                    return Err(anyhow!("melt did not settle: {:?}", finalized.state()));
+                }
+
+                let amount = u64::from(finalized.total_amount());
+                let update = ctx
+                    .sync_token_events(
+                        wallet,
+                        nostr_mint(&mint)?,
+                        &ctx.previous_ids(&mint),
+                        Some(keys::History {
+                            direction: TransactionDirection::Out,
+                            amount,
+                            redeemed: Vec::new(),
+                            sender: None,
+                        }),
+                    )
+                    .await?;
+
+                Ok(Outcome::Melted { update, amount })
+            }
+            Job::SendToken { mint, amount } => {
+                let wallet = ctx.wallet(&mint)?;
+                let prepared = wallet
+                    .prepare_send(Amount::from(amount), SendOptions::default())
+                    .await?;
+                let token = prepared.confirm(None).await?.to_string();
+
+                let update = ctx
+                    .sync_token_events(
+                        wallet,
+                        nostr_mint(&mint)?,
+                        &ctx.previous_ids(&mint),
+                        Some(keys::History {
+                            direction: TransactionDirection::Out,
+                            amount,
+                            redeemed: Vec::new(),
+                            sender: None,
+                        }),
+                    )
+                    .await?;
+
+                Ok(Outcome::Sent { update, token })
+            }
+            Job::Receive { mint, token } => {
+                let wallet = ctx.wallet(&mint)?;
+                let received = wallet.receive(&token, ReceiveOptions::default()).await?;
+
+                let update = ctx
+                    .sync_token_events(
+                        wallet,
+                        nostr_mint(&mint)?,
+                        &ctx.previous_ids(&mint),
+                        Some(keys::History {
+                            direction: TransactionDirection::In,
+                            amount: u64::from(received),
+                            redeemed: Vec::new(),
+                            sender: None,
+                        }),
+                    )
+                    .await?;
+
+                Ok(Outcome::Received {
+                    update,
+                    amount: u64::from(received),
+                })
+            }
+            Job::RedeemNutzap {
+                mint,
+                proofs,
+                nutzap_id,
+                sender,
+            } => {
+                let wallet = ctx.wallet(&mint)?;
+                let options = ReceiveOptions {
+                    p2pk_signing_keys: vec![ctx.wallet_key.clone()],
+                    ..Default::default()
+                };
+                let received = wallet.receive_proofs(proofs, options, None, None).await?;
+
+                let update = ctx
+                    .sync_token_events(
+                        wallet,
+                        nostr_mint(&mint)?,
+                        &ctx.previous_ids(&mint),
+                        Some(keys::History {
+                            direction: TransactionDirection::In,
+                            amount: u64::from(received),
+                            redeemed: vec![nutzap_id],
+                            sender: Some(sender),
+                        }),
+                    )
+                    .await?;
+
+                Ok(Outcome::NutzapRedeemed {
+                    update,
+                    nutzap_id,
+                    amount: u64::from(received),
+                })
+            }
+        }
+    }
 }
 
 pub(crate) struct TokenUpdate {
@@ -68,6 +239,12 @@ pub(crate) enum Outcome {
     /// Token events published by a reconcile pass
     Reconciled {
         updates: Vec<TokenUpdate>,
+    },
+    QuoteCreated {
+        mint: MintUrl,
+        quote_id: String,
+        request: String,
+        amount: u64,
     },
     QuoteMinted {
         quote_id: String,
@@ -103,295 +280,130 @@ pub(crate) struct JobCtx<S> {
     pub(crate) tokens: HashMap<EventId, TokenEvent>,
 }
 
-pub(crate) async fn run_job<S>(job: Job, ctx: JobCtx<S>) -> Result<Outcome, Error>
-where
-    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + Send + Sync + 'static,
-{
-    match job {
-        Job::Reconcile => reconcile(ctx).await,
-        Job::ClaimQuote { mint, quote_id } => {
-            let wallet = wallet_for(&ctx, &mint)?;
-            let quote = wallet.check_mint_quote(&quote_id).await?;
-
-            if quote.state != MintQuoteState::Paid {
-                return Ok(Outcome::Idle);
-            }
-
-            let proofs = wallet.mint(&quote_id, SplitTarget::default(), None).await?;
-            let amount: u64 = proofs.iter().map(|proof| u64::from(proof.amount)).sum();
-
-            let update = sync_token_events(
-                &ctx.signer,
-                &ctx.client,
-                wallet,
-                nostr_mint(&mint)?,
-                &previous_ids(&ctx.tokens, &mint),
-                Some(History {
-                    direction: TransactionDirection::In,
-                    amount: u64::from(quote.amount.unwrap_or_default()),
-                    redeemed: Vec::new(),
-                    sender: None,
-                }),
-            )
-            .await?;
-
-            Ok(Outcome::QuoteMinted {
-                quote_id,
-                update,
-                amount,
-            })
-        }
-        Job::Melt { mint, invoice } => {
-            let wallet = wallet_for(&ctx, &mint)?;
-            let quote = wallet
-                .melt_quote(
-                    PaymentMethod::Known(KnownMethod::Bolt11),
-                    invoice,
-                    None,
-                    None,
-                )
-                .await?;
-
-            let finalized = wallet
-                .prepare_melt(&quote.id, HashMap::new())
-                .await?
-                .confirm()
-                .await?;
-
-            if finalized.state() != MeltQuoteState::Paid {
-                return Err(anyhow!("melt did not settle: {:?}", finalized.state()));
-            }
-
-            let amount = u64::from(finalized.total_amount());
-            let update = sync_token_events(
-                &ctx.signer,
-                &ctx.client,
-                wallet,
-                nostr_mint(&mint)?,
-                &previous_ids(&ctx.tokens, &mint),
-                Some(History {
-                    direction: TransactionDirection::Out,
-                    amount,
-                    redeemed: Vec::new(),
-                    sender: None,
-                }),
-            )
-            .await?;
-
-            Ok(Outcome::Melted { update, amount })
-        }
-        Job::SendToken { mint, amount } => {
-            let wallet = wallet_for(&ctx, &mint)?;
-            let prepared = wallet
-                .prepare_send(Amount::from(amount), SendOptions::default())
-                .await?;
-            let token = prepared.confirm(None).await?.to_string();
-
-            let update = sync_token_events(
-                &ctx.signer,
-                &ctx.client,
-                wallet,
-                nostr_mint(&mint)?,
-                &previous_ids(&ctx.tokens, &mint),
-                Some(History {
-                    direction: TransactionDirection::Out,
-                    amount,
-                    redeemed: Vec::new(),
-                    sender: None,
-                }),
-            )
-            .await?;
-
-            Ok(Outcome::Sent { update, token })
-        }
-        Job::Receive { mint, token } => {
-            let wallet = wallet_for(&ctx, &mint)?;
-            let received = wallet.receive(&token, ReceiveOptions::default()).await?;
-
-            let update = sync_token_events(
-                &ctx.signer,
-                &ctx.client,
-                wallet,
-                nostr_mint(&mint)?,
-                &previous_ids(&ctx.tokens, &mint),
-                Some(History {
-                    direction: TransactionDirection::In,
-                    amount: u64::from(received),
-                    redeemed: Vec::new(),
-                    sender: None,
-                }),
-            )
-            .await?;
-
-            Ok(Outcome::Received {
-                update,
-                amount: u64::from(received),
-            })
-        }
-        Job::RedeemNutzap {
-            mint,
-            proofs,
-            nutzap_id,
-            sender,
-        } => {
-            let wallet = wallet_for(&ctx, &mint)?;
-            let options = ReceiveOptions {
-                p2pk_signing_keys: vec![ctx.wallet_key.clone()],
-                ..Default::default()
-            };
-            let received = wallet.receive_proofs(proofs, options, None, None).await?;
-
-            let update = sync_token_events(
-                &ctx.signer,
-                &ctx.client,
-                wallet,
-                nostr_mint(&mint)?,
-                &previous_ids(&ctx.tokens, &mint),
-                Some(History {
-                    direction: TransactionDirection::In,
-                    amount: u64::from(received),
-                    redeemed: vec![nutzap_id],
-                    sender: Some(sender),
-                }),
-            )
-            .await?;
-
-            Ok(Outcome::NutzapRedeemed {
-                update,
-                nutzap_id,
-                amount: u64::from(received),
-            })
-        }
-    }
-}
-
-/// Claim paid quotes, then converge each mint.
-async fn reconcile<S>(ctx: JobCtx<S>) -> Result<Outcome, Error>
+impl<S> JobCtx<S>
 where
     S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + Sync,
 {
-    let mut tokens = ctx.tokens.clone();
-    let mut updates = Vec::new();
-
-    for (mint_url, wallet) in &ctx.wallets {
-        let minted = wallet.mint_unissued_quotes().await?;
-        if minted == Amount::ZERO {
-            continue;
-        }
-
-        let update = sync_token_events(
-            &ctx.signer,
-            &ctx.client,
-            wallet,
-            nostr_mint(mint_url)?,
-            &previous_ids(&tokens, mint_url),
-            Some(History {
-                direction: TransactionDirection::In,
-                amount: u64::from(minted),
-                redeemed: Vec::new(),
-                sender: None,
-            }),
-        )
-        .await?;
-
-        apply_update(&mut tokens, &update);
-        updates.push(update);
+    fn wallet(&self, mint: &MintUrl) -> Result<&Wallet, Error> {
+        self.wallets
+            .get(mint)
+            .ok_or_else(|| anyhow!("no open wallet for mint {mint}"))
     }
 
-    for (mint_url, wallet) in &ctx.wallets {
-        let mut relay_ys = HashSet::new();
-        let mut added = Vec::new();
+    fn previous_ids(&self, mint: &MintUrl) -> Vec<EventId> {
+        previous_ids(&self.tokens, mint)
+    }
 
-        for token in tokens
-            .values()
-            .filter(|token| token.mint.as_str() == mint_url.to_string())
-        {
-            for proof in &token.proofs {
-                let info = match proof_info(proof, mint_url) {
-                    Ok(info) => info,
-                    Err(error) => {
-                        log::warn!("skipping proof: {error:#}");
-                        continue;
-                    }
-                };
-                if relay_ys.insert(info.y) {
-                    added.push(info);
-                }
-            }
-        }
-
+    /// Publish the store's current unspent set as a fresh token event.
+    async fn sync_token_events(
+        &self,
+        wallet: &Wallet,
+        mint: Url,
+        previous: &[EventId],
+        history: Option<keys::History>,
+    ) -> Result<TokenUpdate, Error> {
+        let me = self.signer.get_public_key_async().await?;
         let unspent = wallet.get_unspent_proofs().await?;
-        let removed = unspent
+
+        let proofs = unspent
             .iter()
-            .filter(|proof| match proof.y() {
-                Ok(y) => !relay_ys.contains(&y),
-                Err(_) => false,
-            })
-            .map(|proof| proof.y())
+            .map(cashu_proof)
             .collect::<Result<Vec<_>, _>>()?;
 
-        wallet.localstore.update_proofs(added, removed).await?;
+        let mut token = TokenEvent::new(mint, proofs);
+        token.del = previous.iter().map(|id| id.to_hex()).collect();
+        let event = keys::build_token_event(&self.signer, &me, &token).await?;
+        self.client.send_event(&event).await?;
+
+        if !previous.is_empty() {
+            let deletion = keys::build_token_deletion(&self.signer, previous).await?;
+            self.client.send_event(&deletion).await?;
+        }
+
+        if let Some(history) = history {
+            let history_event =
+                keys::build_history_event(&self.signer, &me, &history, event.id, previous).await?;
+            self.client.send_event(&history_event).await?;
+        }
+
+        Ok(TokenUpdate {
+            event_id: event.id,
+            token,
+            destroyed: previous.to_vec(),
+        })
     }
 
-    Ok(Outcome::Reconciled { updates })
-}
+    /// Claim paid quotes, then converge each mint.
+    async fn reconcile(self) -> Result<Outcome, Error> {
+        let mut tokens = self.tokens.clone();
+        let mut updates = Vec::new();
 
-/// Publish the store's current unspent set as a fresh token event.
-async fn sync_token_events<S>(
-    signer: &S,
-    client: &Client,
-    wallet: &Wallet,
-    mint: Url,
-    previous: &[EventId],
-    history: Option<History>,
-) -> Result<TokenUpdate, Error>
-where
-    S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + Sync + ?Sized,
-{
-    let me = signer.get_public_key_async().await?;
-    let unspent = wallet.get_unspent_proofs().await?;
+        for (mint_url, wallet) in &self.wallets {
+            wallet.recover_incomplete_sagas().await?;
 
-    let mut proofs = Vec::new();
-    for proof in &unspent {
-        proofs.push(cashu_proof(proof)?);
+            let minted = wallet.mint_unissued_quotes().await?;
+            if minted == Amount::ZERO {
+                continue;
+            }
+
+            let update = self
+                .sync_token_events(
+                    wallet,
+                    nostr_mint(mint_url)?,
+                    &previous_ids(&tokens, mint_url),
+                    Some(keys::History {
+                        direction: TransactionDirection::In,
+                        amount: u64::from(minted),
+                        redeemed: Vec::new(),
+                        sender: None,
+                    }),
+                )
+                .await?;
+
+            for id in &update.destroyed {
+                tokens.remove(id);
+            }
+            tokens.insert(update.event_id, update.token.clone());
+            updates.push(update);
+        }
+
+        for (mint_url, wallet) in &self.wallets {
+            let mut relay_ys = HashSet::new();
+            let mut added = Vec::new();
+
+            for token in tokens
+                .values()
+                .filter(|token| token.mint.as_str() == mint_url.to_string())
+            {
+                for proof in &token.proofs {
+                    let info = match proof_info(proof, mint_url) {
+                        Ok(info) => info,
+                        Err(error) => {
+                            log::warn!("skipping proof: {error:#}");
+                            continue;
+                        }
+                    };
+                    if relay_ys.insert(info.y) {
+                        added.push(info);
+                    }
+                }
+            }
+
+            let unspent = wallet.get_unspent_proofs().await?;
+            let removed = unspent
+                .iter()
+                .filter(|proof| match proof.y() {
+                    Ok(y) => !relay_ys.contains(&y),
+                    Err(_) => false,
+                })
+                .map(|proof| proof.y())
+                .collect::<Result<Vec<_>, _>>()?;
+
+            wallet.localstore.update_proofs(added, removed).await?;
+        }
+
+        Ok(Outcome::Reconciled { updates })
     }
-
-    let token = TokenEvent::new(mint, proofs);
-    let event = keys::build_token_event(signer, &me, &token).await?;
-    client.send_event(&event).await?;
-
-    if !previous.is_empty() {
-        let deletion = keys::build_token_deletion(signer, previous).await?;
-        client.send_event(&deletion).await?;
-    }
-
-    if let Some(history) = history {
-        let history_event = keys::build_history_event(
-            signer,
-            &me,
-            history.direction,
-            history.amount,
-            event.id,
-            previous,
-            &history.redeemed,
-            history.sender,
-        )
-        .await?;
-        client.send_event(&history_event).await?;
-    }
-
-    Ok(TokenUpdate {
-        event_id: event.id,
-        token,
-        destroyed: previous.to_vec(),
-    })
-}
-
-fn apply_update(tokens: &mut HashMap<EventId, TokenEvent>, update: &TokenUpdate) {
-    for id in &update.destroyed {
-        tokens.remove(id);
-    }
-    tokens.insert(update.event_id, update.token.clone());
 }
 
 fn previous_ids(tokens: &HashMap<EventId, TokenEvent>, mint: &MintUrl) -> Vec<EventId> {
@@ -402,16 +414,6 @@ fn previous_ids(tokens: &HashMap<EventId, TokenEvent>, mint: &MintUrl) -> Vec<Ev
         .collect()
 }
 
-fn wallet_for<'a, S>(ctx: &'a JobCtx<S>, mint: &MintUrl) -> Result<&'a Wallet, Error> {
-    ctx.wallets
-        .get(mint)
-        .ok_or_else(|| anyhow!("no open wallet for mint {mint}"))
-}
-
-fn nostr_mint(mint: &MintUrl) -> Result<Url, Error> {
-    Url::parse(&mint.to_string()).map_err(|error| anyhow!("invalid mint url: {error}"))
-}
-
 fn cashu_proof(proof: &Proof) -> Result<CashuProof, Error> {
     Ok(CashuProof {
         id: proof.keyset_id.to_string(),
@@ -419,6 +421,10 @@ fn cashu_proof(proof: &Proof) -> Result<CashuProof, Error> {
         secret: proof.secret.to_string(),
         c: proof.c.to_string(),
     })
+}
+
+fn nostr_mint(mint: &MintUrl) -> Result<Url, Error> {
+    Url::parse(&mint.to_string()).map_err(|error| anyhow!("invalid mint url: {error}"))
 }
 
 fn proof_info(proof: &CashuProof, mint: &MintUrl) -> Result<ProofInfo, Error> {
