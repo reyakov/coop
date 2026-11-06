@@ -1330,19 +1330,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cdk-nostr"
-version = "0.18.0"
-source = "git+https://github.com/cashubtc/cdk#578e719fbf683871a8480961627700f01f3ee7ee"
-dependencies = [
- "nostr",
- "nostr-sdk",
- "thiserror 2.0.21",
- "tokio",
- "tokio-util",
- "tracing",
-]
-
-[[package]]
 name = "cdk-redb"
 version = "0.18.0"
 source = "git+https://github.com/cashubtc/cdk#578e719fbf683871a8480961627700f01f3ee7ee"
@@ -6133,7 +6120,6 @@ version = "2.0.0-alpha3"
 dependencies = [
  "anyhow",
  "cdk",
- "cdk-nostr",
  "cdk-redb",
  "common",
  "flume 0.11.1",

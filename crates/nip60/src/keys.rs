@@ -175,6 +175,8 @@ pub(crate) async fn build_history_event<S>(
     amount: u64,
     created: EventId,
     destroyed: &[EventId],
+    redeemed: &[EventId],
+    sender: Option<PublicKey>,
 ) -> Result<Event, Error>
 where
     S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + ?Sized,
@@ -200,11 +202,50 @@ where
         "created".to_string(),
     ]);
 
+    let mut tags: Vec<Tag> = redeemed
+        .iter()
+        .map(|id| Tag::custom("e", [id.to_hex(), String::new(), "redeemed".to_string()]))
+        .collect();
+
+    if let Some(sender) = sender {
+        tags.push(Tag::custom("p", [sender.to_hex()]));
+    }
+
     let content = signer
         .nip44_encrypt_async(me, &serde_json::to_string(&rows)?)
         .await?;
 
     Ok(EventBuilder::new(Kind::CashuWalletSpendingHistory, content)
+        .tags(tags)
+        .finalize_async(signer)
+        .await?)
+}
+
+pub(crate) async fn build_nutzap_info_event<S>(
+    signer: &S,
+    mints: &[Url],
+    relays: &[&str],
+    wallet_pubkey: PublicKey,
+) -> Result<Event, Error>
+where
+    S: AsyncGetPublicKey + AsyncSignEvent + ?Sized,
+{
+    let mut tags: Vec<Tag> = relays
+        .iter()
+        .map(|relay| Tag::custom("relay", [relay.to_string()]))
+        .collect();
+
+    for mint in mints {
+        tags.push(Tag::custom("mint", [mint.to_string(), "sat".to_string()]));
+    }
+
+    tags.push(Tag::custom(
+        "pubkey",
+        [format!("02{}", wallet_pubkey.to_hex())],
+    ));
+
+    Ok(EventBuilder::new(Kind::Custom(10019), "")
+        .tags(tags)
         .finalize_async(signer)
         .await?)
 }

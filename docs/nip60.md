@@ -1,7 +1,8 @@
 # NIP-60: cashu wallet — implementation plan
 
 Spec: https://github.com/nostr-protocol/nips/blob/master/60.md
-CDK: https://github.com/cashubtc/cdk (crates `cdk`, `cdk-redb`, `cdk-nostr`, from git main)
+CDK: https://github.com/cashubtc/cdk (crates `cdk`, `cdk-redb`, from git main)
+NIP-61: https://github.com/nostr-protocol/nips/blob/master/61.md
 
 NIP-60 stores a user's cashu wallet state on relays: the wallet config
 (kind `17375`), its unspent proofs (kind `7375`), and an optional spending
@@ -28,9 +29,13 @@ Key mechanics:
   key). It exists to unlock P2PK-locked ecash, i.e. redeeming NIP-61
   nutzaps.
 - NIP-60 itself does not move money to/from others. Receiving ecash from
-  peers is NIP-61 (nutzaps): gift-wrapped token events P2PK-locked to the
-  wallet pubkey. Redemption is `receive` + a `7376` with an `e` tag
-  marked `redeemed` (this one tag stays unencrypted).
+  peers is NIP-61 (nutzaps): public `kind:9321` events published by the
+  sender, p-tagging the recipient's nostr identity pubkey, carrying
+  P2PK-locked proofs (`proof` tags) on a trusted mint (`u` tag). Redemption
+  is `receive_proofs` with the wallet signing key + a `7376` whose
+  unencrypted tags mark the nutzap `redeemed` and carry the sender pubkey.
+- NIP-61 discovery runs through a `kind:10019` informational event
+  (relays, mints, wallet pubkey) published alongside the wallet event.
 - History (7376) and quote events (7374) are optional; the spec recommends
   local state for quotes. We publish 7376, skip 7374 (cdk keeps quotes in
   its local DB).
@@ -246,11 +251,31 @@ Implemented in `crates/nip60/src/ops.rs` plus registry wiring:
 Deferred: NUT-20/quote events (`7374`, per spec local state is fine),
 sending tokens in-chat (v1 copies the token string).
 
-### Phase 3 — NIP-61 redemption (cdk-nostr)
+### Phase 3 — NIP-61 redemption (done)
 
-1. `cdk_nostr::NostrInbox` on the wallet key + relays, started in
-   `Tokio::spawn`, stopped on reset; rumors parsed into proofs + mint.
-2. Redemption path with `p2pk_signing_keys`, `redeemed` history tag.
+Spec note: NIP-61 changed since this plan was first written — nutzaps are
+now public `kind:9321` events p-tagging the recipient's nostr identity
+pubkey (the old draft's `kind:938` + gift-wrap shape is gone). So
+`cdk_nostr::NostrInbox` (a NIP-17 gift-wrap listener) is not the right
+tool; the dependency was dropped and reception rides the app's existing
+nostr client.
+
+Implemented:
+
+- `setup` also publishes a `kind:10019` nutzap info event (bootstrap
+  relays, wallet mints, wallet pubkey) so other clients can nutzap us.
+- A second subscription (`kinds: [9321], #p: me`) feeds nutzaps through
+  the same notification listener; the cache load scans stored `9321`s
+  too, so unredeemed nutzaps survive restarts.
+- `absorb_nutzap` parses `proof`/`u` tags, resolves the mint against the
+  open wallets, verifies every proof is P2PK-locked to the wallet pubkey
+  (NUT-10 spending conditions), and enqueues `Job::RedeemNutzap` through
+  the serialized job queue.
+- The job redeems via `wallet.receive_proofs` with the wallet key in
+  `p2pk_signing_keys`, then syncs with a `7376` history event whose
+  unencrypted tags mark the nutzap `redeemed` and tag the sender.
+- Already-redeemed nutzaps (from cached `7376` tags) and ones with a job
+  in flight are skipped; failed redemptions are retried on relay echo.
 
 ### Phase 4 — UI
 

@@ -23,4 +23,3 @@ tokio = { version = "1", default-features = false, features = [ "rt" ] }
 
 cdk.workspace = true
 cdk-redb.workspace = true
-cdk-nostr.workspace = true

@@ -6,7 +6,10 @@ use cdk::Amount;
 use cdk::amount::SplitTarget;
 use cdk::mint_url::MintUrl;
 use cdk::nuts::nut00::KnownMethod;
-use cdk::nuts::{CurrencyUnit, Id, MeltQuoteState, MintQuoteState, PaymentMethod, Proof, State};
+use cdk::nuts::{
+    CurrencyUnit, Id, MeltQuoteState, MintQuoteState, PaymentMethod, Proof, Proofs, SecretKey,
+    State,
+};
 use cdk::secret::Secret;
 use cdk::wallet::types::ProofInfo;
 use cdk::wallet::{ReceiveOptions, SendOptions, Wallet};
@@ -19,10 +22,38 @@ use crate::keys;
 #[derive(Debug, Clone)]
 pub(crate) enum Job {
     Reconcile,
-    ClaimQuote { mint: MintUrl, quote_id: String },
-    Melt { mint: MintUrl, invoice: String },
-    SendToken { mint: MintUrl, amount: u64 },
-    Receive { mint: MintUrl, token: String },
+    ClaimQuote {
+        mint: MintUrl,
+        quote_id: String,
+    },
+    Melt {
+        mint: MintUrl,
+        invoice: String,
+    },
+    SendToken {
+        mint: MintUrl,
+        amount: u64,
+    },
+    Receive {
+        mint: MintUrl,
+        token: String,
+    },
+    RedeemNutzap {
+        mint: MintUrl,
+        proofs: Proofs,
+        nutzap_id: EventId,
+        sender: PublicKey,
+    },
+}
+
+/// History event payload for a token state change
+pub(crate) struct History {
+    pub(crate) direction: TransactionDirection,
+    pub(crate) amount: u64,
+    /// NIP-61 nutzap events redeemed by this state change
+    pub(crate) redeemed: Vec<EventId>,
+    /// Author of the redeemed nutzap, for the unencrypted `p` tag
+    pub(crate) sender: Option<PublicKey>,
 }
 
 pub(crate) struct TokenUpdate {
@@ -55,10 +86,17 @@ pub(crate) enum Outcome {
         update: TokenUpdate,
         amount: u64,
     },
+    NutzapRedeemed {
+        update: TokenUpdate,
+        nutzap_id: EventId,
+        amount: u64,
+    },
 }
 
 pub(crate) struct JobCtx<S> {
     pub(crate) wallets: HashMap<MintUrl, Wallet>,
+    /// Wallet signing key, unlocking P2PK-locked nutzap proofs
+    pub(crate) wallet_key: SecretKey,
     pub(crate) signer: S,
     pub(crate) client: Client,
     /// Relay token events at schedule time.
@@ -88,7 +126,12 @@ where
                 wallet,
                 nostr_mint(&mint)?,
                 &previous_ids(&ctx.tokens, &mint),
-                Some((TransactionDirection::In, amount)),
+                Some(History {
+                    direction: TransactionDirection::In,
+                    amount: u64::from(quote.amount.unwrap_or_default()),
+                    redeemed: Vec::new(),
+                    sender: None,
+                }),
             )
             .await?;
 
@@ -126,7 +169,12 @@ where
                 wallet,
                 nostr_mint(&mint)?,
                 &previous_ids(&ctx.tokens, &mint),
-                Some((TransactionDirection::Out, amount)),
+                Some(History {
+                    direction: TransactionDirection::Out,
+                    amount,
+                    redeemed: Vec::new(),
+                    sender: None,
+                }),
             )
             .await?;
 
@@ -145,7 +193,12 @@ where
                 wallet,
                 nostr_mint(&mint)?,
                 &previous_ids(&ctx.tokens, &mint),
-                Some((TransactionDirection::Out, amount)),
+                Some(History {
+                    direction: TransactionDirection::Out,
+                    amount,
+                    redeemed: Vec::new(),
+                    sender: None,
+                }),
             )
             .await?;
 
@@ -161,12 +214,51 @@ where
                 wallet,
                 nostr_mint(&mint)?,
                 &previous_ids(&ctx.tokens, &mint),
-                Some((TransactionDirection::In, u64::from(received))),
+                Some(History {
+                    direction: TransactionDirection::In,
+                    amount: u64::from(received),
+                    redeemed: Vec::new(),
+                    sender: None,
+                }),
             )
             .await?;
 
             Ok(Outcome::Received {
                 update,
+                amount: u64::from(received),
+            })
+        }
+        Job::RedeemNutzap {
+            mint,
+            proofs,
+            nutzap_id,
+            sender,
+        } => {
+            let wallet = wallet_for(&ctx, &mint)?;
+            let options = ReceiveOptions {
+                p2pk_signing_keys: vec![ctx.wallet_key.clone()],
+                ..Default::default()
+            };
+            let received = wallet.receive_proofs(proofs, options, None, None).await?;
+
+            let update = sync_token_events(
+                &ctx.signer,
+                &ctx.client,
+                wallet,
+                nostr_mint(&mint)?,
+                &previous_ids(&ctx.tokens, &mint),
+                Some(History {
+                    direction: TransactionDirection::In,
+                    amount: u64::from(received),
+                    redeemed: vec![nutzap_id],
+                    sender: Some(sender),
+                }),
+            )
+            .await?;
+
+            Ok(Outcome::NutzapRedeemed {
+                update,
+                nutzap_id,
                 amount: u64::from(received),
             })
         }
@@ -193,7 +285,12 @@ where
             wallet,
             nostr_mint(mint_url)?,
             &previous_ids(&tokens, mint_url),
-            Some((TransactionDirection::In, u64::from(minted))),
+            Some(History {
+                direction: TransactionDirection::In,
+                amount: u64::from(minted),
+                redeemed: Vec::new(),
+                sender: None,
+            }),
         )
         .await?;
 
@@ -246,7 +343,7 @@ async fn sync_token_events<S>(
     wallet: &Wallet,
     mint: Url,
     previous: &[EventId],
-    history: Option<(TransactionDirection, u64)>,
+    history: Option<History>,
 ) -> Result<TokenUpdate, Error>
 where
     S: AsyncGetPublicKey + AsyncSignEvent + AsyncNip44 + Sync + ?Sized,
@@ -268,9 +365,18 @@ where
         client.send_event(&deletion).await?;
     }
 
-    if let Some((direction, amount)) = history {
-        let history_event =
-            keys::build_history_event(signer, &me, direction, amount, event.id, previous).await?;
+    if let Some(history) = history {
+        let history_event = keys::build_history_event(
+            signer,
+            &me,
+            history.direction,
+            history.amount,
+            event.id,
+            previous,
+            &history.redeemed,
+            history.sender,
+        )
+        .await?;
         client.send_event(&history_event).await?;
     }
 

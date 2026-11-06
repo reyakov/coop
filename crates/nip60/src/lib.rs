@@ -7,9 +7,9 @@ use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use anyhow::Error;
+use anyhow::{Error, anyhow};
 use cdk::mint_url::MintUrl;
-use cdk::nuts::CurrencyUnit;
+use cdk::nuts::{CurrencyUnit, Proof, Proofs, SpendingConditions};
 use cdk::wallet::{Wallet, WalletBuilder};
 use cdk_redb::WalletRedbDatabase;
 use common::config_dir;
@@ -52,6 +52,12 @@ pub struct WalletRegistry {
     /// Token events killed by a kind 5 delete or superseded by a `del` chain
     stale: HashSet<EventId>,
     quotes: Vec<MintQuoteEntry>,
+    /// NIP-61 nutzap events already claimed, recorded by our 7376 events
+    redeemed: HashSet<EventId>,
+    /// Nutzaps seen but not yet redeemed (wallet was not ready)
+    pending_nutzaps: Vec<Event>,
+    /// Nutzaps with a redemption job in flight
+    redeeming: HashSet<EventId>,
     store: Option<Arc<WalletRedbDatabase>>,
     wallets: HashMap<MintUrl, Wallet>,
     loading: bool,
@@ -67,6 +73,8 @@ struct LoadedState {
     wallet: Option<keys::WalletData>,
     tokens: HashMap<EventId, TokenEvent>,
     stale: HashSet<EventId>,
+    redeemed: HashSet<EventId>,
+    nutzaps: Vec<Event>,
 }
 
 impl WalletRegistry {
@@ -95,6 +103,9 @@ impl WalletRegistry {
             tokens: HashMap::new(),
             stale: HashSet::new(),
             quotes: Vec::new(),
+            redeemed: HashSet::new(),
+            pending_nutzaps: Vec::new(),
+            redeeming: HashSet::new(),
             store: None,
             wallets: HashMap::new(),
             loading: false,
@@ -316,9 +327,18 @@ impl WalletRegistry {
 
         let publish = cx.background_spawn(async move {
             let me = signer.get_public_key_async().await?;
+
             let event = keys::build_wallet_event(&signer, &me, &privkey, &mints).await?;
             client.send_event(&event).await?;
-            client.database().save_event(&event).await?;
+
+            let info = keys::build_nutzap_info_event(
+                &signer,
+                &mints,
+                &state::BOOTSTRAP_RELAYS,
+                Keys::new(privkey.clone()).public_key(),
+            )
+            .await?;
+            client.send_event(&info).await?;
 
             Ok::<_, Error>(keys::WalletData {
                 event_id: event.id,
@@ -362,6 +382,9 @@ impl WalletRegistry {
         self.tokens.clear();
         self.stale.clear();
         self.quotes.clear();
+        self.redeemed.clear();
+        self.pending_nutzaps.clear();
+        self.redeeming.clear();
         self.store = None;
         self.wallets.clear();
         self.loading = false;
@@ -392,14 +415,22 @@ impl WalletRegistry {
             while let Some(notification) = notifications.next().await {
                 if let ClientNotification::Message { message, .. } = notification
                     && let RelayMessage::Event { event, .. } = *message
-                    && me == Some(event.pubkey)
-                    && (matches!(
-                        event.kind,
-                        Kind::CashuWallet
-                            | Kind::CashuWalletUnspentProof
-                            | Kind::CashuWalletSpendingHistory
-                    ) || is_token_deletion(&event))
                 {
+                    let ours = me == Some(event.pubkey);
+                    let wallet_event = ours
+                        && (matches!(
+                            event.kind,
+                            Kind::CashuWallet
+                                | Kind::CashuWalletUnspentProof
+                                | Kind::CashuWalletSpendingHistory
+                        ) || is_token_deletion(&event));
+                    let nutzap = event.kind == Kind::Custom(9321)
+                        && me.is_some_and(|me| event.tags.public_keys().any(|key| key == me));
+
+                    if !wallet_event && !nutzap {
+                        continue;
+                    }
+
                     // Prune the dedup set before it grows unbounded
                     if processed_events.len() >= MAX_PROCESSED {
                         processed_events.clear();
@@ -430,7 +461,9 @@ impl WalletRegistry {
         match event.kind {
             Kind::CashuWallet => self.absorb_wallet(event, cx),
             Kind::CashuWalletUnspentProof => self.absorb_token(event, cx),
+            Kind::CashuWalletSpendingHistory => {}
             Kind::EventDeletion => self.absorb_deletion(event, cx),
+            Kind::Custom(9321) => self.absorb_nutzap(event, cx),
             _ => {}
         }
     }
@@ -538,6 +571,74 @@ impl WalletRegistry {
         }
     }
 
+    /// Claim a NIP-61 nutzap.
+    fn absorb_nutzap(&mut self, event: Event, cx: &mut Context<Self>) {
+        if self.redeemed.contains(&event.id) || self.redeeming.contains(&event.id) {
+            return;
+        }
+
+        if self.store.is_none() || self.wallets.is_empty() {
+            self.pending_nutzaps.push(event);
+            return;
+        }
+
+        let Some(wallet) = self.wallet.as_ref() else {
+            return;
+        };
+
+        let Some(mint) = nutzap_mint(&event) else {
+            log::warn!("nutzap {} has no mint", event.id);
+            return;
+        };
+
+        let Ok(mint_url) = MintUrl::from_str(&mint) else {
+            log::warn!("nutzap {} has an invalid mint: {mint}", event.id);
+            return;
+        };
+
+        if !self.wallets.contains_key(&mint_url) {
+            log::warn!("nutzap {} is on an unlisted mint: {mint_url}", event.id);
+            return;
+        }
+
+        let proofs = match nutzap_proofs(&event) {
+            Ok(proofs) => proofs,
+            Err(error) => {
+                log::warn!("nutzap {} has no usable proofs: {error:#}", event.id);
+                return;
+            }
+        };
+
+        let target = format!(
+            "02{}",
+            Keys::new(wallet.privkey.clone()).public_key().to_hex()
+        );
+        if !proofs.iter().all(|proof| locked_to(proof, &target)) {
+            log::warn!(
+                "nutzap {} proofs are not locked to the wallet key",
+                event.id
+            );
+            return;
+        }
+
+        self.redeeming.insert(event.id);
+        self.schedule_job(
+            ops::Job::RedeemNutzap {
+                mint: mint_url,
+                proofs,
+                nutzap_id: event.id,
+                sender: event.pubkey,
+            },
+            cx,
+        );
+    }
+
+    fn drain_pending_nutzaps(&mut self, cx: &mut Context<Self>) {
+        for event in std::mem::take(&mut self.pending_nutzaps) {
+            self.absorb_nutzap(event, cx);
+        }
+    }
+
     /// Open the cdk store and build a wallet per mint that is not open yet.
     fn ensure_wallets(&mut self, cx: &mut Context<Self>) {
         let Some(data) = self.wallet.clone() else {
@@ -587,6 +688,7 @@ impl WalletRegistry {
             }
 
             cx.notify();
+            self.drain_pending_nutzaps(cx);
             self.schedule_job(ops::Job::Reconcile, cx);
 
             return;
@@ -613,6 +715,7 @@ impl WalletRegistry {
                         }
 
                         this.store_opening = false;
+                        this.drain_pending_nutzaps(cx);
                         cx.notify();
                         this.schedule_job(ops::Job::Reconcile, cx);
                     })
@@ -657,12 +760,30 @@ impl WalletRegistry {
 
         let signer = NostrRegistry::global(cx).read(cx).signer().clone();
         let client = NostrRegistry::global(cx).read(cx).client().clone();
+
+        let wallet_key = match self
+            .wallet
+            .as_ref()
+            .map(|wallet| cdk::nuts::SecretKey::from_str(&wallet.privkey.to_secret_hex()))
+        {
+            Some(Ok(key)) => key,
+            Some(Err(error)) => {
+                self.emit_error(format!("invalid wallet key: {error}"), cx);
+                return;
+            }
+            None => {
+                self.emit_error("Wallet is not ready".to_string(), cx);
+                return;
+            }
+        };
+
         self.job_running = true;
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             let result = Tokio::spawn_result(cx, async move {
                 let ctx = ops::JobCtx {
                     wallets,
+                    wallet_key,
                     signer,
                     client,
                     tokens,
@@ -731,6 +852,17 @@ impl WalletRegistry {
                 self.emit_updated(cx);
                 log::info!("received {amount} sats");
             }
+            ops::Outcome::NutzapRedeemed {
+                update,
+                nutzap_id,
+                amount,
+            } => {
+                self.redeeming.remove(&nutzap_id);
+                self.redeemed.insert(nutzap_id);
+                self.apply_token_update(update);
+                self.emit_updated(cx);
+                log::info!("redeemed nutzap {nutzap_id} for {amount} sats");
+            }
         }
     }
 
@@ -746,9 +878,16 @@ impl WalletRegistry {
         self.wallet = state.wallet;
         self.tokens = state.tokens;
         self.stale = state.stale;
+        self.redeemed = state.redeemed;
         cx.notify();
         self.ensure_wallets(cx);
         self.schedule_job(ops::Job::Reconcile, cx);
+
+        // Claimed once the wallets are open; live redemptions continue
+        // through the notification listener
+        for event in state.nutzaps {
+            self.pending_nutzaps.push(event);
+        }
     }
 
     fn load(&mut self, cx: &mut Context<Self>) {
@@ -796,10 +935,10 @@ impl WalletRegistry {
 
             // Subscribe only after the cache snapshot; from then on the state
             // advances exclusively through the notification listener.
-            let subscribed =
-                cx.background_spawn(
-                    async move { subscribe_client.subscribe(wallet_filter(me)).await },
-                );
+            let subscribed = cx.background_spawn(async move {
+                subscribe_client.subscribe(wallet_filter(me)).await?;
+                subscribe_client.subscribe(nutzap_filter(me)).await
+            });
             if let Err(error) = subscribed.await {
                 log::warn!("wallet subscription failed: {error:#}");
             }
@@ -822,9 +961,11 @@ where
     S: AsyncNip44 + ?Sized,
 {
     let events = client.database().query(wallet_filter(*me)).await?;
+    let nutzap_events = client.database().query(nutzap_filter(*me)).await?;
 
     let mut wallet_event: Option<&Event> = None;
     let mut token_events = Vec::new();
+    let mut history_events = Vec::new();
     let mut deletions = Vec::new();
 
     for event in &events {
@@ -840,10 +981,24 @@ where
                 }
             }
             Kind::CashuWalletUnspentProof => token_events.push(event),
+            Kind::CashuWalletSpendingHistory => history_events.push(event),
             Kind::EventDeletion if is_token_deletion(event) => deletions.push(event),
             _ => {}
         }
     }
+
+    // Nutzap events tagged redeemed in our history events are already claimed
+    let mut redeemed = HashSet::new();
+    for event in history_events {
+        for id in redeemed_ids(event) {
+            redeemed.insert(id);
+        }
+    }
+
+    let nutzaps = nutzap_events
+        .into_iter()
+        .filter(|event| !redeemed.contains(&event.id))
+        .collect();
 
     let mut stale = HashSet::new();
     for event in deletions {
@@ -901,6 +1056,8 @@ where
         wallet,
         tokens,
         stale,
+        redeemed,
+        nutzaps,
     })
 }
 
@@ -940,10 +1097,82 @@ fn wallet_filter(author: PublicKey) -> Filter {
     ])
 }
 
+/// NIP-61 nutzaps: public kind 9321 events p-tagging our identity pubkey
+fn nutzap_filter(me: PublicKey) -> Filter {
+    Filter::new()
+        .kinds([Kind::Custom(9321)])
+        .custom_tag(SingleLetterTag::LOWERCASE_P, me.to_hex())
+}
+
 fn is_token_deletion(event: &Event) -> bool {
     event.kind == Kind::EventDeletion
         && event
             .tags
             .iter()
             .any(|tag| tag.kind() == "k" && tag.content() == Some("7375"))
+}
+
+/// The `u` tag carries the mint URL; fall back to the older `mint` tag
+fn nutzap_mint(event: &Event) -> Option<String> {
+    let tag = event
+        .tags
+        .iter()
+        .find(|tag| tag.kind() == "u" && tag.content().is_some())
+        .or_else(|| {
+            event
+                .tags
+                .iter()
+                .find(|tag| tag.kind() == "mint" && tag.content().is_some())
+        })?;
+
+    tag.content().map(str::to_string)
+}
+
+fn nutzap_proofs(event: &Event) -> Result<Proofs, Error> {
+    let mut proofs = Vec::new();
+    for tag in event.tags.iter() {
+        if tag.kind() != "proof" {
+            continue;
+        }
+
+        let Some(value) = tag.content() else {
+            continue;
+        };
+
+        let proof: Proof =
+            serde_json::from_str(value).map_err(|error| anyhow!("invalid proof tag: {error}"))?;
+        proofs.push(proof);
+    }
+
+    if proofs.is_empty() {
+        return Err(anyhow!("no proofs"));
+    }
+
+    Ok(Proofs::from(proofs))
+}
+
+/// NIP-61 requires nutzap proofs to be P2PK-locked to the wallet pubkey.
+fn locked_to(proof: &Proof, target: &str) -> bool {
+    let Ok(conditions) = SpendingConditions::try_from(&proof.secret) else {
+        return false;
+    };
+
+    conditions
+        .pubkeys()
+        .map(|keys| keys.iter().any(|key| key.to_string() == target))
+        .unwrap_or(false)
+}
+
+/// Nutzap event ids our history events marked as redeemed.
+fn redeemed_ids(event: &Event) -> Vec<EventId> {
+    event
+        .tags
+        .iter()
+        .filter(|tag| {
+            let slice = tag.as_slice();
+            slice.len() >= 4 && slice[0] == "e" && slice[3] == "redeemed"
+        })
+        .filter_map(|tag| tag.content())
+        .filter_map(|hex| EventId::from_hex(hex).ok())
+        .collect()
 }

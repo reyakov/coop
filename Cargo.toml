@@ -54,7 +54,6 @@ rand = { version = "0.10", default-features = false, features = [ "std", "sys_rn
 # storage: pure Rust, avoids the libsqlite3-sys links clash with nostr-sqlite.
 cdk = { git = "https://github.com/cashubtc/cdk", default-features = false, features = [ "wallet" ] }
 cdk-redb = { git = "https://github.com/cashubtc/cdk", default-features = false, features = [ "wallet" ] }
-cdk-nostr = { git = "https://github.com/cashubtc/cdk", default-features = false }
 
 # Others
 anyhow = "1.0.44"
