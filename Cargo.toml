@@ -34,7 +34,7 @@ nostr-connect = { git = "https://github.com/rust-nostr/nostr" }
 nostr-browser-signer = { git = "https://github.com/rust-nostr/nostr" }
 nostr-sdk = { git = "https://github.com/rust-nostr/nostr" }
 nostr-sqlite = { git = "https://github.com/rust-nostr/nostr" }
-nostr = { git = "https://github.com/rust-nostr/nostr", features = [ "nip59", "nip49", "nip44", "nip98" ] }
+nostr = { git = "https://github.com/rust-nostr/nostr", features = [ "nip59", "nip49", "nip44", "nip60", "nip98" ] }
 
 # Crypto (NIP-17 encrypted file messages)
 aes-gcm = "0.10"
@@ -47,6 +47,14 @@ chacha20 = "0.9"
 hmac = "0.12"
 # Pinned to the instance `nostr-sdk` already builds, so NIP-44 nonces share it
 rand = { version = "0.10", default-features = false, features = [ "std", "sys_rng", "thread_rng" ] }
+
+# Cashu (NIP-60). From git: the published 0.18.x line targets nostr 0.44 and
+# cannot unify with the git rust-nostr used here, while main targets 0.45.x
+# (redirected to this repo by the [patch.crates-io] section below). redb
+# storage: pure Rust, avoids the libsqlite3-sys links clash with nostr-sqlite.
+cdk = { git = "https://github.com/cashubtc/cdk", default-features = false, features = [ "wallet" ] }
+cdk-redb = { git = "https://github.com/cashubtc/cdk", default-features = false, features = [ "wallet" ] }
+cdk-nostr = { git = "https://github.com/cashubtc/cdk", default-features = false }
 
 # Others
 anyhow = "1.0.44"
@@ -65,6 +73,12 @@ smol = "2"
 webbrowser = "1.0.4"
 tracing-subscriber = { version = "0.3.18", features = ["fmt"] }
 instant = "0.1"
+
+# cdk's registry nostr/nostr-sdk requirements are redirected onto the same
+# git repo coop already uses, keeping a single copy of each in the graph.
+[patch.crates-io]
+nostr = { git = "https://github.com/rust-nostr/nostr" }
+nostr-sdk = { git = "https://github.com/rust-nostr/nostr" }
 
 [profile.release]
 strip = true

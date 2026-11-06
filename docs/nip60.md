@@ -1,7 +1,7 @@
 # NIP-60: cashu wallet — implementation plan
 
 Spec: https://github.com/nostr-protocol/nips/blob/master/60.md
-CDK: https://github.com/cashubtc/cdk (crates `cdk`, `cdk-sqlite`, `cdk-nostr` 0.18.x)
+CDK: https://github.com/cashubtc/cdk (crates `cdk`, `cdk-redb`, `cdk-nostr`, from git main)
 
 NIP-60 stores a user's cashu wallet state on relays: the wallet config
 (kind `17375`), its unspent proofs (kind `7375`), and an optional spending
@@ -50,7 +50,8 @@ Follows the existing crate patterns exactly; no new architecture.
   (runtime is already initialized by `state::init`). The `cdk-nostr`
   inbox listener also runs on that runtime.
 - Signer-agnostic encryption: the signer may be a bunker/extension, so we
-  never use `nostr::nip60::*::prepare` (they need an owned `SecretKey`).
+  never use `nostr::nips::nip60` prepare helpers (they need an owned
+  `SecretKey`).
   We build payloads as plain JSON, encrypt with
   `signer.nip44_encrypt(self_pubkey, json)` and sign with
   `EventBuilder::new(kind, content).finalize_async(signer)` — the same
@@ -72,31 +73,41 @@ Follows the existing crate patterns exactly; no new architecture.
 
 ## Dependencies
 
-Workspace `Cargo.toml`:
+Workspace `Cargo.toml` (final state after the phase 0 spike):
 
 ```toml
 nostr = { git = "https://github.com/rust-nostr/nostr", features = [ "nip59", "nip49", "nip44", "nip60", "nip98" ] }
 
+# Cashu (NIP-60). From git: the published 0.18.x line targets nostr 0.44 and
+# cannot unify with the git rust-nostr used here, while main targets 0.45.x
+cdk = { git = "https://github.com/cashubtc/cdk", default-features = false, features = [ "wallet" ] }
+cdk-redb = { git = "https://github.com/cashubtc/cdk", default-features = false, features = [ "wallet" ] }
+cdk-nostr = { git = "https://github.com/cashubtc/cdk", default-features = false }
+
 [patch.crates-io]
-# cdk publishes against crates.io nostr 0.45.x; coop uses the git source.
-# The patch unifies both on one copy of the crate so types cross crate
-# boundaries (cdk-nostr inbox events, keys) without conversion.
 nostr = { git = "https://github.com/rust-nostr/nostr" }
 nostr-sdk = { git = "https://github.com/rust-nostr/nostr" }
 ```
 
-`crates/nip60/Cargo.toml` (all under `cfg(not(wasm32))`):
+Spike findings (all resolved and verified with `cargo check`):
 
-```toml
-cdk = { version = "0.18", default-features = false, features = ["wallet"] }
-cdk-sqlite = { version = "0.18", default-features = false, features = ["wallet"] }
-cdk-nostr = { version = "0.18", default-features = false } # inbox, for NIP-61
-```
-
-Version-unification is the one risky step; Phase 0 is a spike that proves
-`cdk 0.18.x` + git rust-nostr build together. Fallback if the patch fights
-back: convert only at the cdk-nostr inbox boundary (hex/serde) and skip the
-patch for `nostr-sdk`.
+- The cdk family hard-pins `cdk-common` with `=` per release, so all crates
+  must come from one release train. crates.io 0.18.3 pins nostr 0.44 and
+  cannot coexist with coop's git nostr 0.45.x; the git main line pins
+  nostr ^0.45.3, which the `[patch.crates-io]` block redirects onto the
+  same git rust-nostr checkout. The lockfile ends with exactly one `nostr`
+  and one `nostr-sdk`, proven by compile-time type-identity checks between
+  `nostr` and `cdk_nostr::nostr`.
+- Storage is `cdk-redb` (`WalletRedbDatabase::new(&Path)`, pure Rust), not
+  `cdk-sqlite`: published cdk-sqlite pins rusqlite ^0.31, whose
+  `libsqlite3-sys` clashes at the `links` level with the `nostr-sqlite`
+  wasm dependency of the `state` crate.
+- rust-nostr 0.45.x has no root re-exports: the module is
+  `nostr::nips::nip60`, and cdk-nostr re-exports the SDK as
+  `cdk_nostr::nostr` / `cdk_nostr::nostr_sdk`.
+- The `nip60` crate exists (`crates/nip60`) with a compile-only spike in
+  `lib.rs` and a no-op `init(cx)` wired into `desktop/src/main.rs`; both
+  are replaced in phase 1.
 
 ## Design
 
@@ -116,7 +127,7 @@ patch for `nostr-sdk`.
 
 ### Local state
 
-- cdk sqlite store at `config_dir().join("cashu")` (one `WalletDatabase`
+- cdk redb store at `config_dir().join("cashu")` (one `WalletDatabase`
   shared by all mint wallets).
 - `WalletRegistry` holds: parsed `17375` (`WalletEvent` + event id), the
   active `7375` events per mint (event id + `TokenEvent`), cdk `Wallet`
@@ -173,13 +184,14 @@ the UI crate when Phase 3 lands).
 
 ## Phases
 
-### Phase 0 — dependency spike (small, throwaway)
+### Phase 0 — dependency spike (done)
 
-1. Enable `nip60` on the `nostr` workspace dep; confirm
-   `nostr::nip60` types and the four kinds compile.
-2. Add the `[patch.crates-io]` block and a scratch dependency on
-   `cdk`/`cdk-sqlite`/`cdk-nostr`; `cargo check` desktop. Resolve the
-   nostr unification here before writing any code.
+Outcome recorded in the Dependencies section: cdk family on git main,
+`[patch.crates-io]` unification, cdk-redb storage, `nip60` crate skeleton
+wired into desktop. `cargo check -p nip60` and the full desktop check pass.
+
+The remaining spike code in `crates/nip60/src/lib.rs` is deleted in
+phase 1.
 
 ### Phase 1 — bootstrap + load + balance
 
@@ -228,9 +240,13 @@ the UI crate when Phase 3 lands).
 - Concurrent spends from two devices double-spend; recovery is the spec's
   Appendix-1 validation (check proofs at the mint, roll over survivors) —
   implemented as reconciliation on sync, not real-time locking.
-- Web target gets no wallet in v1: `cdk-sqlite` (rusqlite bundled) does
-  not build on wasm32; the crate compiles to nothing there (auto_update
-  pattern). A wasm store would need a cdk `WalletDatabase` over
-  IndexedDB — explicitly out of scope.
+- Tracking cdk via git main is a moving target; the lockfile pins a rev
+  and must be bumped deliberately (same policy as the rust-nostr git dep).
+  Watch for the next cdk release line built against nostr 0.45.x — moving
+  back to crates.io then removes the moving-target concern.
+- Web target gets no wallet in v1: cdk store backends (redb, sqlite) need
+  a real filesystem and do not build on wasm32; the crate compiles to
+  nothing there (auto_update pattern). A wasm store would need a cdk
+  `WalletDatabase` over IndexedDB — explicitly out of scope.
 - `7374` quote events are skipped (local cdk state per the spec); pending
   quotes are not visible to other devices until claimed.
