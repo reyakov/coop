@@ -6,7 +6,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window, div, px,
-    uniform_list,
+    relative, uniform_list,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -66,37 +66,47 @@ impl WalletPanel {
     fn render_balance(&self, cx: &Context<Self>) -> impl IntoElement {
         let balance = WalletRegistry::global(cx).read(cx).balance();
 
-        v_flex()
-            .items_center()
-            .gap_1()
+        h_flex()
+            .justify_center()
+            .items_baseline()
+            .gap_2()
             .child(
                 div()
-                    .text_xl()
+                    .text_3xl()
+                    .line_height(relative(1.0))
                     .child(SharedString::from(balance.to_string())),
             )
             .child(
                 div()
-                    .text_xs()
+                    .italic()
+                    .line_height(relative(1.0))
                     .text_color(cx.theme().muted_foreground)
                     .child("sats"),
             )
     }
 
     fn render_actions(&self) -> impl IntoElement {
-        h_flex()
-            .justify_center()
-            .gap_2()
-            .child(
-                Button::new("send")
-                    .label("Send")
-                    .primary()
-                    .on_click(|_, window, cx| open_send_dialog(window, cx)),
-            )
-            .child(
-                Button::new("receive")
-                    .label("Receive")
-                    .on_click(|_, window, cx| open_receive_dialog(window, cx)),
-            )
+        h_flex().w_full().justify_center().child(
+            h_flex()
+                .w_80()
+                .gap_2()
+                .child(
+                    Button::new("send")
+                        .label("Send")
+                        .secondary()
+                        .rounded_full()
+                        .flex_1()
+                        .on_click(|_, window, cx| open_send_dialog(window, cx)),
+                )
+                .child(
+                    Button::new("receive")
+                        .label("Receive")
+                        .secondary()
+                        .rounded_full()
+                        .flex_1()
+                        .on_click(|_, window, cx| open_receive_dialog(window, cx)),
+                ),
+        )
     }
 
     fn render_sent_token(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -141,9 +151,17 @@ impl WalletPanel {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         if history.is_empty() {
-            return div()
+            return v_flex()
+                .items_center()
+                .justify_center()
+                .h_32()
+                .w_full()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
+                .border_1()
+                .border_dashed()
+                .border_color(cx.theme().border)
+                .rounded(cx.theme().radius_lg)
                 .child("No transactions yet.")
                 .into_any_element();
         }
@@ -273,7 +291,7 @@ fn open_send_dialog(window: &mut Window, cx: &mut App) {
                             .child(
                                 Button::new("cancel")
                                     .label("Cancel")
-                                    .ghost()
+                                    .secondary()
                                     .on_click(|_, window, cx| window.close_dialog(cx)),
                             )
                             .child(Button::new("send").label("Send").primary().on_click({
@@ -295,6 +313,7 @@ fn open_receive_dialog(window: &mut Window, cx: &mut App) {
     let token_input = cx.new(|cx| InputState::new(window, cx).placeholder("cashu…"));
 
     let create_invoice: SubmitFn = {
+        let wallet = WalletRegistry::global(cx);
         let input = amount_input.clone();
         Rc::new(move |_, window, cx| {
             let Some(amount) = parse_amount(&input, cx) else {
@@ -302,7 +321,7 @@ fn open_receive_dialog(window: &mut Window, cx: &mut App) {
                 return false;
             };
 
-            WalletRegistry::global(cx).update(cx, |registry, cx| {
+            wallet.update(cx, |registry, cx| {
                 registry.create_mint_quote(amount, cx);
             });
 
@@ -311,15 +330,17 @@ fn open_receive_dialog(window: &mut Window, cx: &mut App) {
     };
 
     let redeem: SubmitFn = {
+        let wallet = WalletRegistry::global(cx);
         let input = token_input.clone();
         Rc::new(move |_, window, cx| {
             let token = input.read(cx).value().trim().to_string();
+
             if token.is_empty() {
                 window.push_notification(Notification::error("Paste a cashu token"), cx);
                 return false;
             }
 
-            WalletRegistry::global(cx).update(cx, |registry, cx| {
+            wallet.update(cx, |registry, cx| {
                 registry.receive_token(token, cx);
             });
 
@@ -354,14 +375,20 @@ fn open_receive_dialog(window: &mut Window, cx: &mut App) {
                                     .gap_1()
                                     .w_full()
                                     .child(Input::new(&amount_input).cleanable(true))
-                                    .child(Button::new("invoice").label("Invoice").on_click({
-                                        let create_invoice = create_invoice.clone();
-                                        move |event, window, cx| {
-                                            if create_invoice(event, window, cx) {
-                                                window.close_dialog(cx);
-                                            }
-                                        }
-                                    })),
+                                    .child(
+                                        Button::new("invoice")
+                                            .label("Invoice")
+                                            .secondary()
+                                            .w_24()
+                                            .on_click({
+                                                let create_invoice = create_invoice.clone();
+                                                move |event, window, cx| {
+                                                    if create_invoice(event, window, cx) {
+                                                        window.close_dialog(cx);
+                                                    }
+                                                }
+                                            }),
+                                    ),
                             ),
                     )
                     .child(Separator::horizontal())
@@ -374,14 +401,20 @@ fn open_receive_dialog(window: &mut Window, cx: &mut App) {
                                     .gap_1()
                                     .w_full()
                                     .child(Input::new(&token_input).cleanable(true))
-                                    .child(Button::new("redeem").label("Redeem").on_click({
-                                        let redeem = redeem.clone();
-                                        move |event, window, cx| {
-                                            if redeem(event, window, cx) {
-                                                window.close_dialog(cx);
-                                            }
-                                        }
-                                    })),
+                                    .child(
+                                        Button::new("redeem")
+                                            .label("Redeem")
+                                            .secondary()
+                                            .w_24()
+                                            .on_click({
+                                                let redeem = redeem.clone();
+                                                move |event, window, cx| {
+                                                    if redeem(event, window, cx) {
+                                                        window.close_dialog(cx);
+                                                    }
+                                                }
+                                            }),
+                                    ),
                             ),
                     ),
             )
@@ -430,21 +463,24 @@ impl Render for WalletPanel {
         v_flex()
             .size_full()
             .p_3()
-            .gap_3()
+            .gap_4()
             .text_xs()
             .child(self.render_balance(cx))
             .child(self.render_actions())
             .when_some(self.sent_token.as_ref(), |this, _token| {
                 this.child(self.render_sent_token(cx))
             })
-            .child(Separator::horizontal())
             .child(
-                div()
-                    .text_xs()
-                    .font_semibold()
-                    .text_color(cx.theme().muted_foreground)
-                    .child("History:"),
+                v_flex()
+                    .gap_2()
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_semibold()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("History"),
+                    )
+                    .child(self.render_history(history, cx)),
             )
-            .child(self.render_history(history, cx))
     }
 }

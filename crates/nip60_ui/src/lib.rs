@@ -14,8 +14,6 @@ pub mod wallet;
 
 type SubmitFn = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool>;
 
-/// Ask for an amount and send a nutzap to `recipient`, optionally
-/// nutzapping the event with `target`.
 pub fn open_nutzap(
     window: &mut Window,
     cx: &mut App,
