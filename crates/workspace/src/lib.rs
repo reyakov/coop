@@ -61,7 +61,6 @@ enum Command {
     ShowContactList,
     ShowInbox,
     ShowBrowse,
-    #[cfg(not(target_arch = "wasm32"))]
     ShowWallet,
     NewChat,
     NewGroup,
@@ -333,10 +332,12 @@ impl Workspace {
                 let panel = browse::init(self.dock.downgrade(), window, cx);
                 self.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
             }
-            #[cfg(not(target_arch = "wasm32"))]
             Command::ShowWallet => {
-                let panel = nip60_ui::wallet::init(window, cx);
-                self.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let panel = nip60_ui::wallet::init(window, cx);
+                    self.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
+                }
             }
             Command::NewChat => {
                 new_chat::open(self.dock.downgrade(), window, cx);

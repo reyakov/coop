@@ -41,6 +41,8 @@ pub struct Preferences {
     radius_input: Entity<InputState>,
     radius_lg_input: Entity<InputState>,
     #[cfg(not(target_arch = "wasm32"))]
+    mint_input: Entity<InputState>,
+    #[cfg(not(target_arch = "wasm32"))]
     _speech_poll: Task<()>,
     /// Keeps the control subscriptions alive while the dialog is open
     _subscriptions: Vec<Subscription>,
@@ -89,6 +91,9 @@ impl Preferences {
                 .min(RADIUS_RANGE.0 as f64)
                 .max(RADIUS_RANGE.1 as f64)
         });
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let mint_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://mint…"));
 
         let subscriptions = vec![
             Self::wire_number_input(&font_size_input, FONT_SIZE_RANGE, cx, |value, cx| {
@@ -140,6 +145,8 @@ impl Preferences {
             radius_input,
             radius_lg_input,
             #[cfg(not(target_arch = "wasm32"))]
+            mint_input,
+            #[cfg(not(target_arch = "wasm32"))]
             _speech_poll,
             _subscriptions: subscriptions,
         }
@@ -182,6 +189,56 @@ impl Preferences {
             Err(e) => {
                 window.push_notification(Notification::error(e.to_string()).autohide(false), cx);
             }
+        }
+    }
+
+    /// Create the NIP-60 wallet or add a mint to it
+    #[cfg(not(target_arch = "wasm32"))]
+    fn setup_mint(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let mint = self.mint_input.read(cx).value().trim().to_string();
+        if mint.is_empty() {
+            window.push_notification(Notification::error("Enter a mint URL"), cx);
+            return;
+        }
+
+        nip60::WalletRegistry::global(cx).update(cx, |registry, cx| {
+            registry.setup(mint, cx);
+        });
+    }
+
+    /// The NIP-60 wallet block; absent from the web build
+    fn render_wallet(
+        &mut self,
+        #[cfg_attr(target_arch = "wasm32", allow(unused_variables))] cx: &mut Context<Self>,
+    ) -> AnyElement {
+        #[cfg(target_arch = "wasm32")]
+        {
+            return div().into_any_element();
+        }
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            const WALLET: &str = "Cashu mint for your NIP-60 wallet. Set up creates the wallet, Add extends it with another mint.";
+            let has_wallet = nip60::WalletRegistry::global(cx).read(cx).has_wallet();
+
+            settings_block(
+                "Wallet",
+                WALLET,
+                h_flex()
+                    .gap_1()
+                    .child(div().flex_1().child(Input::new(&self.mint_input)))
+                    .child(
+                        Button::new("setup-mint")
+                            .label(if has_wallet { "Add" } else { "Set up" })
+                            .ghost()
+                            .size_8()
+                            .on_click(cx.listener(move |this, _ev, window, cx| {
+                                this.setup_mint(window, cx);
+                            })),
+                    ),
+                cx,
+            )
+            .into_any_element()
         }
     }
 
@@ -546,5 +603,7 @@ impl Render for Preferences {
                     ),
                 cx,
             ))
+            .child(Separator::horizontal())
+            .child(self.render_wallet(cx))
     }
 }
