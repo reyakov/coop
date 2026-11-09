@@ -39,7 +39,6 @@ impl Sidebar {
         let requests_open = self.requests_open;
         let contacts_open = self.contacts_open && !requests_open;
         let rows = Rc::new(self.rows_for(cx));
-
         // Whether to show the create button for the contact picker
         let create_button = contacts_open && !self.selected_contacts.is_empty();
 
@@ -60,12 +59,25 @@ impl Sidebar {
             .flex_1()
             .min_h_0()
             .relative()
+            .border_l_1()
+            .border_color(cx.theme().sidebar_border)
             .child(
                 v_flex()
                     .px_2()
                     .gap_1()
                     .items_start()
                     .justify_start()
+                    .when(cfg!(not(target_arch = "wasm32")), |this| {
+                        this.child(
+                            Nav::new("wallet")
+                                .prefix(Icon::new(gpui_kit::assets::IconName::Wallet).small())
+                                .label("Wallet")
+                                .text_sm()
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(Box::new(crate::Command::ShowWallet), cx)
+                                }),
+                        )
+                    })
                     .child(
                         Nav::new("browse")
                             .prefix(Icon::new(IconName::Compass).small())

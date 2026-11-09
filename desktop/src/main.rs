@@ -91,6 +91,11 @@ fn main() {
             // NIP-4e: https://github.com/nostr-protocol/nips/blob/per-device-keys/4e.md
             nip4e::init(cx);
 
+            // Initialize cashu wallet registry
+            //
+            // NIP-60: https://github.com/nostr-protocol/nips/blob/master/60.md
+            nip60::init(cx);
+
             // Initialize app registry
             chat::init(cx);
 

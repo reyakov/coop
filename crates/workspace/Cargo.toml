@@ -9,11 +9,11 @@ ui = { path = "../ui" }
 gpui-kit.workspace = true
 common = { path = "../common" }
 state = { path = "../state" }
+nip29 = { path = "../nip29" }
+nip29_ui = { path = "../nip29_ui" }
 nip4e = { path = "../nip4e" }
 chat = { path = "../chat" }
 chat_ui = { path = "../chat_ui" }
-nip29 = { path = "../nip29" }
-nip29_ui = { path = "../nip29_ui" }
 settings = { path = "../settings" }
 speech = { path = "../speech" }
 person = { path = "../person" }
@@ -30,3 +30,7 @@ serde.workspace = true
 log.workspace = true
 rand.workspace = true
 smallvec.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+nip60 = { path = "../nip60" }
+nip60_ui = { path = "../nip60_ui" }
