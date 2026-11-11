@@ -352,7 +352,7 @@ impl GossipRelays {
         let metadata = self.metadata;
 
         if !value.starts_with("ws") {
-            self.set_error("Relay URl is invalid", window, cx);
+            self.set_error("Relay URL is invalid", window, cx);
             return;
         }
 
@@ -364,7 +364,7 @@ impl GossipRelays {
                 cx.notify();
             }
         } else {
-            self.set_error("Relay URl is invalid", window, cx);
+            self.set_error("Relay URL is invalid", window, cx);
         }
     }
 
@@ -496,7 +496,7 @@ impl InboxRelays {
         let value = self.input.read(cx).value().to_string();
 
         if !value.starts_with("ws") {
-            self.set_error("Relay URl is invalid", window, cx);
+            self.set_error("Relay URL is invalid", window, cx);
             return;
         }
 
@@ -508,7 +508,7 @@ impl InboxRelays {
                 cx.notify();
             }
         } else {
-            self.set_error("Relay URl is invalid", window, cx);
+            self.set_error("Relay URL is invalid", window, cx);
         }
     }
 
@@ -646,7 +646,7 @@ fn relay_row(
         .px_2()
         .justify_between()
         .rounded(cx.theme().radius)
-        .bg(cx.theme().sidebar)
+        .bg(cx.theme().secondary)
         .context_menu({
             let on_remove = on_remove.clone();
 

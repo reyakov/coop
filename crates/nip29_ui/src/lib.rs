@@ -8,7 +8,7 @@ use gpui::{
     Action, Anchor, AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter,
     FocusHandle, Focusable, FollowMode, InteractiveElement, IntoElement, ListAlignment,
     ListScrollEvent, ListState, ParentElement, Render, SharedString, Styled, Subscription, Task,
-    WeakEntity, Window, div, list, px,
+    WeakEntity, Window, div, list, px, rems,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -167,7 +167,7 @@ pub fn actions(group: WeakEntity<Group>, cx: &App) -> AnyElement {
             )
             .child(
                 Button::new("group-delete")
-                    .icon(IconName::CircleX)
+                    .icon(IconName::Trash)
                     .tooltip("Delete group")
                     .ghost()
                     .small()
@@ -965,16 +965,11 @@ impl GroupPanel {
             .py_1p5()
             .border_b_1()
             .border_color(cx.theme().border)
-            .children(pins.iter().map(|pin| {
-                div()
-                    .px_1p5()
-                    .py_0p5()
-                    .rounded(cx.theme().radius)
-                    .bg(cx.theme().primary)
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(pin_label(group, pin))
-            }))
+            .children(
+                pins.iter().map(|pin| {
+                    gpui_kit::component::tag::Tag::secondary().child(pin_label(group, pin))
+                }),
+            )
             .into_any_element()
     }
 
@@ -1025,7 +1020,7 @@ impl GroupPanel {
             .child(
                 Button::new("load-older")
                     .label(if loading {
-                        "Loading earlier messages…"
+                        "Loading earlier messages"
                     } else {
                         "Load earlier messages"
                     })
@@ -1083,7 +1078,7 @@ impl GroupPanel {
                 row.child("You're in preview mode. Join this group to talk.")
                     .child(
                         Button::new("join")
-                            .label("Request to Join")
+                            .label("Request to join")
                             .small()
                             .ghost()
                             .on_click(cx.listener(move |this, _event, _window, cx| {
@@ -1152,7 +1147,11 @@ impl GroupPanel {
                         cx,
                     )
                 })
-                .element(ix.into(), window, cx),
+                .element(
+                    SharedString::from(format!("text-{}", message.id.to_hex())).into(),
+                    window,
+                    cx,
+                ),
         };
 
         let admin = nostr
@@ -1378,7 +1377,7 @@ impl GroupPanel {
             .child(
                 div()
                     .flex_shrink_0()
-                    .max_w(px(140.))
+                    .max_w(rems(8.75))
                     .truncate()
                     .font_semibold()
                     .text_color(cx.theme().foreground)
@@ -1408,8 +1407,7 @@ impl GroupPanel {
     fn render_attachments(&self, cx: &mut Context<Self>) -> Vec<AnyElement> {
         self.attachments
             .iter()
-            .enumerate()
-            .map(|(ix, url)| {
+            .map(|url| {
                 let url = url.clone();
 
                 h_flex()
@@ -1425,12 +1423,12 @@ impl GroupPanel {
                     .child(Icon::new(IconName::Link).xsmall())
                     .child(
                         div()
-                            .max_w(px(200.))
+                            .max_w(rems(12.5))
                             .truncate()
                             .child(attachment_name(&url)),
                     )
                     .child(
-                        Button::new(SharedString::from(format!("remove-attachment-{ix}")))
+                        Button::new(SharedString::from(format!("remove-attachment-{}", url)))
                             .icon(IconName::Close)
                             .tooltip("Remove")
                             .ghost()

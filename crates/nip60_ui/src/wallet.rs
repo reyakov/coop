@@ -126,7 +126,7 @@ impl WalletPanel {
                 .border_dashed()
                 .border_color(cx.theme().border)
                 .rounded(cx.theme().radius_lg)
-                .child("No transactions yet.")
+                .child("No transactions yet")
                 .into_any_element();
         }
 
@@ -646,7 +646,7 @@ fn open_receive_dialog(window: &mut Window, cx: &mut App) {
             .step(1.)
             .min(1.)
     });
-    let token_input = cx.new(|cx| InputState::new(window, cx).placeholder("cashu…"));
+    let token_input = cx.new(|cx| InputState::new(window, cx).placeholder("cashu"));
 
     let create_invoice: SubmitFn = {
         let wallet = WalletRegistry::global(cx);

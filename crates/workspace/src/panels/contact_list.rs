@@ -307,7 +307,7 @@ impl ContactListPanel {
             .rounded(cx.theme().radius_lg)
             .text_xs()
             .text_align(TextAlign::Center)
-            .child(SharedString::from("Please add some relays."))
+            .child(SharedString::from("No contacts yet"))
     }
 }
 

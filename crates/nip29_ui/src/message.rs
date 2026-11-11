@@ -33,7 +33,7 @@ pub(crate) struct Actions {
 }
 
 pub(crate) fn render(
-    ix: usize,
+    _ix: usize,
     message: &Message,
     content: AnyElement,
     show_author: bool,
@@ -58,33 +58,36 @@ pub(crate) fn render(
         nostr.read(cx).current_user(),
     );
 
-    let row = MessageRow::new(ix)
-        .show_author(show_author)
-        .hide_avatar(hide_avatar)
-        .avatar(
-            Avatar::new(author.avatar())
-                .seed(author.avatar_seed())
-                .small()
-                .flex_shrink_0(),
-        )
-        .author(author.name())
-        .timestamp(message.created_at.to_human_time())
-        .when(!message.replies_to.is_empty(), |this| {
-            this.children(replies(
-                &message.replies_to,
-                &persons,
-                &actions.group,
-                &actions.panel,
-                cx,
-            ))
-        })
-        .child(content)
-        .when(!message.media.is_empty(), |this| {
-            this.child(MessageMedia::new(&message.media))
-        })
-        .when(!reaction_groups.is_empty(), |this| {
-            this.child(ReactionBar::new(reaction_groups))
-        });
+    let row = MessageRow::new(SharedString::from(format!(
+        "message-{}",
+        message.id.to_hex()
+    )))
+    .show_author(show_author)
+    .hide_avatar(hide_avatar)
+    .avatar(
+        Avatar::new(author.avatar())
+            .seed(author.avatar_seed())
+            .small()
+            .flex_shrink_0(),
+    )
+    .author(author.name())
+    .timestamp(message.created_at.to_human_time())
+    .when(!message.replies_to.is_empty(), |this| {
+        this.children(replies(
+            &message.replies_to,
+            &persons,
+            &actions.group,
+            &actions.panel,
+            cx,
+        ))
+    })
+    .child(content)
+    .when(!message.media.is_empty(), |this| {
+        this.child(MessageMedia::new(&message.media))
+    })
+    .when(!reaction_groups.is_empty(), |this| {
+        this.child(ReactionBar::new(reaction_groups))
+    });
 
     let id = message.id;
     let admin = actions.admin;
@@ -249,7 +252,7 @@ pub(crate) fn render(
 }
 
 pub(crate) fn render_activity(
-    ix: usize,
+    _ix: usize,
     activity: &Activity,
     persons: &Entity<Directory>,
     cx: &App,
@@ -258,12 +261,14 @@ pub(crate) fn render_activity(
     let hide_avatar = AppSettings::get_hide_avatar(cx);
 
     h_flex()
-        .id(ix)
+        .id(SharedString::from(format!(
+            "activity-{}",
+            activity.id.to_hex()
+        )))
         .w_full()
         .gap_2()
         .py_1()
         .px_3()
-        .hover(|this| this.bg(cx.theme().list_hover))
         .child(badge(activity, cx))
         .when(!hide_avatar, |this| {
             this.child(
@@ -340,7 +345,7 @@ fn replies(
 
     let mut items = Vec::with_capacity(targets.len());
 
-    for (ix, id) in targets.iter().enumerate() {
+    for id in targets.iter() {
         let context = entity.read_with(cx, |group, cx| {
             let message = group.message(*id)?;
             let author = persons.read(cx).person(&message.author, cx);
@@ -359,15 +364,19 @@ fn replies(
         let panel = panel.clone();
 
         items.push(
-            ReplyPreview::new(ix, author, preview)
-                .on_click(move |_event, _window, cx| {
-                    if let Err(error) = panel.update(cx, |panel, cx| {
-                        panel.scroll_to(&id, cx);
-                    }) {
-                        log::warn!("nip29: scrolling to message failed: {error}");
-                    }
-                })
-                .into_any_element(),
+            ReplyPreview::new(
+                SharedString::from(format!("reply-{}", id.to_hex())),
+                author,
+                preview,
+            )
+            .on_click(move |_event, _window, cx| {
+                if let Err(error) = panel.update(cx, |panel, cx| {
+                    panel.scroll_to(&id, cx);
+                }) {
+                    log::warn!("nip29: scrolling to message failed: {error}");
+                }
+            })
+            .into_any_element(),
         );
     }
 

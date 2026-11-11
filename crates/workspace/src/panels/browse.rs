@@ -296,7 +296,7 @@ impl BrowsePanel {
                     .max_w_64()
                     .px_1()
                     .rounded(cx.theme().radius)
-                    .bg(cx.theme().sidebar)
+                    .bg(cx.theme().secondary)
                     .child(Input::new(&self.input).appearance(false).flex_1())
                     .child(
                         Button::new("relay-browse")
@@ -376,7 +376,7 @@ impl BrowsePanel {
             .cursor_pointer()
             .border_1()
             .border_color(transparent_black())
-            .bg(cx.theme().sidebar)
+            .bg(cx.theme().group_box)
             .hover(|this| {
                 this.bg(cx.theme().secondary)
                     .border_color(cx.theme().border)
@@ -510,12 +510,12 @@ impl Render for BrowsePanel {
         } else {
             let text = if discover {
                 if self.discovering {
-                    "Discovering groups…"
+                    "Discovering groups"
                 } else {
                     "No groups found."
                 }
             } else if self.loading {
-                "Loading groups…"
+                "Loading groups"
             } else {
                 "No groups found."
             };

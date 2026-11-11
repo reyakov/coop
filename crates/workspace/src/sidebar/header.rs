@@ -284,7 +284,7 @@ fn open_logout_dialog(window: &mut Window, cx: &mut App) {
 
     window.open_alert_dialog(cx, |alert, _, _| {
         alert
-            .title("Log Out?")
+            .title("Log out")
             .description(DESCRIPTION)
             .button_props(
                 DialogButtonProps::default()

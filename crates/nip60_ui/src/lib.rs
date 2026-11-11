@@ -74,7 +74,7 @@ pub fn open_nutzap(
 
     window.open_dialog(cx, move |this, _window, _cx| {
         this.width(px(380.))
-            .title("Send Nutzap")
+            .title("Send eCash")
             .on_ok({
                 let send = send.clone();
                 move |event, window, cx| send(event, window, cx)

@@ -72,7 +72,7 @@ impl ProfileDialog {
         let bio_input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .auto_grow(3, 8)
-                .placeholder("A short introduce about you.")
+                .placeholder("A short introduction about you")
         });
 
         let directory = Directory::new(cx);
@@ -438,7 +438,7 @@ impl Render for ProfileDialog {
                             Button::new("update")
                                 .icon(IconName::SquarePen)
                                 .label("Update")
-                                .primary()
+                                .outline()
                                 .on_click(cx.listener(move |this, _ev, window, cx| {
                                     this.toggle_edit(window, cx);
                                 })),
@@ -449,7 +449,7 @@ impl Render for ProfileDialog {
                             Button::new("message")
                                 .icon(IconName::MessageSquare)
                                 .label("Message")
-                                .primary()
+                                .outline()
                                 .on_click(cx.listener(move |this, _ev, window, cx| {
                                     this.message(window, cx);
                                 })),

@@ -3,7 +3,7 @@ use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, Context, Div, Entity, InteractiveElement as _, IntoElement,
     ParentElement, Render, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled,
-    Subscription, Task, WeakEntity, Window, div, px,
+    Subscription, Task, WeakEntity, Window, div, px, rems,
 };
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -491,7 +491,7 @@ impl Render for NewGroup {
             .child(
                 v_flex()
                     .id("group-dialog-content")
-                    .h(px(500.))
+                    .h(rems(31.25))
                     .gap_3()
                     .when_some(self.error.clone(), |this, error| {
                         this.child(self.render_error(&error, web_url.as_deref(), cx))

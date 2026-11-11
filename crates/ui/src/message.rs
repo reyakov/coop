@@ -7,7 +7,7 @@ use gpui::{
     Animation, AnimationExt as _, AnyElement, App, ClickEvent, Context, ElementId,
     InteractiveElement as _, IntoElement, MouseButton, MouseDownEvent, ObjectFit,
     ParentElement as _, RenderOnce, SharedString, SharedUri, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, StyledImage, Window, div, img, px,
+    StyleRefinement, Styled, StyledImage, Window, div, img, rems,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
@@ -199,10 +199,10 @@ impl RenderOnce for MessageRow {
                         if show_author {
                             match avatar {
                                 Some(avatar) => this.child(avatar),
-                                None => this.child(div().flex_shrink_0().w(px(24.))),
+                                None => this.child(div().flex_shrink_0().w_6()),
                             }
                         } else {
-                            this.child(div().flex_shrink_0().w(px(24.)))
+                            this.child(div().flex_shrink_0().w_6())
                         }
                     })
                     .child(
@@ -212,7 +212,7 @@ impl RenderOnce for MessageRow {
                             .min_w_0()
                             .flex_initial()
                             .overflow_hidden()
-                            .text_size(px(15.))
+                            .text_base()
                             .when(show_author, |this| {
                                 this.child(
                                     h_flex()
@@ -383,7 +383,7 @@ impl RenderOnce for MessageMedia {
                     img(only.clone())
                         .border_1()
                         .border_color(cx.theme().border)
-                        .h(px(250.))
+                        .h(rems(16.))
                         .object_fit(ObjectFit::Cover)
                         .rounded(cx.theme().radius_lg),
                 )
@@ -398,14 +398,17 @@ impl RenderOnce for MessageMedia {
             .flex_wrap()
             .gap_2()
             .refine_style(&style)
-            .children(media.into_iter().enumerate().map(|(ix, item)| {
-                div().id(format!("media-{ix}")).flex_shrink_0().child(
-                    img(item)
-                        .h_32()
-                        .border_1()
-                        .border_color(cx.theme().border)
-                        .rounded(cx.theme().radius_lg),
-                )
+            .children(media.into_iter().map(|item| {
+                div()
+                    .id(SharedString::from(format!("media-{}", item)))
+                    .flex_shrink_0()
+                    .child(
+                        img(item)
+                            .h_32()
+                            .border_1()
+                            .border_color(cx.theme().border)
+                            .rounded(cx.theme().radius_lg),
+                    )
             }))
             .into_any_element()
     }
@@ -494,7 +497,7 @@ impl RenderOnce for ReactionBar {
                     .when(!group.mine, |this| this.border_color(cx.theme().border))
                     .when(group.image.is_none(), |this| this.child(group.emoji))
                     .when_some(group.image, |this, image| {
-                        this.child(img(image).size(px(16.)).flex_shrink_0())
+                        this.child(img(image).size_4().flex_shrink_0())
                     })
                     .child(SharedString::from(group.count.to_string()))
             }))

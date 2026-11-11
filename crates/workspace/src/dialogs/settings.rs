@@ -93,7 +93,7 @@ impl Preferences {
         });
 
         #[cfg(not(target_arch = "wasm32"))]
-        let mint_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://mint…"));
+        let mint_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://mint"));
 
         let subscriptions = vec![
             Self::wire_number_input(&font_size_input, FONT_SIZE_RANGE, cx, |value, cx| {
@@ -446,7 +446,7 @@ impl Preferences {
 
 impl Render for Preferences {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        const SCREENING: &str = "Show an screening dialog to verify the unknown sender.";
+        const SCREENING: &str = "Show a screening dialog to verify the unknown sender.";
         const WOT: &str = "Treat people followed by your contacts as known senders.";
         const AVATAR: &str = "Hide all avatar pictures to improve performance.";
         const APPEARANCE: &str =
@@ -475,7 +475,7 @@ impl Render for Preferences {
 
         let background_label = match &panel_background_path {
             Some(path) => path.display().to_string(),
-            None => String::from("Default Background"),
+            None => String::from("Default background"),
         };
 
         v_flex()
@@ -497,7 +497,7 @@ impl Render for Preferences {
                         cx,
                     ))
                     .child(settings_row(
-                        "Web of Trust",
+                        "Web of trust",
                         WOT,
                         Switch::new("wot-auto-trust")
                             .checked(wot_auto_trust)
@@ -536,33 +536,33 @@ impl Render for Preferences {
                     }),
                 cx,
             ))
-            .child(self.render_theme_choice("theme-light", "Light Theme", LIGHT_THEME, false, cx))
-            .child(self.render_theme_choice("theme-dark", "Dark Theme", DARK_THEME, true, cx))
+            .child(self.render_theme_choice("theme-light", "Light theme", LIGHT_THEME, false, cx))
+            .child(self.render_theme_choice("theme-dark", "Dark theme", DARK_THEME, true, cx))
             .child(Separator::horizontal())
             .child(
                 v_flex()
                     .w_full()
                     .gap_3()
                     .child(settings_row(
-                        "Font Size",
+                        "Font size",
                         FONT_SIZE,
                         NumberInput::new(&self.font_size_input).w_24(),
                         cx,
                     ))
                     .child(settings_row(
-                        "Corner Radius",
+                        "Corner radius",
                         RADIUS,
                         NumberInput::new(&self.radius_input).w_24(),
                         cx,
                     ))
                     .child(settings_row(
-                        "Large Corner Radius",
+                        "Large corner radius",
                         RADIUS_LG,
                         NumberInput::new(&self.radius_lg_input).w_24(),
                         cx,
                     ))
                     .child(settings_row(
-                        "Focus Ring",
+                        "Focus ring",
                         FOCUS_RING,
                         Switch::new("focus-ring")
                             .checked(theme.focus_ring)
@@ -624,7 +624,7 @@ impl Render for Preferences {
             )
             .child(Separator::horizontal())
             .child(settings_row(
-                "Decoupling Encryption Key",
+                "Decoupling encryption key",
                 NIP4E,
                 Switch::new("nip4e")
                     .checked(nip4e)
@@ -634,7 +634,7 @@ impl Render for Preferences {
                 cx,
             ))
             .child(settings_row(
-                "Rotate Encryption Key",
+                "Rotate encryption key",
                 NIP4E_ROTATION,
                 Switch::new("nip4e_rotation")
                     .checked(nip4e_rotation_days.is_some())
@@ -654,7 +654,7 @@ impl Render for Preferences {
             .child(self.render_dictation_shortcut(window, cx))
             .child(Separator::horizontal())
             .child(settings_block(
-                "Media Upload Service",
+                "Media upload service",
                 MEDIA,
                 h_flex()
                     .gap_1()

@@ -11,7 +11,7 @@ use nip29::{GroupReference, GroupsRegistry};
 type SubmitFn = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) -> bool>;
 
 pub fn open(window: &mut Window, cx: &mut App) {
-    let input = cx.new(|cx| InputState::new(window, cx).placeholder("naddr1…"));
+    let input = cx.new(|cx| InputState::new(window, cx).placeholder("naddr1"));
 
     let join: SubmitFn = {
         let input = input.clone();

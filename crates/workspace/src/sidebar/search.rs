@@ -309,7 +309,7 @@ impl Sidebar {
                         public_key: *public_key,
                     }));
                 }
-                None => rows.push(SidebarRow::Empty("Searching...")),
+                None => rows.push(SidebarRow::Empty("Searching")),
             }
         }
 

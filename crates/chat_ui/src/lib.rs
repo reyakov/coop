@@ -12,7 +12,7 @@ use gpui::{
     Focusable, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, MouseButton,
     ObjectFit, ParentElement, Render, SharedString, SharedUri, StatefulInteractiveElement, Styled,
     StyledImage, Subscription, SystemNotification, SystemNotificationAction, Task, WeakEntity,
-    Window, div, img, list, px, relative, retain_all, svg,
+    Window, div, img, list, px, relative, rems, retain_all, svg,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -1077,7 +1077,7 @@ impl ChatPanel {
         window.open_dialog(cx, move |this, _window, cx| {
             let relays = profile.messaging_relays();
 
-            this.title("Messaging Relays")
+            this.title("Messaging relays")
                 .close_button(true)
                 .child(v_flex().gap_1().children({
                     let mut items = vec![];
@@ -1134,7 +1134,7 @@ impl ChatPanel {
                 svg()
                     .path("brand/coop.svg")
                     .size_12()
-                    .text_color(cx.theme().list_active),
+                    .text_color(cx.theme().accent),
             )
             .child(PRIVATE_NOTICE)
             .into_any_element()
@@ -1228,7 +1228,11 @@ impl ChatPanel {
                         cx,
                     )
                 })
-                .element(ix.into(), window, cx);
+                .element(
+                    SharedString::from(format!("text-{}", message.id.to_hex())).into(),
+                    window,
+                    cx,
+                );
 
             self.render_text_message(ix, message, text, show_author, cx)
         } else {
@@ -1238,7 +1242,7 @@ impl ChatPanel {
 
     fn render_text_message(
         &self,
-        ix: usize,
+        _ix: usize,
         message: &Message,
         rendered_text: AnyElement,
         show_author: bool,
@@ -1270,7 +1274,7 @@ impl ChatPanel {
             None => rendered_text,
         };
 
-        let row = MessageRow::new(ix)
+        let row = MessageRow::new(SharedString::from(format!("message-{}", id.to_hex())))
             .show_author(show_author)
             .hide_avatar(hide_avatar)
             .avatar(
@@ -1300,16 +1304,6 @@ impl ChatPanel {
                 this.child(self.render_message_file(&id, file, cx))
             })
             .when(has_reactions, |this| this.child(reactions))
-            .overlay(
-                div()
-                    .group_hover("", |this| this.bg(cx.theme().list_active))
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .w(px(2.))
-                    .h_full()
-                    .bg(gpui::transparent_black()),
-            )
             .overlay(self.render_actions(&id, &pk, cx))
             .on_mouse_down(
                 MouseButton::Middle,
@@ -1399,14 +1393,19 @@ impl ChatPanel {
     ) -> impl IntoIterator<Item = impl IntoElement> {
         let mut items = Vec::with_capacity(replies.len());
 
-        for (ix, id) in replies.iter().enumerate() {
+        for id in replies.iter() {
             let Some(message) = self.message(id) else {
                 continue;
             };
             let author = self.profile(&message.author, cx);
 
             items.push(
-                ReplyPreview::new(ix, author.name(), message.preview()).on_click({
+                ReplyPreview::new(
+                    SharedString::from(format!("reply-{}", id.to_hex())),
+                    author.name(),
+                    message.preview(),
+                )
+                .on_click({
                     let id = *id;
                     cx.listener(move |this, _event, _window, _cx| {
                         this.scroll_to(&id);
@@ -1437,7 +1436,7 @@ impl ChatPanel {
         } else if failed {
             SharedString::from("• Error")
         } else if pending {
-            SharedString::from("• Sending...")
+            SharedString::from("• Sending")
         } else {
             SharedString::from("• Unknown")
         };
@@ -1462,7 +1461,7 @@ impl ChatPanel {
                                 })
                                 .unwrap_or_default();
 
-                            this.title(SharedString::from("Sent Reports"))
+                            this.title(SharedString::from("Sent reports"))
                                 .close_button(true)
                                 .child(v_flex().gap_4().children(items))
                         });
@@ -1699,7 +1698,7 @@ impl ChatPanel {
                     img(local.image_source())
                         .border_1()
                         .border_color(cx.theme().border)
-                        .h(px(250.))
+                        .h(rems(16.))
                         .object_fit(ObjectFit::Cover)
                         .rounded(cx.theme().radius_lg),
                 )
@@ -1734,7 +1733,7 @@ impl ChatPanel {
             .border_1()
             .border_color(cx.theme().border)
             .rounded(cx.theme().radius)
-            .child(Icon::new(IconName::Lock).text_color(cx.theme().primary))
+            .child(Icon::new(IconName::Lock).text_color(cx.theme().accent))
             .child(
                 v_flex()
                     .min_w_0()
@@ -1835,18 +1834,22 @@ impl ChatPanel {
         items
     }
 
-    fn render_reply(&self, ix: usize, id: &EventId, cx: &Context<Self>) -> impl IntoElement {
+    fn render_reply(&self, id: &EventId, cx: &Context<Self>) -> impl IntoElement {
         if let Some(text) = self.message(id) {
             let profile = self.directory.read(cx).person(&text.author, cx);
 
-            ReplyPreview::new(ix, profile.name(), text.preview())
-                .on_remove({
-                    let id = text.id;
-                    cx.listener(move |this, _, _, cx| {
-                        this.remove_reply(&id, cx);
-                    })
+            ReplyPreview::new(
+                SharedString::from(format!("reply-{}", id.to_hex())),
+                profile.name(),
+                text.preview(),
+            )
+            .on_remove({
+                let id = text.id;
+                cx.listener(move |this, _, _, cx| {
+                    this.remove_reply(&id, cx);
                 })
-                .into_any_element()
+            })
+            .into_any_element()
         } else {
             div().into_any_element()
         }
@@ -1859,8 +1862,8 @@ impl ChatPanel {
     ) -> impl IntoIterator<Item = impl IntoElement> {
         let mut items = vec![];
 
-        for (ix, id) in self.replies_to.read(cx).iter().enumerate() {
-            items.push(self.render_reply(ix, id, cx));
+        for id in self.replies_to.read(cx).iter() {
+            items.push(self.render_reply(id, cx));
         }
 
         items

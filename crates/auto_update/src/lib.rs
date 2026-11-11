@@ -155,7 +155,7 @@ impl AutoUpdater {
     pub fn status(&self) -> SharedString {
         match &self.status {
             UpdateStatus::Idle | UpdateStatus::UpToDate => "Up to date".into(),
-            UpdateStatus::Checking => "Checking for updates…".into(),
+            UpdateStatus::Checking => "Checking for updates".into(),
             UpdateStatus::Available(version) => format!("Version {version} available").into(),
             UpdateStatus::Downloading { downloaded, total } => {
                 let total_mb = total.map(|t| t as f64 / 1_048_576.0);
@@ -165,7 +165,7 @@ impl AutoUpdater {
                     None => format!("Downloading {downloaded_mb:.1} MB").into(),
                 }
             }
-            UpdateStatus::Installing => "Installing update…".into(),
+            UpdateStatus::Installing => "Installing update".into(),
             UpdateStatus::Staged(version) => {
                 format!("Version {version} ready — restart to apply").into()
             }

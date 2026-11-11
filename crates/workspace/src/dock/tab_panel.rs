@@ -678,7 +678,7 @@ impl TabGroupRenderer for CoopTabGroupSkin {
                                     h_flex()
                                         .id("tabs-inner")
                                         .relative()
-                                        .gap(px(4.))
+                                        .gap_1()
                                         .overflow_x_scroll()
                                         .lock_scroll_axis()
                                         .track_scroll(&self.scroll_handle)

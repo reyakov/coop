@@ -3,7 +3,7 @@ use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, ClipboardItem, Entity, IntoElement, ParentElement, SharedString, Styled,
-    WeakEntity, Window, div, px,
+    WeakEntity, Window, div, px, rems,
 };
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogButtonProps;
@@ -25,7 +25,7 @@ pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) 
     });
 
     window.open_dialog(cx, move |this, _window, cx| {
-        this.max_h(px(600.))
+        this.max_h(rems(37.5))
             .close_button(true)
             .title("Invites")
             .child(body(group.clone(), input.clone(), cx))

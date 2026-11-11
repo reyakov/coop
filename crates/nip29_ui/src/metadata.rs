@@ -11,7 +11,7 @@ use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use nip29::{Group, GroupId, GroupMetadata};
 use nostr_sdk::prelude::RelayUrl;
 use ui::settings_row;
@@ -100,7 +100,7 @@ pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) 
         let supported = *livekit.read(cx) != Some(false);
 
         this.close_button(true)
-            .title("Edit Group")
+            .title("Edit group")
             .button_props(
                 DialogButtonProps::default()
                     .cancel_text("Cancel")
@@ -161,24 +161,27 @@ pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) 
                             .child(settings_row(
                                 "LiveKit",
                                 if supported {
-                                    "Announce audio and video support."
+                                    "Announce audio and video support"
                                 } else {
                                     "The relay doesn't announce LiveKit support."
                                 },
-                                Switch::new("livekit").checked(current.livekit).on_click({
-                                    let flags = flags.clone();
-                                    let livekit = livekit.clone();
+                                Switch::new("livekit")
+                                    .checked(current.livekit)
+                                    .disabled(!supported)
+                                    .on_click({
+                                        let flags = flags.clone();
+                                        let livekit = livekit.clone();
 
-                                    move |next, _window, cx| {
-                                        if *next && *livekit.read(cx) == Some(false) {
-                                            return;
+                                        move |next, _window, cx| {
+                                            if *next && *livekit.read(cx) == Some(false) {
+                                                return;
+                                            }
+                                            flags.update(cx, |flags, cx| {
+                                                flags.livekit = *next;
+                                                cx.notify();
+                                            });
                                         }
-                                        flags.update(cx, |flags, cx| {
-                                            flags.livekit = *next;
-                                            cx.notify();
-                                        });
-                                    }
-                                }),
+                                    }),
                                 cx,
                             )),
                     ),
@@ -293,10 +296,10 @@ fn children_section(children: &Entity<Vec<GroupId>>, cx: &App) -> AnyElement {
             .flex_shrink_0()
             .gap_1()
             .when(ix > 0, |this| {
-                this.child(move_button(children.clone(), ix, ix - 1, "up"))
+                this.child(move_button(children.clone(), child, ix, ix - 1, "up"))
             })
             .when(ix + 1 < list.len(), |this| {
-                this.child(move_button(children.clone(), ix, ix + 1, "down"))
+                this.child(move_button(children.clone(), child, ix, ix + 1, "down"))
             });
 
         section = section.child(
@@ -319,11 +322,12 @@ fn children_section(children: &Entity<Vec<GroupId>>, cx: &App) -> AnyElement {
 
 fn move_button(
     children: Entity<Vec<GroupId>>,
+    child: &GroupId,
     ix: usize,
     target: usize,
     direction: &'static str,
 ) -> Button {
-    Button::new(SharedString::from(format!("child-{direction}-{ix}")))
+    Button::new(SharedString::from(format!("child-{direction}-{child}")))
         .label(if direction == "up" { "Up" } else { "Down" })
         .ghost()
         .small()

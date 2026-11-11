@@ -5,7 +5,7 @@ use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Div, Entity, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Task, Window, div, px, relative, uniform_list,
+    Styled, Subscription, Task, Window, div, relative, rems, uniform_list,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -324,7 +324,7 @@ impl Screening {
 
                         items
                     })
-                    .h(px(300.)),
+                    .h(rems(18.75)),
                 ),
             )
         });
@@ -571,7 +571,7 @@ fn status_badge(status: Option<bool>, cx: &App) -> Div {
             if let Some(status) = status {
                 this.child(Icon::new(IconName::CircleCheck).small().text_color({
                     if status {
-                        cx.theme().primary
+                        cx.theme().success
                     } else {
                         cx.theme().muted_foreground
                     }

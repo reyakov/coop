@@ -1,6 +1,6 @@
 use gpui::{
-    App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
-    SharedString, StyleRefinement, Styled, Window, div, px,
+    App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Rems, RenderOnce, SharedString,
+    StyleRefinement, Styled, Window, div, rems,
 };
 use gpui_base::AvatarImage;
 use gpui_kit::base::StyledExt as _;
@@ -115,7 +115,7 @@ impl RenderOnce for Avatar {
 #[derive(IntoElement)]
 struct PixelAvatar {
     seed: u64,
-    side: Pixels,
+    side: Rems,
     style: StyleRefinement,
 }
 
@@ -187,13 +187,14 @@ impl RenderOnce for PixelAvatar {
 }
 
 /// The rendered side length of an avatar at `size`.
-fn side_length(size: Size) -> Pixels {
+fn side_length(size: Size) -> Rems {
     match size {
-        Size::XSmall => px(16.),
-        Size::Small => px(24.),
-        Size::Medium => px(48.),
-        Size::Large => px(80.),
-        Size::Size(size) => size,
+        Size::XSmall => rems(1.),
+        Size::Small => rems(1.5),
+        Size::Medium => rems(3.),
+        Size::Large => rems(5.),
+        // Custom sizes arrive in px; assume the 16px default rem.
+        Size::Size(size) => rems(size.as_f32() / 16.),
     }
 }
 

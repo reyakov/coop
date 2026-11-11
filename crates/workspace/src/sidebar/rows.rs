@@ -51,7 +51,7 @@ pub(crate) fn open_room(
                 .button_props(
                     DialogButtonProps::default()
                         .cancel_text("Ignore")
-                        .ok_text("Response"),
+                        .ok_text("Respond"),
                 )
                 .on_cancel(move |_event, window, cx| {
                     window.dispatch_action(Box::new(ClosePanel), cx);
@@ -200,7 +200,7 @@ impl Sidebar {
                                     h_flex()
                                         .gap_1()
                                         .when(spam, |this| {
-                                            this.child(Tag::danger().xsmall().child("SPAM"))
+                                            this.child(Tag::danger().xsmall().child("Spam"))
                                         })
                                         .when(!spam, |this| {
                                             this.child(

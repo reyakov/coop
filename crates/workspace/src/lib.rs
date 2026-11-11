@@ -11,7 +11,7 @@ use chat::{ChatEvent, ChatRegistry};
 use common::download_dir;
 use gpui::{
     Action, App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
-    ParentElement, Pixels, Render, SharedString, Styled, Subscription, Task, Window, div, px,
+    ParentElement, Pixels, Render, SharedString, Styled, Subscription, Task, Window, div, px, rems,
 };
 use gpui_kit::component::button::{Button, ButtonVariant};
 use gpui_kit::component::command::{
@@ -480,7 +480,7 @@ impl Workspace {
                             .bordered(false)
                             .rounded(cx.theme().radius_lg)
                             .placeholder("Search themes...")
-                            .max_h(px(420.))
+                            .max_h(rems(26.25))
                             .on_confirm(move |index, _, cx| {
                                 if let Some(name) = Self::theme_name_at(index, cx) {
                                     AppSettings::select_theme(&name, cx);

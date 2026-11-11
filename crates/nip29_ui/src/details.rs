@@ -1,5 +1,6 @@
 use gpui::{
-    AnyElement, App, IntoElement, ParentElement, SharedString, Styled, WeakEntity, Window, div, px,
+    AnyElement, App, IntoElement, ParentElement, SharedString, Styled, WeakEntity, Window, div,
+    rems,
 };
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::description_list::{DescriptionItem, DescriptionList};
@@ -10,9 +11,9 @@ use ui::Avatar;
 
 pub(crate) fn open(group: WeakEntity<Group>, window: &mut Window, cx: &mut App) {
     window.open_dialog(cx, move |this, _window, cx| {
-        this.max_h(px(600.))
+        this.max_h(rems(37.5))
             .close_button(true)
-            .title("About Group")
+            .title("About group")
             .child(body(&group, cx))
     });
 }
