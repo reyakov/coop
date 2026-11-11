@@ -121,7 +121,7 @@ impl DeviceRegistry {
             // Subscribe to nostr state events
             cx.observe(&settings, move |this, settings, cx| {
                 if settings.read(cx).is_nip4e_enabled(cx) {
-                    this.get_announcement(cx);
+                    this.init_encryption(cx);
                 };
             }),
         );
@@ -135,6 +135,11 @@ impl DeviceRegistry {
                     this.resync.store(false, Ordering::Relaxed);
                     // The in-flight request and client key belong to the old account
                     this.app_keys = None;
+                    // The encryption signer belongs to the old account
+                    this.signer.update(cx, |signer, cx| {
+                        *signer = None;
+                        cx.notify();
+                    });
 
                     if this.pending_request.take().is_some() {
                         // The old approval must not target the new account's signer
@@ -148,7 +153,7 @@ impl DeviceRegistry {
                     }
 
                     this.handle_notifications(cx);
-                    this.get_announcement(cx);
+                    this.init_encryption(cx);
                 }
             }),
         );
@@ -372,6 +377,33 @@ impl DeviceRegistry {
         }
     }
 
+    /// Initialize encryption from the local database before reconciling with relays
+    fn init_encryption(&mut self, cx: &mut Context<Self>) {
+        let nostr = NostrRegistry::global(cx);
+        let client = nostr.read(cx).client();
+        let signer = nostr.read(cx).signer();
+
+        self.tasks.push(cx.spawn(async move |this, cx| {
+            let Ok(keys) = get_keys(&client, &signer).await else {
+                // No local keys; the announcement reconciliation will guide setup
+                this.update(cx, |this, cx| this.get_announcement(cx))?;
+                return Ok(());
+            };
+
+            this.update(cx, |this, cx| {
+                // Relay reconciliation may have set the signer already
+                if this.signer.read(cx).is_none() {
+                    this.set_signer(keys, cx);
+                    this.wait_for_request(cx);
+                }
+
+                this.get_announcement(cx);
+            })?;
+
+            Ok(())
+        }));
+    }
+
     /// Get device announcement for current user
     pub fn get_announcement(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
@@ -409,8 +441,11 @@ impl DeviceRegistry {
             }
 
             if !announcement_existed.load(Ordering::Acquire) {
-                this.update(cx, |_this, cx| {
-                    cx.emit(DeviceEvent::NotSet);
+                this.update(cx, |this, cx| {
+                    // The device already initialized encryption from the local database
+                    if this.signer.read(cx).is_none() {
+                        cx.emit(DeviceEvent::NotSet);
+                    }
                 })?;
             }
 
@@ -581,8 +616,11 @@ impl DeviceRegistry {
         self.tasks.push(cx.spawn(async move |this, cx| {
             if let Ok(keys) = task.await {
                 this.update(cx, |this, cx| {
-                    this.set_signer(keys, cx);
-                    this.wait_for_request(cx);
+                    // The local database may have initialized this device already
+                    if this.signer.read(cx).is_none() {
+                        this.set_signer(keys, cx);
+                        this.wait_for_request(cx);
+                    }
                     this.rotate_if_due(cx);
                 })?;
             } else {
@@ -760,6 +798,18 @@ impl DeviceRegistry {
         let task: Task<Result<Keys, Error>> = cx.background_spawn(async move {
             let identity = signer.get_public_key_async().await?;
             let keys = decrypt_approval(&client, &app_keys, identity, &event).await?;
+
+            // Persist the transferred key so restarts initialize from the local database
+            if let Err(e) = set_keys(
+                &client,
+                &signer,
+                &keys.secret_key().to_secret_hex(),
+                Timestamp::now(),
+            )
+            .await
+            {
+                log::error!("Failed to persist the transferred encryption key: {e}");
+            }
 
             Ok(keys)
         });
