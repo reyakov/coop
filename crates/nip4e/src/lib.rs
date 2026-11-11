@@ -20,14 +20,27 @@ use person::Directory;
 use settings::{AppSettings, NIP4E_ROTATION_MAX_DAYS, NIP4E_ROTATION_MIN_DAYS};
 use smallvec::{SmallVec, smallvec};
 use state::{Announcement, NostrRegistry, UniversalSigner, credentials};
+use storage::{SECONDS_PER_DAY, archive_key, get_keys, load_device_keys, set_keys};
 use ui::Avatar;
 
 mod storage;
 
-use storage::{SECONDS_PER_DAY, archive_key, get_keys, load_device_keys, set_keys};
+/// Keep the durable processed-request log bounded
+const PROCESSED_REQUESTS_LIMIT: usize = 256;
+/// Ignore key requests older than a day so stale events on relays cannot resurface
+const REQUEST_MAX_AGE: u64 = SECONDS_PER_DAY;
 
 pub fn init(cx: &mut App) {
     DeviceRegistry::set_global(cx.new(DeviceRegistry::new), cx);
+}
+
+struct DeviceNotification;
+
+/// A key request awaiting user approval on this device
+#[derive(Debug)]
+struct PendingRequest {
+    event: Event,
+    client_key: PublicKey,
 }
 
 struct GlobalDeviceRegistry(Entity<DeviceRegistry>);
@@ -74,7 +87,7 @@ pub struct DeviceRegistry {
     resync: Arc<AtomicBool>,
     /// Whether a key rotation is in flight, to coalesce overlapping requests
     rotating: bool,
-    /// Person directory for requesters shown in notifications
+    /// Person directory for requesters shown in the approval dialog
     directory: Entity<Directory>,
     /// Relay notification listener
     notification_listener: Option<Task<Result<(), Error>>>,
@@ -590,10 +603,13 @@ impl DeviceRegistry {
 
         self.tasks.push(cx.background_spawn(async move {
             let public_key = signer.get_public_key_async().await?;
-            let id = SubscriptionId::new("dekey-requests");
 
-            // Construct a filter for encryption key requests.
-            let filter = Filter::new().kind(Kind::Custom(4454)).author(public_key);
+            let id = SubscriptionId::new("dekey-requests");
+            let since = Timestamp::now().as_secs().saturating_sub(REQUEST_MAX_AGE);
+            let filter = Filter::new()
+                .kind(Kind::Custom(4454))
+                .author(public_key)
+                .since(Timestamp::from_secs(since));
 
             // Subscribe to the device key requests on user's write relays
             client.subscribe(vec![filter]).with_id(id).await?;
@@ -903,12 +919,22 @@ impl DeviceRegistry {
 
     /// Handle encryption request
     fn ask_for_approval(&mut self, event: Event, cx: &mut Context<Self>) {
+        let expires_at = Timestamp::now()
+            .as_secs()
+            .saturating_sub(event.created_at.as_secs());
+
+        if expires_at > REQUEST_MAX_AGE {
+            log::warn!("Ignoring expired encryption key request");
+            return;
+        }
+
         let Some(client_key) = client_pubkey_from_event(&event) else {
             log::warn!("Ignoring invalid encryption key request: no valid requester key");
             return;
         };
 
         let read = credentials::read_processed_requests(cx);
+
         cx.spawn(async move |this, cx| {
             let processed = match read.await {
                 Ok(bytes) => bytes
@@ -1077,6 +1103,19 @@ impl DeviceRegistry {
                     )
                     .into_any_element()
             })
+            .on_close({
+                let entity = entity.clone();
+                let request_id = event.id;
+
+                move |_window, cx| {
+                    // Closing without approving rejects the request, so it must not resurface
+                    entity
+                        .update(cx, |this, cx| {
+                            this.mark_request_processed(request_id, cx);
+                        })
+                        .ok();
+                }
+            })
             .action(move |_this, _window, _cx| {
                 let view = entity.clone();
                 let event = event.clone();
@@ -1100,18 +1139,6 @@ impl DeviceRegistry {
             }))
     }
 }
-
-struct DeviceNotification;
-
-/// A key request awaiting user approval on this device
-#[derive(Debug)]
-struct PendingRequest {
-    event: Event,
-    client_key: PublicKey,
-}
-
-/// Keep the durable processed-request log bounded
-const PROCESSED_REQUESTS_LIMIT: usize = 256;
 
 /// Parse concatenated hex event ids
 fn parse_processed_requests(bytes: &[u8]) -> VecDeque<EventId> {
