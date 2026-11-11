@@ -385,6 +385,7 @@ dependencies = [
  "gpui-kit",
  "gpui-pre",
  "rust-embed",
+ "serde_json",
 ]
 
 [[package]]
@@ -1708,12 +1709,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "configparser"
-version = "3.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "031ad3d167622974ed636505ae4556267ed4aa2aea0464122fa6bc9698a32825"
-
-[[package]]
 name = "console_error_panic_hook"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1811,7 +1806,6 @@ dependencies = [
  "auto_update",
  "chat",
  "chat_ui",
- "flume 0.11.1",
  "gpui-kit",
  "gpui-pre",
  "gpui-pre-linux",
@@ -1820,8 +1814,6 @@ dependencies = [
  "gpui-pre-reqwest-client",
  "gpui-pre-windows",
  "log",
- "native-theme",
- "native-theme-gpui",
  "nip29",
  "nip4e",
  "nip60",
@@ -3677,7 +3669,7 @@ dependencies = [
  "parking",
  "parking_lot",
  "pin-project",
- "pollster 0.4.0",
+ "pollster",
  "profiling",
  "rand 0.9.5",
  "raw-window-handle",
@@ -5938,62 +5930,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "native-theme"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef2a6c2d7520b94d53802c0c94d0450280a7c10380246756661bd1c6ffc64dd1"
-dependencies = [
- "arc-swap",
- "ashpd",
- "async-io",
- "async-trait",
- "block2 0.6.2",
- "configparser",
- "fontdb",
- "inventory",
- "native-theme-derive",
- "notify",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-core-foundation",
- "objc2-core-text",
- "objc2-foundation 0.3.2",
- "pollster 1.0.1",
- "serde",
- "serde_with",
- "toml 1.2.1+spec-1.1.0",
- "unicase",
- "windows 0.62.2",
- "windows-version",
- "zbus 5.19.0",
-]
-
-[[package]]
-name = "native-theme-derive"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba9ec586e35be9d05bdd279adc9cbe213b5bd630536b8066b82caaaf4021dba7"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.10",
-]
-
-[[package]]
-name = "native-theme-gpui"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e13cbaa86f1f0a1ac947380f5d8d47a5e9f7f939c77afd05d7039041abae146"
-dependencies = [
- "gpui-base",
- "gpui-component",
- "gpui-kit",
- "gpui-pre",
- "image",
- "native-theme",
-]
-
-[[package]]
 name = "native-tls"
 version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6799,8 +6735,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cde0dfb48d25d2b4862161a4d5fcc0e3c24367869ad306b0c9ec0073bfed92d"
 dependencies = [
  "bitflags 2.13.2",
- "block2 0.6.2",
- "libc",
  "objc2 0.6.5",
  "objc2-core-foundation",
  "objc2-core-graphics",
@@ -7604,12 +7538,6 @@ name = "pollster"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
-
-[[package]]
-name = "pollster"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc6355899e1c9462875b6757c79f3caa011a1fdae12bbb1a2e72dd1f234f8336"
 
 [[package]]
 name = "poly1305"

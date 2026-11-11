@@ -85,14 +85,19 @@ pub fn run() -> Result<(), JsValue> {
 
             gpui_kit::init(cx);
 
+            // Register the bundled gpui-kit themes before anything renders
+            settings::init_themes(cx);
+
             load_embedded_fonts(cx);
-            apply_web_fonts(cx);
 
             // Initialize settings
             settings::init(cx);
 
-            apply_appearance(settings::persisted_appearance_mode(), cx);
-            settings::AppSettings::apply_theme_style(cx);
+            // Apply the persisted appearance, theme selection and tuning
+            settings::apply_persisted_theme(cx);
+
+            // Layer the web font overrides on top of the applied theme
+            apply_web_fonts(cx);
 
             // Initialize the nostr client
             state::init(cx, None);
@@ -155,15 +160,4 @@ fn apply_web_fonts(cx: &mut App) {
             config.mono_font_family = Some(UI_FONT.into());
         }
     });
-}
-
-/// Honor the appearance mode against the default palettes
-fn apply_appearance(appearance: settings::AppearanceMode, cx: &mut App) {
-    use gpui_kit::component::{Theme, ThemeMode};
-
-    match appearance {
-        settings::AppearanceMode::System => Theme::sync_system_appearance(None, cx),
-        settings::AppearanceMode::Light => Theme::change(ThemeMode::Light, None, cx),
-        settings::AppearanceMode::Dark => Theme::change(ThemeMode::Dark, None, cx),
-    }
 }

@@ -21,7 +21,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{Disableable, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{Disableable, Sizable, ThemeRegistry, WindowExt, h_flex, v_flex};
 use settings::{AppSettings, AppearanceMode, NIP4E_ROTATION_DEFAULT_DAYS};
 #[cfg(not(target_arch = "wasm32"))]
 use speech::model::{self as speech_model};
@@ -250,6 +250,69 @@ impl Preferences {
         });
     }
 
+    /// Dropdown to pick the bundled theme applied in an appearance.
+    fn render_theme_choice(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        description: &'static str,
+        dark: bool,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        const DEFAULT: &str = "Default";
+
+        let selected = if dark {
+            AppSettings::get_theme_dark(cx)
+        } else {
+            AppSettings::get_theme_light(cx)
+        };
+
+        let themes: Vec<String> = ThemeRegistry::global(cx)
+            .sorted_themes()
+            .into_iter()
+            .filter(|theme| theme.mode.is_dark() == dark)
+            .map(|theme| theme.name.to_string())
+            .collect();
+
+        let current = selected
+            .filter(|name| themes.contains(name))
+            .unwrap_or_else(|| DEFAULT.into());
+
+        settings_row(
+            label,
+            description,
+            Button::new(id)
+                .label(current)
+                .ghost()
+                .small()
+                .dropdown_menu(move |menu, _window, _cx| {
+                    let reset = move |name: Option<String>, cx: &mut App| {
+                        if dark {
+                            AppSettings::set_theme_dark(name, cx);
+                        } else {
+                            AppSettings::set_theme_light(name, cx);
+                        }
+                    };
+
+                    let menu =
+                        menu.item(PopupMenuItem::new(DEFAULT).on_click(move |_, _window, cx| {
+                            reset(None, cx);
+                        }));
+
+                    themes.iter().fold(menu, |menu, name| {
+                        let name = name.clone();
+
+                        menu.item(PopupMenuItem::new(name.clone()).on_click(
+                            move |_, _window, cx| {
+                                reset(Some(name.clone()), cx);
+                            },
+                        ))
+                    })
+                }),
+            cx,
+        )
+    }
+
     /// Ask the user for an image to show behind chat and group panels
     fn choose_background(
         #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))] window: &mut Window,
@@ -388,6 +451,8 @@ impl Render for Preferences {
         const AVATAR: &str = "Hide all avatar pictures to improve performance.";
         const APPEARANCE: &str =
             "Choose whether the app follows the system theme or uses a light/dark theme.";
+        const LIGHT_THEME: &str = "Bundled theme applied in light appearance.";
+        const DARK_THEME: &str = "Bundled theme applied in dark appearance.";
         const FONT_SIZE: &str = "The base font size for the interface.";
         const RADIUS: &str = "Corner radius for UI elements. Empty follows the OS theme.";
         const RADIUS_LG: &str =
@@ -471,6 +536,8 @@ impl Render for Preferences {
                     }),
                 cx,
             ))
+            .child(self.render_theme_choice("theme-light", "Light Theme", LIGHT_THEME, false, cx))
+            .child(self.render_theme_choice("theme-dark", "Dark Theme", DARK_THEME, true, cx))
             .child(Separator::horizontal())
             .child(
                 v_flex()

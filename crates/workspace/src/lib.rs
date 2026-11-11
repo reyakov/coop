@@ -1,3 +1,5 @@
+use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use ::settings::{AppSettings, AppearanceMode};
@@ -8,13 +10,18 @@ use chat::{ChatEvent, ChatRegistry};
 #[cfg(not(target_arch = "wasm32"))]
 use common::download_dir;
 use gpui::{
-    Action, App, AppContext, Context, Entity, InteractiveElement, IntoElement, ParentElement,
-    Pixels, Render, SharedString, Styled, Subscription, Task, Window, div, px,
+    Action, App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
+    ParentElement, Pixels, Render, SharedString, Styled, Subscription, Task, Window, div, px,
 };
 use gpui_kit::component::button::Button;
+use gpui_kit::component::command::{
+    Command as CommandPalette, CommandGroup, CommandItem, CommandState,
+};
 use gpui_kit::component::dock::{DockArea, DockLayout, DockPlacement, Panel, PanelHandle};
 use gpui_kit::component::notification::{Notification, NotificationType};
-use gpui_kit::component::{ActiveTheme, Theme, WindowExt, v_flex};
+use gpui_kit::component::{
+    ActiveTheme, IndexPath, Theme, ThemeConfig, ThemeRegistry, WindowExt, v_flex,
+};
 use nip4e::{DeviceEvent, DeviceRegistry};
 use nip29::{GroupId, GroupKey};
 use nostr_sdk::prelude::*;
@@ -57,6 +64,7 @@ enum Command {
     ShowRelayList,
     ShowProfile,
     ShowSettings,
+    ToggleTheme,
     ShowBackup,
     ShowContactList,
     ShowInbox,
@@ -310,6 +318,9 @@ impl Workspace {
                         .child(view.clone())
                 });
             }
+            Command::ToggleTheme => {
+                self.theme_selector(window, cx);
+            }
             Command::ShowProfile => {
                 let nostr = NostrRegistry::global(cx);
 
@@ -438,6 +449,100 @@ impl Workspace {
                 }
             }
         }
+    }
+
+    /// Browse and apply the bundled themes.
+    fn theme_selector(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let state = cx.new(|cx| CommandState::new(window, cx));
+        let focus_on_mount = Rc::new(Cell::new(true));
+
+        window.open_dialog(cx, move |dialog, _, _| {
+            let state = state.clone();
+            let focus_on_mount = focus_on_mount.clone();
+
+            dialog
+                .close_button(false)
+                .p_0()
+                .width(px(420.))
+                .content(move |content, window, cx| {
+                    if focus_on_mount.replace(false) {
+                        let state = state.clone();
+                        window.defer(cx, move |window, cx| {
+                            state.read(cx).focus_handle(cx).focus(window, cx);
+                        });
+                    }
+
+                    let active = Theme::global(cx).theme_name().clone();
+                    let (lights, darks) = Self::theme_entries(cx);
+
+                    content.child(
+                        CommandPalette::new(&state)
+                            .bordered(false)
+                            .rounded(cx.theme().radius_lg)
+                            .placeholder("Search themes...")
+                            .max_h(px(420.))
+                            .on_confirm(move |index, _, cx| {
+                                if let Some(name) = Self::theme_name_at(index, cx) {
+                                    AppSettings::select_theme(&name, cx);
+                                }
+                            })
+                            .group(
+                                CommandGroup::new()
+                                    .label("Light Themes")
+                                    .items(Self::theme_items(&lights, &active)),
+                            )
+                            .group(
+                                CommandGroup::new()
+                                    .label("Dark Themes")
+                                    .items(Self::theme_items(&darks, &active)),
+                            ),
+                    )
+                })
+        });
+    }
+
+    /// Sorted bundled themes partitioned into light and dark groups
+    fn theme_entries(cx: &App) -> (Vec<Rc<ThemeConfig>>, Vec<Rc<ThemeConfig>>) {
+        let (mut lights, mut darks) = (vec![], vec![]);
+
+        for theme in ThemeRegistry::global(cx).sorted_themes() {
+            if theme.mode.is_dark() {
+                darks.push(theme.clone());
+            } else {
+                lights.push(theme.clone());
+            }
+        }
+
+        (lights, darks)
+    }
+
+    /// One palette row per theme.
+    fn theme_items(themes: &[Rc<ThemeConfig>], active: &SharedString) -> Vec<CommandItem> {
+        themes
+            .iter()
+            .map(|theme| {
+                CommandItem::new()
+                    .label(theme.name.clone())
+                    .checked(&theme.name == active)
+                    .keywords([if theme.mode.is_dark() {
+                        "dark"
+                    } else {
+                        "light"
+                    }])
+            })
+            .collect()
+    }
+
+    /// The theme registered at the palette's original group position.
+    fn theme_name_at(index: IndexPath, cx: &App) -> Option<SharedString> {
+        let (lights, darks) = Self::theme_entries(cx);
+
+        match index.section {
+            0 => lights.get(index.row),
+            1 => darks.get(index.row),
+            _ => None,
+        }
+        .map(|theme| theme.name.clone())
     }
 
     /// Open the channel creation dialog under the action's group.

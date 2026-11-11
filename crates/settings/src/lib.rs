@@ -1,9 +1,11 @@
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use anyhow::{Error, anyhow};
 #[cfg(not(target_arch = "wasm32"))]
 use common::config_dir;
 use gpui::{App, AppContext, Context, Entity, Global, ImageSource, Subscription, Task, px};
+use gpui_kit::component::{Theme, ThemeConfig, ThemeMode, ThemeRegistry};
 use nostr_sdk::prelude::*;
 use serde::{Deserialize, Serialize};
 use smallvec::{SmallVec, smallvec};
@@ -11,6 +13,20 @@ use smallvec::{SmallVec, smallvec};
 /// Browser storage key for the settings JSON
 #[cfg(target_arch = "wasm32")]
 const SETTINGS_KEY: &str = "coop.settings";
+
+/// The default base font size for the interface
+pub const DEFAULT_FONT_SIZE: f32 = 16.0;
+
+const DEFAULT_FILE_SERVER: &str = "https://nostr.download/";
+const LEGACY_FILE_SERVER: &str = "blossom.band";
+/// Minimum days between automatic encryption key rotations
+pub const NIP4E_ROTATION_MIN_DAYS: u32 = 1;
+/// Maximum days between automatic encryption key rotations
+pub const NIP4E_ROTATION_MAX_DAYS: u32 = 90;
+/// Days between automatic encryption key rotations when enabled
+pub const NIP4E_ROTATION_DEFAULT_DAYS: u32 = 30;
+/// Built-in image shown behind chat and group panels
+pub const DEFAULT_BACKGROUND: &str = "brand/default-bg.jpg";
 
 /// The user's appearance preference, persisted with the rest of the settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -36,8 +52,20 @@ impl AppearanceMode {
     }
 }
 
-/// The default base font size for the interface
-pub const DEFAULT_FONT_SIZE: f32 = 16.0;
+/// Signer kind
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SignerKind {
+    Auto,
+    Encryption,
+    #[default]
+    User,
+}
+
+impl SignerKind {
+    pub fn encryption(&self) -> bool {
+        matches!(self, SignerKind::Encryption)
+    }
+}
 
 /// User tuning applied on top of the native OS theme
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -60,123 +88,6 @@ impl Default for ThemeSettings {
             radius: None,
             radius_lg: None,
         }
-    }
-}
-
-pub fn init(cx: &mut App) {
-    AppSettings::set_global(cx.new(AppSettings::new), cx)
-}
-
-/// Read the persisted appearance mode synchronously.
-fn persisted_settings() -> Option<Settings> {
-    let content = persisted_content();
-    content.and_then(|content| serde_json::from_str(&content).ok())
-}
-
-/// The persisted settings JSON, from the config file or browser storage
-#[cfg(not(target_arch = "wasm32"))]
-fn persisted_content() -> Option<String> {
-    let path = config_dir().join(".settings");
-    std::fs::read_to_string(path).ok()
-}
-
-#[cfg(target_arch = "wasm32")]
-fn persisted_content() -> Option<String> {
-    common::web_store::get(SETTINGS_KEY).ok().flatten()
-}
-
-pub fn persisted_appearance_mode() -> AppearanceMode {
-    persisted_settings()
-        .map(|settings| settings.appearance_mode)
-        .unwrap_or_default()
-}
-
-/// Read the persisted theme tuning synchronously.
-pub fn persisted_theme() -> ThemeSettings {
-    persisted_settings()
-        .map(|settings| settings.theme)
-        .unwrap_or_default()
-}
-
-const DEFAULT_FILE_SERVER: &str = "https://nostr.download/";
-const LEGACY_FILE_SERVER: &str = "blossom.band";
-/// Minimum days between automatic encryption key rotations
-pub const NIP4E_ROTATION_MIN_DAYS: u32 = 1;
-/// Maximum days between automatic encryption key rotations
-pub const NIP4E_ROTATION_MAX_DAYS: u32 = 90;
-/// Days between automatic encryption key rotations when enabled
-pub const NIP4E_ROTATION_DEFAULT_DAYS: u32 = 30;
-/// Built-in image shown behind chat and group panels
-pub const DEFAULT_BACKGROUND: &str = "brand/default-bg.jpg";
-
-macro_rules! setting_accessors {
-    ($(pub $field:ident: $type:ty),* $(,)?) => {
-        impl AppSettings {
-            $(
-                paste::paste! {
-                    pub fn [<get_ $field>](cx: &App) -> $type {
-                        Self::global(cx).read(cx).inner.read(cx).$field.clone()
-                    }
-
-                    pub fn [<update_ $field>](value: $type, cx: &mut App) {
-                        Self::global(cx).update(cx, |this, cx| {
-                            this.inner.update(cx, |inner, cx| {
-                                inner.$field = value;
-                                cx.notify();
-                            });
-                        });
-                    }
-                }
-            )*
-        }
-    };
-}
-
-macro_rules! setting_getters {
-    ($(pub $field:ident: $type:ty),* $(,)?) => {
-        impl AppSettings {
-            $(
-                paste::paste! {
-                    pub fn [<get_ $field>](cx: &App) -> $type {
-                        Self::global(cx).read(cx).inner.read(cx).$field.clone()
-                    }
-                }
-            )*
-        }
-    };
-}
-
-setting_accessors! {
-    pub appearance_mode: AppearanceMode,
-    pub hide_avatar: bool,
-    pub screening: bool,
-    pub wot_auto_trust: bool,
-    pub nip4e: bool,
-    pub nip4e_rotation_days: Option<u32>,
-    pub hide_group_notice: bool,
-    pub file_server: Url,
-    pub panel_background: bool,
-    pub panel_background_path: Option<PathBuf>,
-}
-
-setting_getters! {
-    pub theme: ThemeSettings,
-    pub pinned_rooms: Vec<u64>,
-    pub pinned_groups: Vec<String>,
-}
-
-/// Signer kind
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum SignerKind {
-    Auto,
-    Encryption,
-    #[default]
-    User,
-}
-
-impl SignerKind {
-    pub fn encryption(&self) -> bool {
-        matches!(self, SignerKind::Encryption)
     }
 }
 
@@ -237,6 +148,12 @@ pub struct Settings {
     /// Tuning applied on top of the native OS theme
     #[serde(default)]
     pub theme: ThemeSettings,
+    /// Bundled theme applied in light appearance; None uses the default light theme
+    #[serde(default)]
+    pub theme_light: Option<String>,
+    /// Bundled theme applied in dark appearance; None uses the default dark theme
+    #[serde(default)]
+    pub theme_dark: Option<String>,
     /// Show an image behind chat and group panels
     #[serde(default)]
     pub panel_background: bool,
@@ -266,6 +183,8 @@ impl Default for Settings {
             nip4e_rotation_days: None,
             hide_group_notice: false,
             theme: ThemeSettings::default(),
+            theme_light: None,
+            theme_dark: None,
             panel_background: true,
             panel_background_path: None,
             trusted_relays: vec![],
@@ -286,6 +205,64 @@ pub struct AppSettings {
     inner: Entity<Settings>,
     /// Event subscriptions
     _subscriptions: SmallVec<[Subscription; 2]>,
+}
+
+macro_rules! setting_accessors {
+    ($(pub $field:ident: $type:ty),* $(,)?) => {
+        impl AppSettings {
+            $(
+                paste::paste! {
+                    pub fn [<get_ $field>](cx: &App) -> $type {
+                        Self::global(cx).read(cx).inner.read(cx).$field.clone()
+                    }
+
+                    pub fn [<update_ $field>](value: $type, cx: &mut App) {
+                        Self::global(cx).update(cx, |this, cx| {
+                            this.inner.update(cx, |inner, cx| {
+                                inner.$field = value;
+                                cx.notify();
+                            });
+                        });
+                    }
+                }
+            )*
+        }
+    };
+}
+
+macro_rules! setting_getters {
+    ($(pub $field:ident: $type:ty),* $(,)?) => {
+        impl AppSettings {
+            $(
+                paste::paste! {
+                    pub fn [<get_ $field>](cx: &App) -> $type {
+                        Self::global(cx).read(cx).inner.read(cx).$field.clone()
+                    }
+                }
+            )*
+        }
+    };
+}
+
+setting_accessors! {
+    pub appearance_mode: AppearanceMode,
+    pub hide_avatar: bool,
+    pub screening: bool,
+    pub wot_auto_trust: bool,
+    pub nip4e: bool,
+    pub nip4e_rotation_days: Option<u32>,
+    pub hide_group_notice: bool,
+    pub file_server: Url,
+    pub panel_background: bool,
+    pub panel_background_path: Option<PathBuf>,
+    pub theme_light: Option<String>,
+    pub theme_dark: Option<String>,
+}
+
+setting_getters! {
+    pub theme: ThemeSettings,
+    pub pinned_rooms: Vec<u64>,
+    pub pinned_groups: Vec<String>,
 }
 
 impl AppSettings {
@@ -345,8 +322,6 @@ impl AppSettings {
     }
 
     fn apply_theme_tuning(tuning: ThemeSettings, cx: &mut App) {
-        use gpui_kit::component::Theme;
-
         {
             let styled = Theme::global_mut(cx);
             styled.font_size = px(tuning.font_size);
@@ -434,17 +409,78 @@ impl AppSettings {
         }
     }
 
-    /// Apply the persisted appearance mode to the app
+    /// Apply the persisted appearance mode and theme selection to the app
     pub fn apply_theme(&mut self, cx: &mut Context<Self>) {
-        use gpui_kit::component::Theme;
-
-        let mode = self.inner.read(cx).appearance_mode;
-        match mode {
+        let appearance = self.inner.read(cx).appearance_mode;
+        match appearance {
             AppearanceMode::System => Theme::sync_system_appearance(None, cx),
-            AppearanceMode::Light => Theme::change(gpui_kit::component::ThemeMode::Light, None, cx),
-            AppearanceMode::Dark => Theme::change(gpui_kit::component::ThemeMode::Dark, None, cx),
+            AppearanceMode::Light => Theme::change(ThemeMode::Light, None, cx),
+            AppearanceMode::Dark => Theme::change(ThemeMode::Dark, None, cx),
         }
+
+        let (light, dark) = {
+            let inner = self.inner.read(cx);
+            (inner.theme_light.clone(), inner.theme_dark.clone())
+        };
+        apply_theme_selection(light.as_deref(), dark.as_deref(), cx);
+
         let tuning = self.inner.read(cx).theme;
+        Self::apply_theme_tuning(tuning, cx);
+    }
+
+    /// Select a registered theme by name.
+    pub fn select_theme(name: &str, cx: &mut App) {
+        let Some(config) = registered_theme(name, cx) else {
+            log::warn!("theme is not registered: {name}");
+            return;
+        };
+
+        let dark = config.mode.is_dark();
+
+        if dark {
+            Self::update_theme_dark(Some(name.to_string()), cx);
+            Self::update_appearance_mode(AppearanceMode::Dark, cx);
+        } else {
+            Self::update_theme_light(Some(name.to_string()), cx);
+            Self::update_appearance_mode(AppearanceMode::Light, cx);
+        }
+
+        Theme::change(
+            if dark {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            },
+            None,
+            cx,
+        );
+        Self::reapply_theme(cx);
+    }
+
+    /// Select the theme applied in light appearance; `None` restores the default
+    pub fn set_theme_light(name: Option<String>, cx: &mut App) {
+        Self::update_theme_light(name, cx);
+        Self::reapply_theme(cx);
+    }
+
+    /// Select the theme applied in dark appearance; `None` restores the default
+    pub fn set_theme_dark(name: Option<String>, cx: &mut App) {
+        Self::update_theme_dark(name, cx);
+        Self::reapply_theme(cx);
+    }
+
+    /// Re-apply the selected themes and tuning from the current settings
+    fn reapply_theme(cx: &mut App) {
+        let (light, dark, tuning) = AppSettings::global(cx).read_with(cx, |this, cx| {
+            let inner = this.inner.read(cx);
+            (
+                inner.theme_light.clone(),
+                inner.theme_dark.clone(),
+                inner.theme,
+            )
+        });
+
+        apply_theme_selection(light.as_deref(), dark.as_deref(), cx);
         Self::apply_theme_tuning(tuning, cx);
     }
 
@@ -503,6 +539,116 @@ impl AppSettings {
     }
 }
 
+pub fn init(cx: &mut App) {
+    AppSettings::set_global(cx.new(AppSettings::new), cx)
+}
+
+/// Register the bundled gpui-kit themes with the theme registry
+pub fn init_themes(cx: &mut App) {
+    let assets = cx.asset_source().clone();
+
+    for path in assets.list("themes").unwrap_or_default() {
+        let Some(content) = assets.load(&path).unwrap_or_default() else {
+            log::warn!("bundled theme {path} is listed but missing");
+            continue;
+        };
+
+        let Ok(content) = std::str::from_utf8(&content) else {
+            log::warn!("bundled theme {path} is not valid UTF-8");
+            continue;
+        };
+
+        if let Err(error) = ThemeRegistry::global_mut(cx).load_themes_from_str(content) {
+            log::warn!("failed to load bundled theme {path} ({error})");
+        }
+    }
+}
+
+/// Read the persisted appearance mode synchronously.
+fn persisted_settings() -> Option<Settings> {
+    let content = persisted_content();
+    content.and_then(|content| serde_json::from_str(&content).ok())
+}
+
+/// The persisted settings JSON, from the config file or browser storage
+#[cfg(not(target_arch = "wasm32"))]
+fn persisted_content() -> Option<String> {
+    let path = config_dir().join(".settings");
+    std::fs::read_to_string(path).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+fn persisted_content() -> Option<String> {
+    common::web_store::get(SETTINGS_KEY).ok().flatten()
+}
+
+pub fn persisted_appearance_mode() -> AppearanceMode {
+    persisted_settings()
+        .map(|settings| settings.appearance_mode)
+        .unwrap_or_default()
+}
+
+/// Read the persisted theme tuning synchronously.
+pub fn persisted_theme() -> ThemeSettings {
+    persisted_settings()
+        .map(|settings| settings.theme)
+        .unwrap_or_default()
+}
+
+/// Read the persisted theme selection for light appearance.
+pub fn persisted_theme_light() -> Option<String> {
+    persisted_settings().and_then(|settings| settings.theme_light)
+}
+
+/// Read the persisted theme selection for dark appearance.
+pub fn persisted_theme_dark() -> Option<String> {
+    persisted_settings().and_then(|settings| settings.theme_dark)
+}
+
+/// The registered theme for a persisted theme name, if any
+fn registered_theme(name: &str, cx: &App) -> Option<Rc<ThemeConfig>> {
+    ThemeRegistry::global(cx).themes().get(name).cloned()
+}
+
+/// Swap the selected themes into the light/dark slots and reload the active mode.
+/// An unset or unknown theme falls back to the registry's default theme.
+fn apply_theme_selection(light: Option<&str>, dark: Option<&str>, cx: &mut App) {
+    let light_config = light
+        .and_then(|name| registered_theme(name, cx))
+        .or_else(|| Some(ThemeRegistry::global(cx).default_light_theme().clone()));
+    let dark_config = dark
+        .and_then(|name| registered_theme(name, cx))
+        .or_else(|| Some(ThemeRegistry::global(cx).default_dark_theme().clone()));
+
+    {
+        let theme = Theme::global_mut(cx);
+        if let Some(config) = light_config {
+            theme.light_theme = config;
+        }
+        if let Some(config) = dark_config {
+            theme.dark_theme = config;
+        }
+    }
+
+    let mode = Theme::global(cx).mode;
+    Theme::change(mode, None, cx);
+}
+
+/// Apply the persisted appearance, theme selection and tuning synchronously.
+pub fn apply_persisted_theme(cx: &mut App) {
+    match persisted_appearance_mode() {
+        AppearanceMode::System => Theme::sync_system_appearance(None, cx),
+        AppearanceMode::Light => Theme::change(ThemeMode::Light, None, cx),
+        AppearanceMode::Dark => Theme::change(ThemeMode::Dark, None, cx),
+    }
+
+    let light = persisted_theme_light();
+    let dark = persisted_theme_dark();
+    apply_theme_selection(light.as_deref(), dark.as_deref(), cx);
+
+    AppSettings::apply_theme_tuning(persisted_theme(), cx);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,5 +670,29 @@ mod tests {
         .unwrap();
 
         assert_eq!(settings.theme, ThemeSettings::default());
+        assert_eq!(settings.theme_light, None);
+        assert_eq!(settings.theme_dark, None);
+    }
+
+    /// The theme selection round-trips through serde.
+    #[test]
+    fn theme_selection_persists() {
+        let settings: Settings = serde_json::from_str(
+            r#"{
+                "appearance_mode": "Dark",
+                "hide_avatar": false,
+                "screening": true,
+                "wot_auto_trust": true,
+                "nip4e": false,
+                "trusted_relays": [],
+                "file_server": "https://nostr.download/",
+                "theme_light": "Solarized Light",
+                "theme_dark": "Tokyo Night"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(settings.theme_light.as_deref(), Some("Solarized Light"));
+        assert_eq!(settings.theme_dark.as_deref(), Some("Tokyo Night"));
     }
 }

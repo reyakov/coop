@@ -51,9 +51,6 @@ gpui-kit.workspace = true
 gpui_linux.workspace = true
 gpui_windows.workspace = true
 gpui_macos.workspace = true
-native-theme.workspace = true
-native-theme-gpui.workspace = true
-flume.workspace = true
 reqwest_client.workspace = true
 
 log.workspace = true

@@ -22,9 +22,6 @@ gpui_tokio = { path = "crates/gpui_tokio" }
 gpui-base = "0.8.1"
 gpui-kit = "0.8.1"
 
-native-theme = { version = "0.7", features = ["native", "watch"] }
-native-theme-gpui = { version = "0.7", default-features = false, features = ["system-fonts"] }
-
 # Nostr
 nostr-lmdb = { git = "https://github.com/rust-nostr/nostr" }
 nostr-memory = { git = "https://github.com/rust-nostr/nostr" }

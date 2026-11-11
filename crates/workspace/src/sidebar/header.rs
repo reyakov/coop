@@ -61,6 +61,7 @@ impl Sidebar {
                     .dropdown_menu(move |this, _window, _cx| {
                         this.menu("Profile", Box::new(Command::ShowProfile))
                             .menu("Relays", Box::new(Command::ShowRelayList))
+                            .menu("Themes", Box::new(Command::ToggleTheme))
                             .separator()
                             .label(format!("{CLIENT_NAME} {}", env!("CARGO_PKG_VERSION")))
                             .item(

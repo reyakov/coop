@@ -2,16 +2,12 @@ use std::sync::{Arc, Mutex};
 
 use chat_ui::ToggleDictation;
 use gpui::{
-    App, Bounds, Global, KeyBinding, Menu, MenuItem, SharedString, TitlebarOptions,
+    App, Bounds, KeyBinding, Menu, MenuItem, SharedString, TitlebarOptions,
     WindowBackgroundAppearance, WindowBounds, WindowDecorations, WindowKind, WindowOptions,
     actions, point, px, size,
 };
-use gpui_kit::component::{Theme, ThemeMode};
 use gpui_platform::application;
-use native_theme::watch::ThemeSubscription;
-use native_theme_gpui::apply_system_theme;
 use nostr_sdk::prelude::SecretKey;
-use settings::{AppSettings, AppearanceMode};
 use state::{APP_ID, CLIENT_NAME};
 use workspace::TAB_BAR_HEIGHT;
 
@@ -36,6 +32,9 @@ fn main() {
         .run(move |cx| {
             // Initialize the framework before anything renders
             gpui_kit::init(cx);
+
+            // Register the bundled gpui-kit themes before anything renders
+            settings::init_themes(cx);
 
             // Load embedded fonts in assets/fonts
             load_embedded_fonts(cx);
@@ -70,15 +69,8 @@ fn main() {
             // Initialize settings
             settings::init(cx);
 
-            let appearance = settings::persisted_appearance_mode();
-            let font_size = settings::persisted_theme().font_size;
-
-            if let Err(error) = apply_native_theme(appearance, font_size, cx) {
-                log::warn!("native theme unavailable ({error})");
-                apply_appearance(appearance, cx);
-                AppSettings::apply_theme_style(cx);
-            }
-            start_theme_watcher(cx);
+            // Apply the persisted appearance, theme selection and tuning
+            settings::apply_persisted_theme(cx);
 
             // Initialize the nostr client
             state::init(cx, cli_key);
@@ -180,73 +172,4 @@ fn parse_cli_key() -> Result<Option<SecretKey>, String> {
 fn quit(_ev: &Quit, cx: &mut App) {
     log::info!("Gracefully quitting the application . . .");
     cx.quit();
-}
-
-/// Apply the native theme to the app, scaled to the user's font size,
-/// then layer the persisted theme tuning on top
-fn apply_native_theme(
-    appearance: AppearanceMode,
-    font_size: f32,
-    cx: &mut App,
-) -> native_theme::Result<()> {
-    let mut system = native_theme_gpui::SystemTheme::from_system()?;
-    let native = system.light.defaults.font.size;
-
-    if native > 0.0 {
-        system.accessibility.text_scaling_factor *= font_size / native;
-    }
-
-    apply_system_theme(&system, cx);
-    apply_appearance(appearance, cx);
-    // Applying the native theme replaces the whole theme, so the user's
-    // tuning must be layered on afterwards.
-    AppSettings::apply_theme_style(cx);
-
-    Ok(())
-}
-
-/// Honor the appearance mode against the installed (native) palettes
-fn apply_appearance(appearance: AppearanceMode, cx: &mut App) {
-    match appearance {
-        AppearanceMode::System => Theme::sync_system_appearance(None, cx),
-        AppearanceMode::Light => Theme::change(ThemeMode::Light, None, cx),
-        AppearanceMode::Dark => Theme::change(ThemeMode::Dark, None, cx),
-    }
-}
-
-/// Holds the watcher subscription so it lives as long as the app.
-struct ThemeWatcher {
-    _subscription: ThemeSubscription,
-}
-
-impl Global for ThemeWatcher {}
-
-/// Start a background task to watch for OS theme changes and re-apply the native theme.
-fn start_theme_watcher(cx: &mut App) {
-    let (sender, receiver) = flume::unbounded();
-    match native_theme::watch::on_theme_change(move |event| {
-        if let Err(error) = sender.send(event) {
-            log::warn!("theme change dropped ({error})");
-        }
-    }) {
-        Ok(subscription) => {
-            cx.set_global(ThemeWatcher {
-                _subscription: subscription,
-            });
-            cx.spawn(async move |cx| {
-                while receiver.recv_async().await.is_ok() {
-                    log::info!("OS theme changed; re-applying");
-                    cx.update(|cx| {
-                        let appearance = AppSettings::get_appearance_mode(cx);
-                        let font_size = AppSettings::get_theme(cx).font_size;
-                        if let Err(error) = apply_native_theme(appearance, font_size, cx) {
-                            log::warn!("failed to apply updated OS theme ({error})");
-                        }
-                    });
-                }
-            })
-            .detach();
-        }
-        Err(error) => log::warn!("OS theme watching unavailable ({error})"),
-    }
 }

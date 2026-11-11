@@ -8,6 +8,7 @@ use rust_embed::RustEmbed;
 #[include = "fonts/**/*"]
 #[include = "brand/**/*"]
 #[include = "icons/**/*"]
+#[include = "themes/**/*"]
 #[exclude = "*.DS_Store"]
 pub struct Assets;
 
@@ -72,5 +73,31 @@ impl AssetSource for Assets {
                 }
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::component::ThemeSet;
+
+    use super::*;
+
+    /// Every bundled theme file must parse against gpui-kit's schema.
+    #[test]
+    fn bundled_themes_parse() {
+        let mut count = 0;
+
+        for entry in Assets::iter().filter(|p| p.starts_with("themes/")) {
+            let file = Assets::get(&entry).expect("theme file exists");
+            let content = std::str::from_utf8(&file.data).expect("theme is UTF-8");
+            let set: ThemeSet = serde_json::from_str(content).expect("theme parses");
+            assert!(!set.themes.is_empty(), "{entry} has no themes");
+            count += set.themes.len();
+        }
+
+        assert!(
+            count >= 36,
+            "expected the bundled gpui-kit themes, got {count}"
+        );
     }
 }
