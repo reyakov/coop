@@ -2047,18 +2047,6 @@ impl Render for ChatPanel {
                                         this.upload(window, cx);
                                     })),
                             )
-                            .when(cfg!(not(target_arch = "wasm32")), |this| {
-                                this.child(
-                                    Button::new("nutzap")
-                                        .icon(IconName::Wallet)
-                                        .tooltip("Send eCash")
-                                        .disabled(dictating)
-                                        .ghost()
-                                        .on_click(cx.listener(move |this, _ev, window, cx| {
-                                            this.open_nutzap(window, cx);
-                                        })),
-                                )
-                            })
                             .when(dictating, |this| {
                                 this.child(
                                     h_flex()
@@ -2084,15 +2072,23 @@ impl Render for ChatPanel {
                             })
                             .child(
                                 h_flex()
-                                    .items_end()
-                                    .gap_1()
-                                    .pl_1()
-                                    .child(SpeechButton::new(&self.speech)),
-                            )
-                            .child(
-                                h_flex()
                                     .pl_1()
                                     .gap_1()
+                                    .child(SpeechButton::new(&self.speech))
+                                    .when(cfg!(not(target_arch = "wasm32")), |this| {
+                                        this.child(
+                                            Button::new("nutzap")
+                                                .icon(IconName::Wallet)
+                                                .tooltip("Send eCash")
+                                                .disabled(dictating)
+                                                .ghost()
+                                                .on_click(cx.listener(
+                                                    move |this, _ev, window, cx| {
+                                                        this.open_nutzap(window, cx);
+                                                    },
+                                                )),
+                                        )
+                                    })
                                     .child(self.render_emoji_menu(dictating, window, cx))
                                     .child(self.render_config_menu(dictating, window, cx))
                                     .child(

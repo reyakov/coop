@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use anyhow::Result;
-use chat_ui::ToggleDictation;
+use chat_ui::{Command, ToggleDictation};
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    Action, AnyElement, App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    FollowMode, InteractiveElement, IntoElement, ListAlignment, ListScrollEvent, ListState,
-    ParentElement, Render, SharedString, Styled, Subscription, Task, WeakEntity, Window, div, list,
-    px,
+    Action, Anchor, AnyElement, App, AppContext, ClipboardItem, Context, Entity, EventEmitter,
+    FocusHandle, Focusable, FollowMode, InteractiveElement, IntoElement, ListAlignment,
+    ListScrollEvent, ListState, ParentElement, Render, SharedString, Styled, Subscription, Task,
+    WeakEntity, Window, div, list, px,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -16,6 +16,7 @@ use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::dock::{Panel, PanelEvent};
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::menu::DropdownMenu;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::speech::{SpeechButton, SpeechEvent, SpeechState, SpeechWaveform};
@@ -28,7 +29,7 @@ use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
 use speech::speaker::Speaker;
 use state::{NostrRegistry, pick_file, upload_file};
-use ui::{Avatar, RenderedText, RevealText, WelcomeMessage, rendered_text};
+use ui::{Avatar, REACTION_EMOJIS, RenderedText, RevealText, WelcomeMessage, rendered_text};
 use util::{attachment_name, display_name, opens_run, pin_label, report};
 
 mod details;
@@ -1104,7 +1105,23 @@ impl GroupPanel {
         });
     }
 
-    fn render_composer(&self, cx: &mut Context<Self>) -> AnyElement {
+    fn on_command(&mut self, command: &Command, window: &mut Window, cx: &mut Context<Self>) {
+        match command {
+            Command::Insert(content) => {
+                self.input.update(cx, |input, cx| {
+                    let new_value = format!("{} {}", input.value(), content);
+                    input.set_value(new_value, window, cx);
+                });
+            }
+            Command::Copy(public_key) => match public_key.to_bech32() {
+                Ok(content) => cx.write_to_clipboard(ClipboardItem::new_string(content)),
+                Err(error) => log::warn!("nip29: encoding the author key failed: {error}"),
+            },
+            _ => {}
+        }
+    }
+
+    fn render_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let notice = self.group.upgrade().and_then(|group| {
             let group = group.read(cx);
 
@@ -1135,14 +1152,13 @@ impl GroupPanel {
             .flex_shrink_0()
             .w_full()
             .p_2()
-            .gap_1()
+            .gap_1p5()
             .when_some(self.reply_to, |this, target| {
                 this.child(self.render_reply_target(target, cx))
             })
             .children(self.render_attachments(cx))
             .child(
                 h_flex()
-                    .gap_1()
                     .items_end()
                     .child(
                         Button::new("upload")
@@ -1161,6 +1177,7 @@ impl GroupPanel {
                                 .h_8()
                                 .flex_1()
                                 .gap_2()
+                                .pl_1()
                                 .child(SpeechWaveform::new(&self.speech).small().flex_1())
                                 .when_some(self.speech_started, |this, started| {
                                     this.child(speech::elapsed(started, cx))
@@ -1171,26 +1188,65 @@ impl GroupPanel {
                         this.child(
                             Textarea::new(&self.input)
                                 .appearance(false)
-                                .bg(cx.theme().input)
                                 .small()
                                 .min_h_8()
                                 .py_1()
                                 .flex_1(),
                         )
                     })
-                    .child(SpeechButton::new(&self.speech))
                     .child(
-                        Button::new("send")
-                            .icon(ui::IconName::PaperPlaneFill)
-                            .tooltip("Send")
-                            .ghost()
-                            .disabled(dictating || self.uploading)
-                            .on_click(cx.listener(|this, _event, window, cx| {
-                                this.send(window, cx);
-                            })),
+                        h_flex()
+                            .pl_1()
+                            .gap_1()
+                            .child(SpeechButton::new(&self.speech))
+                            .child(self.render_emoji_menu(dictating, window, cx))
+                            .child(
+                                Button::new("send")
+                                    .icon(ui::IconName::PaperPlaneFill)
+                                    .ghost()
+                                    .disabled(dictating || self.uploading)
+                                    .on_click(cx.listener(|this, _event, window, cx| {
+                                        this.send(window, cx);
+                                    })),
+                            ),
                     ),
             )
             .into_any_element()
+    }
+
+    fn render_emoji_menu(
+        &self,
+        disabled: bool,
+        _window: &Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let nostr = NostrRegistry::global(cx);
+        let current_user = nostr.read(cx).current_user();
+
+        let emojis = current_user
+            .map(|current_user| {
+                self.directory
+                    .read(cx)
+                    .person(&current_user, cx)
+                    .emojis()
+                    .to_vec()
+            })
+            .unwrap_or_default();
+
+        Button::new("emoji")
+            .icon(ui::IconName::Emoji)
+            .ghost()
+            .disabled(disabled)
+            .dropdown_menu_with_anchor(Anchor::BottomLeft, move |this, _window, _cx| {
+                let menu = REACTION_EMOJIS.iter().fold(this, |this, emoji| {
+                    this.menu(*emoji, Box::new(Command::Insert(emoji.to_string())))
+                });
+
+                emojis.iter().fold(menu, |this, (shortcode, _)| {
+                    let label = format!(":{shortcode}:");
+                    this.menu(label.clone(), Box::new(Command::Insert(label)))
+                })
+            })
     }
 
     fn render_reply_target(&self, target: EventId, cx: &mut Context<Self>) -> AnyElement {
@@ -1375,13 +1431,14 @@ impl Focusable for GroupPanel {
 }
 
 impl Render for GroupPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let notice = self.notice(cx);
         let empty = self.item_count(cx) == 2;
 
         v_flex()
             .size_full()
             .min_w_0()
+            .on_action(cx.listener(Self::on_command))
             .on_action(cx.listener(Self::toggle_dictation))
             .child(self.render_encryption_notice(cx))
             .child(self.render_banner(cx))
@@ -1422,6 +1479,6 @@ impl Render for GroupPanel {
                     })
                     .child(Scrollbar::vertical(&self.list_state)),
             )
-            .child(self.render_composer(cx))
+            .child(self.render_composer(window, cx))
     }
 }

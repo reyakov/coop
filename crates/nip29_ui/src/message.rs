@@ -1,4 +1,5 @@
 use chat::Message;
+use chat_ui::Command;
 use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -17,8 +18,8 @@ use settings::AppSettings;
 use speech::speaker::END_GRACE;
 use state::NostrRegistry;
 use ui::{
-    Avatar, MessageActions, MessageMedia, MessageRow, REACTION_EMOJIS, ReactionBar, ReplyPreview,
-    group_reactions, react_menu,
+    Avatar, COMPACT_REACTION_EMOJIS, MessageActions, MessageMedia, MessageRow, REACTION_EMOJIS,
+    ReactionBar, ReplyPreview, group_reactions, react_menu,
 };
 
 use crate::GroupPanel;
@@ -91,15 +92,45 @@ pub(crate) fn render(
     let admin = actions.admin;
     let pinned = actions.pinned;
     let group = actions.group;
-    let speech_panel = actions.panel;
-    let panel = speech_panel.clone();
+    let panel = actions.panel;
+    let speech_panel = panel.clone();
     let speech_text = message.preview();
     let speech_id = message.id;
     let speaking = actions.speaking;
+    let author = message.author;
 
-    let row = row.overlay(
-        MessageActions::new().speech(speaking, move |_event, _window, cx| {
-            _ = speech_panel.update_in(cx, |panel, window, cx| {
+    let mut bar = MessageActions::new();
+
+    for emoji in COMPACT_REACTION_EMOJIS {
+        let emoji = *emoji;
+        let group = group.clone();
+        let panel = panel.clone();
+
+        bar = bar.reaction(emoji, move |_event, _window, cx| {
+            if let Err(error) = panel.update_in(cx, |panel, window, cx| {
+                panel.react(group.clone(), id, emoji.to_owned(), window, cx);
+            }) {
+                log::warn!("nip29: sending a reaction failed: {error}");
+            }
+        });
+    }
+
+    let reply_panel = panel.clone();
+    let bar = bar.reply(move |_event, _window, cx| {
+        if let Err(error) = reply_panel.update_in(cx, |panel, window, cx| {
+            panel.start_reply(id, window, cx);
+        }) {
+            log::warn!("nip29: starting a reply failed: {error}");
+        }
+    });
+
+    let bar = bar
+        .copy(
+            SharedString::from(format!("message-copy-{id}")),
+            message.preview(),
+        )
+        .speech(speaking, move |_event, _window, cx| {
+            if let Err(error) = speech_panel.update_in(cx, |panel, window, cx| {
                 match panel.speaker.speak(&speech_text) {
                     Ok(duration) => {
                         panel.speech_reveal = Some((speech_id, duration));
@@ -125,9 +156,14 @@ pub(crate) fn render(
                         window.push_notification(Notification::error(error.to_string()), cx)
                     }
                 }
-            });
-        }),
-    );
+            }) {
+                log::warn!("nip29: reading the message aloud failed: {error}");
+            }
+        });
+
+    let row = row.overlay(bar.dropdown(move |menu, _window, _cx| {
+        menu.menu("Copy author", Box::new(Command::Copy(author)))
+    }));
 
     let custom = nostr
         .read(cx)
