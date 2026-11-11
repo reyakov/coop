@@ -33,6 +33,7 @@ pub enum IconName {
     Unlock,
     Upload,
     Warning,
+    Wallet,
 }
 
 impl IconNamed for IconName {
@@ -67,6 +68,7 @@ impl IconNamed for IconName {
             Self::Unlock => "icons/unlock.svg",
             Self::Upload => "icons/upload.svg",
             Self::Warning => "icons/warning.svg",
+            Self::Wallet => "icons/wallet.svg",
         }
         .into()
     }

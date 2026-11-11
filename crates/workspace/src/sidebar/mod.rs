@@ -404,6 +404,8 @@ impl Render for Sidebar {
             .size_full()
             .relative()
             .justify_between()
+            .border_r_1()
+            .border_color(cx.theme().sidebar_border)
             .bg(cx.theme().sidebar)
             .text_color(cx.theme().sidebar_foreground)
             .child(

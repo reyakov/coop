@@ -2050,7 +2050,7 @@ impl Render for ChatPanel {
                             .when(cfg!(not(target_arch = "wasm32")), |this| {
                                 this.child(
                                     Button::new("nutzap")
-                                        .icon(gpui_kit::assets::IconName::Coins)
+                                        .icon(IconName::Wallet)
                                         .tooltip("Send eCash")
                                         .disabled(dictating)
                                         .ghost()
