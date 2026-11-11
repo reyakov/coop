@@ -251,6 +251,7 @@ pub struct ReplyPreview {
     author: SharedString,
     preview: SharedString,
     on_click: Option<ClickListener>,
+    on_remove: Option<ClickListener>,
 }
 
 impl ReplyPreview {
@@ -266,6 +267,7 @@ impl ReplyPreview {
             author: author.into(),
             preview: preview.into(),
             on_click: None,
+            on_remove: None,
         }
     }
 
@@ -276,6 +278,16 @@ impl ReplyPreview {
         listener: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     ) -> Self {
         self.on_click = Some(Box::new(listener));
+        self
+    }
+
+    /// Show a remove button, calling the handler when it is clicked.
+    #[must_use]
+    pub fn on_remove(
+        mut self,
+        handler: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.on_remove = Some(Box::new(handler));
         self
     }
 }
@@ -294,6 +306,7 @@ impl RenderOnce for ReplyPreview {
             author,
             preview,
             on_click,
+            on_remove,
         } = self;
 
         div()
@@ -304,8 +317,28 @@ impl RenderOnce for ReplyPreview {
             .border_color(cx.theme().list_active)
             .text_xs()
             .refine_style(&style)
-            .child(div().font_semibold().child(author))
-            .child(div().w_full().text_ellipsis().line_clamp(1).child(preview))
+            .child(
+                h_flex()
+                    .w_full()
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .child(div().font_semibold().child(author))
+                            .child(div().w_full().text_ellipsis().line_clamp(1).child(preview)),
+                    )
+                    .when_some(on_remove, |this, on_remove| {
+                        this.child(
+                            Button::new("remove-reply")
+                                .icon(IconName::X)
+                                .xsmall()
+                                .ghost()
+                                .tooltip("Remove reply")
+                                .flex_shrink_0()
+                                .on_click(on_remove),
+                        )
+                    }),
+            )
             .hover(|this| this.bg(cx.theme().list_hover))
             .when_some(on_click, |this, on_click| this.on_click(on_click))
             .into_any_element()
@@ -732,7 +765,7 @@ impl RenderOnce for MessageActions {
             .when_some(speech, |this, (disabled, speech)| {
                 this.child(
                     Button::new("speech")
-                        .icon(crate::IconName::Speech)
+                        .icon(IconName::Speech)
                         .tooltip("Read aloud")
                         .small()
                         .ghost()

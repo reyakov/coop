@@ -10,6 +10,7 @@ speech = { path = "../speech" }
 ui = { path = "../ui" }
 gpui-kit = { workspace = true, features = ["speech"] }
 common = { path = "../common" }
+log.workspace = true
 person = { path = "../person" }
 chat = { path = "../chat" }
 settings = { path = "../settings" }

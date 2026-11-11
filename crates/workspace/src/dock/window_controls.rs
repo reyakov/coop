@@ -4,6 +4,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, px,
 };
 use gpui_kit::assets::IconName;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme as _, Icon, Sizable as _, h_flex};
 
 use super::TAB_BAR_HEIGHT;
@@ -50,6 +51,15 @@ impl ControlIcon {
             Self::Restore => IconName::WindowRestore,
             Self::Maximize => IconName::WindowMaximize,
             Self::Close => IconName::WindowClose,
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Minimize => "Minimize",
+            Self::Restore => "Restore",
+            Self::Maximize => "Maximize",
+            Self::Close => "Close",
         }
     }
 
@@ -102,6 +112,8 @@ impl RenderOnce for ControlIcon {
         let active_bg = self.active_bg(cx);
         let icon = self.clone();
 
+        let label = self.label();
+
         div()
             .id(self.id())
             .flex()
@@ -112,6 +124,7 @@ impl RenderOnce for ControlIcon {
             .content_center()
             .items_center()
             .text_color(cx.theme().foreground)
+            .tooltip(move |window, cx| Tooltip::new(label).build(window, cx))
             .hover(|style| style.bg(hover_bg).text_color(hover_fg))
             .active(|style| style.bg(active_bg).text_color(hover_fg))
             .when(is_windows, |this| {

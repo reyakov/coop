@@ -13,14 +13,13 @@ use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{DockArea, DockPlacement, PanelHandle};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use nostr_sdk::prelude::*;
 use person::Directory;
 use settings::AppSettings;
 use state::NostrRegistry;
 use ui::Avatar;
-
-use crate::nav::Nav;
 
 /// Maximum number of members a chat can have.
 const MAX_MEMBERS: usize = 3;
@@ -325,27 +324,30 @@ impl NewChat {
         contacts: &[PublicKey],
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
-        let start = range.start;
-
         contacts
             .get(range)
             .into_iter()
             .flatten()
-            .enumerate()
-            .map(|(offset, public_key)| {
+            .map(|public_key| {
                 let profile = self.directory.read(cx).person(public_key, cx);
                 let public_key = *public_key;
 
-                Nav::new(start + offset)
-                    .label(profile.name())
+                ListItem::new(public_key.to_hex())
+                    .accessibility_label(profile.name())
+                    .h_8()
+                    .rounded(cx.theme().radius)
+                    .cursor_pointer()
                     .text_sm()
                     .when(!AppSettings::get_hide_avatar(cx), |this| {
-                        this.prefix(
-                            Avatar::new(profile.avatar())
-                                .seed(profile.avatar_seed())
-                                .small(),
+                        this.child(
+                            div().flex_shrink_0().child(
+                                Avatar::new(profile.avatar())
+                                    .seed(profile.avatar_seed())
+                                    .small(),
+                            ),
                         )
                     })
+                    .child(div().flex_1().min_w_0().truncate().child(profile.name()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.toggle_member(&public_key, cx);
                     }))
@@ -369,7 +371,7 @@ impl NewChat {
                     .p_0p5()
                     .rounded_full()
                     .bg(cx.theme().secondary)
-                    .hover(|this| this.bg(cx.theme().primary))
+                    .hover(|this| this.bg(cx.theme().secondary_hover))
                     .child(
                         Avatar::new(profile.avatar())
                             .seed(profile.avatar_seed())

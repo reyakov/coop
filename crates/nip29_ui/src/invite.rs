@@ -5,7 +5,8 @@ use gpui::{
     App, AppContext, ClipboardItem, Entity, IntoElement, ParentElement, SharedString, Styled,
     WeakEntity, Window, div, px,
 };
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
+use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::input::InputState;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
@@ -126,17 +127,50 @@ fn copy_button(group: &WeakEntity<Group>, code: &str) -> Button {
 
 fn revoke_button(group: &WeakEntity<Group>, id: nostr_sdk::prelude::EventId, code: &str) -> Button {
     let group = group.clone();
+    let code = code.to_owned();
 
     Button::new(SharedString::from(format!("invite-revoke-{code}")))
         .label("Revoke")
         .ghost()
         .small()
         .on_click(move |_event, window, cx| {
-            match group.update(cx, |group, cx| group.delete_event(id, cx)) {
-                Ok(task) => report(window, cx, task),
-                Err(error) => log::warn!("nip29: revoking an invite failed: {error}"),
-            }
+            confirm_revoke(group.clone(), id, code.clone(), window, cx);
         })
+}
+
+/// Confirm revoking an invite, then delete it and surface any relay error.
+fn confirm_revoke(
+    group: WeakEntity<Group>,
+    id: nostr_sdk::prelude::EventId,
+    code: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    window.open_alert_dialog(cx, move |this, _window, _cx| {
+        let group = group.clone();
+
+        this.confirm()
+            .width(px(360.))
+            .title(format!("Revoke invite {code}?"))
+            .button_props(
+                DialogButtonProps::default()
+                    .cancel_text("Cancel")
+                    .ok_text("Revoke")
+                    .ok_variant(ButtonVariant::Danger),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .child("Nobody will be able to ask to join with this code."),
+            )
+            .on_ok(move |_event, window, cx| {
+                match group.update(cx, |group, cx| group.delete_event(id, cx)) {
+                    Ok(task) => report(window, cx, task),
+                    Err(error) => log::warn!("nip29: revoking an invite failed: {error}"),
+                }
+                true
+            })
+    });
 }
 
 fn create_row(group: WeakEntity<Group>, input: Entity<InputState>, cx: &App) -> impl IntoElement {

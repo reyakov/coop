@@ -2,17 +2,18 @@ use anyhow::Error;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Div, Entity, IntoElement, ParentElement, Render, SharedString,
-    Styled, Subscription, Task, Window, div, px, relative,
+    Styled, Subscription, Task, Window, div, px,
 };
+use gpui_kit::assets::IconName;
+use gpui_kit::component::alert::{Alert, AlertVariant};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dialog::{DialogDescription, DialogFooter, DialogHeader, DialogTitle};
 use gpui_kit::component::form::{field, v_form};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::{ActiveTheme, Disableable, WindowExt, v_flex};
+use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, v_flex};
 use instant::Duration;
 use nostr_connect::prelude::*;
 use state::{NostrRegistry, StateEvent};
-use ui::IconName;
 
 pub fn open(window: &mut Window, cx: &mut App) {
     let import = cx.new(|cx| ImportIdentity::new(window, cx));
@@ -277,7 +278,7 @@ impl ImportIdentity {
                 DialogFooter::new().child(
                     Button::new("unlock")
                         .primary()
-                        .icon(IconName::Unlock)
+                        .icon(IconName::LockOpen)
                         .label("Unlock")
                         .loading(self.loading)
                         .disabled(self.loading)
@@ -345,26 +346,18 @@ impl Render for ImportIdentity {
                     })
                     .when(bunker_warning, |this| {
                         this.child(
-                            div()
-                                .p_2()
-                                .rounded(cx.theme().radius_lg)
-                                .bg(cx.theme().warning.opacity(0.15))
-                                .text_xs()
-                                .text_color(cx.theme().warning)
-                                .line_height(relative(1.2))
-                                .child(div().child(BUNKER_WARN)),
+                            Alert::new("bunker-warning", BUNKER_WARN)
+                                .with_variant(AlertVariant::Warning)
+                                .icon(IconName::TriangleAlert)
+                                .small(),
                         )
                     })
                     .when(key_warning, |this| {
                         this.child(
-                            div()
-                                .p_2()
-                                .rounded(cx.theme().radius_lg)
-                                .bg(cx.theme().warning.opacity(0.15))
-                                .text_xs()
-                                .text_color(cx.theme().warning)
-                                .line_height(relative(1.2))
-                                .child(div().child(KEY_WARN)),
+                            Alert::new("key-warning", KEY_WARN)
+                                .with_variant(AlertVariant::Warning)
+                                .icon(IconName::TriangleAlert)
+                                .small(),
                         )
                     }),
             )

@@ -7,12 +7,14 @@ use gpui::{
 };
 #[cfg(not(target_arch = "wasm32"))]
 use gpui::{AnyElement, Entity};
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 #[cfg(not(target_arch = "wasm32"))]
 use gpui_kit::component::Disableable;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::dialog::DialogButtonProps;
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::separator::Separator;
@@ -21,12 +23,11 @@ use nostr_sdk::prelude::*;
 use person::shorten_pubkey;
 use settings::AppSettings;
 use state::{CLIENT_NAME, NostrRegistry};
-use ui::{Avatar, IconName};
+use ui::Avatar;
 
 use super::Sidebar;
 use crate::Command;
 use crate::dock::TAB_BAR_HEIGHT;
-use crate::nav::Nav;
 
 impl Sidebar {
     pub(super) fn render_user(
@@ -101,7 +102,7 @@ impl Sidebar {
                     )
                     .child(
                         Button::new("sidebar-new")
-                            .icon(IconName::PlusChat)
+                            .icon(IconName::MessageSquarePlus)
                             .tooltip("New")
                             .ghost()
                             .small()
@@ -211,7 +212,7 @@ impl Sidebar {
             })
     }
 
-    pub(super) fn render_footer(&self, loading: bool, _cx: &mut Context<Self>) -> Div {
+    pub(super) fn render_footer(&self, loading: bool, cx: &mut Context<Self>) -> Div {
         v_flex()
             .p_2()
             .flex_shrink_0()
@@ -220,10 +221,19 @@ impl Sidebar {
             .justify_start()
             .when(!loading, |this| {
                 this.child(
-                    Nav::new("settings")
-                        .prefix(Icon::new(IconName::Settings).small())
-                        .center_prefix(true)
-                        .label("Settings")
+                    ListItem::new("settings")
+                        .accessibility_label("Settings")
+                        .h_8()
+                        .rounded(cx.theme().radius)
+                        .cursor_pointer()
+                        .child(
+                            div()
+                                .w_6()
+                                .justify_center()
+                                .flex_shrink_0()
+                                .child(Icon::new(IconName::Settings).small()),
+                        )
+                        .child(div().flex_1().min_w_0().truncate().child("Settings"))
                         .text_sm()
                         .on_click(|_, window, cx| {
                             window.dispatch_action(Box::new(Command::ShowSettings), cx)
@@ -243,7 +253,7 @@ impl Sidebar {
             .when(!up_to_date, |this| {
                 this.child(
                     Button::new("update")
-                        .icon(IconName::ArrowDownCircle)
+                        .icon(IconName::CircleArrowDown)
                         .tooltip(status)
                         .small()
                         .ghost()
@@ -253,7 +263,7 @@ impl Sidebar {
             .when(staged, |this| {
                 this.child(
                     Button::new("restart")
-                        .icon(IconName::ArrowDownCircle)
+                        .icon(IconName::CircleArrowDown)
                         .tooltip("Quit and relaunch into the installed update")
                         .small()
                         .ghost()

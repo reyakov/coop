@@ -3,19 +3,17 @@ use chat_ui::Command;
 use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    AnyElement, App, Entity, InteractiveElement, IntoElement, ParentElement, SharedString, Styled,
-    WeakEntity, div,
+    AnyElement, App, ClipboardItem, Entity, InteractiveElement, IntoElement, ParentElement,
+    SharedString, Styled, WeakEntity, div,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
-use gpui_kit::component::notification::Notification;
-use gpui_kit::component::{ActiveTheme, Icon, Sizable, WindowExt, h_flex};
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex};
 use nip29::{Activity, Group, Reaction};
-use nostr_sdk::prelude::{EventId, Kind};
+use nostr_sdk::prelude::{EventId, Kind, ToBech32};
 use person::Directory;
 use settings::AppSettings;
-use speech::speaker::END_GRACE;
 use state::NostrRegistry;
 use ui::{
     Avatar, COMPACT_REACTION_EMOJIS, MessageActions, MessageMedia, MessageRow, REACTION_EMOJIS,
@@ -129,35 +127,15 @@ pub(crate) fn render(
             SharedString::from(format!("message-copy-{id}")),
             message.preview(),
         )
-        .speech(speaking, move |_event, _window, cx| {
-            if let Err(error) = speech_panel.update_in(cx, |panel, window, cx| {
-                match panel.speaker.speak(&speech_text) {
-                    Ok(duration) => {
-                        panel.speech_reveal = Some((speech_id, duration));
+        .speech(speaking, {
+            let speech_text = speech_text.clone();
 
-                        let session = (speech_id, duration);
-                        let timer = cx.background_executor().timer(duration + END_GRACE);
-
-                        panel.reveal_timeout = Some(cx.spawn(async move |this, cx| {
-                            timer.await;
-                            this.update(cx, |this, cx| {
-                                if this.speech_reveal.as_ref() == Some(&session) {
-                                    this.speech_reveal = None;
-                                    cx.notify();
-                                }
-                            })?;
-
-                            Ok(())
-                        }));
-
-                        cx.notify();
-                    }
-                    Err(error) => {
-                        window.push_notification(Notification::error(error.to_string()), cx)
-                    }
+            move |_event, _window, cx| {
+                if let Err(error) = speech_panel.update_in(cx, |panel, window, cx| {
+                    panel.speak(speech_id, speech_text.clone(), window, cx);
+                }) {
+                    log::warn!("nip29: reading the message aloud failed: {error}");
                 }
-            }) {
-                log::warn!("nip29: reading the message aloud failed: {error}");
             }
         });
 
@@ -189,9 +167,11 @@ pub(crate) fn render(
                     let panel = panel.clone();
 
                     PopupMenuItem::new("Reply").on_click(move |_event, _window, cx| {
-                        let _ = panel.update_in(cx, |panel, window, cx| {
+                        if let Err(error) = panel.update_in(cx, |panel, window, cx| {
                             panel.start_reply(id, window, cx);
-                        });
+                        }) {
+                            log::warn!("nip29: starting a reply failed: {error}");
+                        }
                     })
                 })
                 .submenu("React", window, cx, {
@@ -211,6 +191,29 @@ pub(crate) fn render(
                             }
                         })
                     }
+                })
+                .item({
+                    let panel = panel.clone();
+                    let speech_text = speech_text.clone();
+                    let speech_id = id;
+
+                    PopupMenuItem::new("Read aloud")
+                        .disabled(speaking)
+                        .on_click(move |_event, _window, cx| {
+                            if let Err(error) = panel.update_in(cx, |panel, window, cx| {
+                                panel.speak(speech_id, speech_text.clone(), window, cx);
+                            }) {
+                                log::warn!("nip29: reading the message aloud failed: {error}");
+                            }
+                        })
+                })
+                .item({
+                    let author = author;
+
+                    PopupMenuItem::new("Copy author").on_click(move |_event, _window, cx| {
+                        let npub = author.to_bech32().unwrap_or_default();
+                        cx.write_to_clipboard(ClipboardItem::new_string(npub));
+                    })
                 });
 
             if !admin {

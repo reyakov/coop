@@ -5,23 +5,25 @@ use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, Context, Entity, InteractiveElement as _, IntoElement, ParentElement,
-    SharedString, Styled, WeakEntity, Window, div, px,
+    SharedString, Styled, WeakEntity, Window, div,
 };
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::dock::{ClosePanel, DockArea, DockPlacement, PanelHandle};
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
-use gpui_kit::component::{ActiveTheme, Icon, Selectable, Sizable, WindowExt, h_flex};
+use gpui_kit::component::tag::Tag;
+use gpui_kit::component::{ActiveTheme, Icon, Sizable, WindowExt, h_flex};
 use nip29::Group;
 use nostr_sdk::prelude::*;
 use settings::AppSettings;
-use ui::{Avatar, IconName};
+use ui::Avatar;
 
 use super::Sidebar;
 use super::list::ListSection;
 use super::search::MessageHit;
 use crate::dialogs::{profile, screening};
-use crate::nav::Nav;
 
 /// Open a room in the dock, screening new requests when enabled.
 pub(crate) fn open_room(
@@ -92,13 +94,10 @@ impl Sidebar {
     ) -> Vec<AnyElement> {
         let hide_avatar = AppSettings::get_hide_avatar(cx);
 
-        rows.get(range.clone())
+        rows.get(range)
             .into_iter()
             .flatten()
-            .enumerate()
-            .map(|(offset, row)| {
-                let index = range.start + offset;
-
+            .map(|row| {
                 let element = match row {
                     SidebarRow::Section(section) => {
                         let section = *section;
@@ -111,18 +110,24 @@ impl Sidebar {
                         };
 
                         let icon = if open {
-                            IconName::CaretDown
+                            IconName::ChevronDown
                         } else {
-                            IconName::CaretRight
+                            IconName::ChevronRight
                         };
 
-                        Nav::new(label)
-                            .label(label)
-                            .suffix(
-                                Icon::new(icon)
-                                    .small()
-                                    .text_color(cx.theme().muted_foreground),
-                            )
+                        ListItem::new(label)
+                            .accessibility_label(label)
+                            .h_8()
+                            .rounded(cx.theme().radius)
+                            .cursor_pointer()
+                            .child(div().flex_1().min_w_0().truncate().child(label))
+                            .suffix(move |_, cx| {
+                                div().flex_shrink_0().child(
+                                    Icon::new(icon)
+                                        .small()
+                                        .text_color(cx.theme().muted_foreground),
+                                )
+                            })
                             .text_xs()
                             .font_semibold()
                             .text_color(cx.theme().muted_foreground)
@@ -143,8 +148,11 @@ impl Sidebar {
                     SidebarRow::Heading(label) => {
                         let label = *label;
 
-                        Nav::new(label)
-                            .label(label)
+                        ListItem::new(label)
+                            .accessibility_label(label)
+                            .h_8()
+                            .rounded(cx.theme().radius)
+                            .child(div().flex_1().min_w_0().truncate().child(label))
                             .text_xs()
                             .font_semibold()
                             .text_color(cx.theme().muted_foreground)
@@ -171,48 +179,48 @@ impl Sidebar {
                         let dock = self.dock.clone();
                         let room = room.clone();
 
-                        let nav = Nav::new(index)
-                            .label(name)
+                        let item = ListItem::new(id)
+                            .accessibility_label(name.clone())
+                            .h_8()
+                            .rounded(cx.theme().radius)
+                            .cursor_pointer()
                             .text_sm()
                             .when(!hide_avatar, |this| {
-                                this.prefix(
-                                    Avatar::new(room.read(cx).display_image(cx))
-                                        .seed(seed)
-                                        .small(),
+                                this.child(
+                                    div().flex_shrink_0().child(
+                                        Avatar::new(room.read(cx).display_image(cx))
+                                            .seed(seed)
+                                            .small(),
+                                    ),
                                 )
                             })
-                            .suffix(
-                                h_flex()
-                                    .gap_1()
-                                    .when(spam, |this| {
-                                        this.child(
-                                            div()
-                                                .px_1()
-                                                .rounded(cx.theme().radius)
-                                                .bg(cx.theme().danger.opacity(0.15))
-                                                .text_size(px(8.0))
-                                                .text_color(cx.theme().danger)
-                                                .child("SPAM"),
-                                        )
-                                    })
-                                    .when(!spam, |this| {
-                                        this.child(
-                                            div()
-                                                .font_normal()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .child(created_at),
-                                        )
-                                    }),
-                            )
+                            .child(div().flex_1().min_w_0().truncate().child(name))
+                            .suffix(move |_, cx| {
+                                div().flex_shrink_0().child(
+                                    h_flex()
+                                        .gap_1()
+                                        .when(spam, |this| {
+                                            this.child(Tag::danger().xsmall().child("SPAM"))
+                                        })
+                                        .when(!spam, |this| {
+                                            this.child(
+                                                div()
+                                                    .font_normal()
+                                                    .text_xs()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .child(created_at.clone()),
+                                            )
+                                        }),
+                                )
+                            })
                             .on_click(move |_event, window, cx| {
                                 open_room(&room, &dock, window, cx);
                             });
 
                         div()
-                            .id(index)
+                            .id(id)
                             .w_full()
-                            .child(nav)
+                            .child(item)
                             .context_menu(move |menu, _window, _cx| {
                                 let menu = menu.item(
                                     PopupMenuItem::new(if pinned { "Unpin" } else { "Pin" })
@@ -241,16 +249,22 @@ impl Sidebar {
                         let sidebar = cx.entity().downgrade();
                         let public_key = public_key.to_owned();
 
-                        Nav::new(index)
-                            .label(person.name())
+                        ListItem::new(public_key.to_hex())
+                            .accessibility_label(person.name())
+                            .h_8()
+                            .rounded(cx.theme().radius)
+                            .cursor_pointer()
                             .text_sm()
                             .when(!hide_avatar, |this| {
-                                this.prefix(
-                                    Avatar::new(person.avatar())
-                                        .seed(person.avatar_seed())
-                                        .small(),
+                                this.child(
+                                    div().flex_shrink_0().child(
+                                        Avatar::new(person.avatar())
+                                            .seed(person.avatar_seed())
+                                            .small(),
+                                    ),
                                 )
                             })
+                            .child(div().flex_1().min_w_0().truncate().child(person.name()))
                             .selected(selected)
                             .on_click(move |_event, _window, cx| {
                                 if let Err(error) = sidebar.update(cx, |this, cx| {
@@ -265,16 +279,22 @@ impl Sidebar {
                         let person = self.directory.read(cx).person(public_key, cx);
                         let public_key = public_key.to_owned();
 
-                        Nav::new(index)
-                            .label(person.name())
+                        ListItem::new(public_key.to_hex())
+                            .accessibility_label(person.name())
+                            .h_8()
+                            .rounded(cx.theme().radius)
+                            .cursor_pointer()
                             .text_sm()
                             .when(!hide_avatar, |this| {
-                                this.prefix(
-                                    Avatar::new(person.avatar())
-                                        .seed(person.avatar_seed())
-                                        .small(),
+                                this.child(
+                                    div().flex_shrink_0().child(
+                                        Avatar::new(person.avatar())
+                                            .seed(person.avatar_seed())
+                                            .small(),
+                                    ),
                                 )
                             })
+                            .child(div().flex_1().min_w_0().truncate().child(person.name()))
                             .on_click(move |_event, window, cx| {
                                 profile::open(public_key, window, cx);
                             })
@@ -298,24 +318,32 @@ impl Sidebar {
                             .or_else(|| group.read(cx).elsewhere().map(|_| "Moved"))
                             .map(SharedString::from);
 
-                        let nav = Nav::new(index)
-                            .label(name)
+                        let item = ListItem::new(tag.clone())
+                            .accessibility_label(name.clone())
+                            .h_8()
+                            .rounded(cx.theme().radius)
+                            .cursor_pointer()
                             .text_sm()
                             .when(!hide_avatar, |this| {
-                                this.prefix(
-                                    Avatar::new(group.read(cx).display_image())
-                                        .seed(seed)
-                                        .small(),
+                                this.child(
+                                    div().flex_shrink_0().child(
+                                        Avatar::new(group.read(cx).display_image())
+                                            .seed(seed)
+                                            .small(),
+                                    ),
                                 )
                             })
+                            .child(div().flex_1().min_w_0().truncate().child(name))
                             .when_some(suffix, |this, suffix| {
-                                this.suffix(
-                                    div()
-                                        .font_normal()
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(suffix),
-                                )
+                                this.suffix(move |_, cx| {
+                                    div().flex_shrink_0().child(
+                                        div()
+                                            .font_normal()
+                                            .text_xs()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(suffix.clone()),
+                                    )
+                                })
                             })
                             .on_click(move |_event, window, cx| {
                                 crate::dock::add_panel_to(
@@ -334,9 +362,9 @@ impl Sidebar {
                             });
 
                         div()
-                            .id(index)
+                            .id(tag.clone())
                             .w_full()
-                            .child(nav)
+                            .child(item)
                             .context_menu(move |menu, _window, _cx| {
                                 menu.item(
                                     PopupMenuItem::new(if pinned { "Unpin" } else { "Pin" })
@@ -371,24 +399,32 @@ impl Sidebar {
                         let room = hit.room.clone();
                         let content = hit.content.clone();
 
-                        Nav::new(index)
-                            .label(content)
+                        ListItem::new(hit.author.to_hex())
+                            .accessibility_label(content.clone())
+                            .h_8()
+                            .rounded(cx.theme().radius)
+                            .cursor_pointer()
                             .text_sm()
                             .font_medium()
                             .when(!hide_avatar, |this| {
-                                this.prefix(
-                                    Avatar::new(person.avatar())
-                                        .seed(person.avatar_seed())
-                                        .small(),
+                                this.child(
+                                    div().flex_shrink_0().child(
+                                        Avatar::new(person.avatar())
+                                            .seed(person.avatar_seed())
+                                            .small(),
+                                    ),
                                 )
                             })
-                            .suffix(
-                                div()
-                                    .font_normal()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(detail),
-                            )
+                            .child(div().flex_1().min_w_0().truncate().child(content))
+                            .suffix(move |_, cx| {
+                                div().flex_shrink_0().child(
+                                    div()
+                                        .font_normal()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(detail.clone()),
+                                )
+                            })
                             .on_click(move |_event, window, cx| {
                                 open_room(&room, &dock, window, cx);
                             })

@@ -6,18 +6,19 @@ use gpui::{
     AnyElement, ClipboardItem, Context, Entity, InteractiveElement as _, IntoElement,
     ParentElement, SharedString, Styled, WeakEntity, div, px, relative, uniform_list,
 };
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use nip29::Group;
 use nostr_sdk::prelude::*;
 use settings::AppSettings;
 use state::NostrRegistry;
-use ui::{Avatar, IconName};
+use ui::Avatar;
 
 use super::Sidebar;
 use crate::dialogs::profile;
-use crate::nav::Nav;
 
 /// A collapsible section of the group view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,19 +223,25 @@ impl Sidebar {
             GroupSection::Members => self.members_open,
         };
         let icon = if open {
-            IconName::CaretDown
+            IconName::ChevronDown
         } else {
-            IconName::CaretRight
+            IconName::ChevronRight
         };
         let label = section.label();
 
-        Nav::new(label)
-            .label(label)
-            .suffix(
-                Icon::new(icon)
-                    .small()
-                    .text_color(cx.theme().muted_foreground),
-            )
+        ListItem::new(label)
+            .accessibility_label(label)
+            .h_8()
+            .rounded(cx.theme().radius)
+            .cursor_pointer()
+            .child(div().flex_1().min_w_0().truncate().child(label))
+            .suffix(move |_, cx| {
+                div().flex_shrink_0().child(
+                    Icon::new(icon)
+                        .small()
+                        .text_color(cx.theme().muted_foreground),
+                )
+            })
             .text_xs()
             .font_semibold()
             .text_color(cx.theme().muted_foreground)
@@ -262,6 +269,7 @@ impl Sidebar {
         let group = group.clone();
 
         let public_key = *public_key;
+        let member = person.name();
         let member_is_admin = !roles.is_empty();
 
         let is_self = NostrRegistry::global(cx)
@@ -269,31 +277,40 @@ impl Sidebar {
             .current_user()
             .is_some_and(|me| me == public_key);
 
-        let nav = Nav::new(public_key.to_hex())
-            .label(person.name())
+        let item = ListItem::new(public_key.to_hex())
+            .accessibility_label(member.clone())
+            .h_8()
+            .rounded(cx.theme().radius)
+            .cursor_pointer()
             .text_sm()
-            .clickable(true)
             .when(!hide_avatar, |this| {
-                this.prefix(
-                    Avatar::new(person.avatar())
-                        .seed(person.avatar_seed())
-                        .small(),
+                this.child(
+                    div().flex_shrink_0().child(
+                        Avatar::new(person.avatar())
+                            .seed(person.avatar_seed())
+                            .small(),
+                    ),
                 )
             })
+            .child(div().flex_1().min_w_0().truncate().child(person.name()))
             .when(!roles.is_empty(), |this| {
-                this.suffix(
-                    div()
-                        .font_normal()
-                        .truncate()
-                        .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(SharedString::from(roles.join(", "))),
-                )
+                let roles = SharedString::from(roles.join(", "));
+
+                this.suffix(move |_, cx| {
+                    div().flex_shrink_0().child(
+                        div()
+                            .font_normal()
+                            .truncate()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(roles.clone()),
+                    )
+                })
             });
         let row = div()
             .id(public_key.to_hex())
             .w_full()
-            .child(nav)
+            .child(item)
             .context_menu(move |menu, _window, _cx| {
                 let menu = menu
                     .item(
@@ -326,13 +343,21 @@ impl Sidebar {
                     })
                 });
 
-                menu.separator()
-                    .item(PopupMenuItem::new("Remove").on_click({
+                menu.separator().item({
+                    let member = member.clone();
+                    PopupMenuItem::new("Remove").on_click({
                         let group = group.clone();
                         move |_event, window, cx| {
-                            nip29_ui::remove_member(group.clone(), public_key, window, cx);
+                            nip29_ui::confirm_remove_member(
+                                group.clone(),
+                                public_key,
+                                member.clone(),
+                                window,
+                                cx,
+                            );
                         }
-                    }))
+                    })
+                })
             });
 
         row.into_any_element()

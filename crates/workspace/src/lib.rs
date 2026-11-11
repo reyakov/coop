@@ -13,10 +13,11 @@ use gpui::{
     Action, App, AppContext, Context, Entity, Focusable, InteractiveElement, IntoElement,
     ParentElement, Pixels, Render, SharedString, Styled, Subscription, Task, Window, div, px,
 };
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariant};
 use gpui_kit::component::command::{
     Command as CommandPalette, CommandGroup, CommandItem, CommandState,
 };
+use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::dock::{DockArea, DockLayout, DockPlacement, Panel, PanelHandle};
 use gpui_kit::component::notification::{Notification, NotificationType};
 use gpui_kit::component::{
@@ -36,7 +37,6 @@ use crate::sidebar::Sidebar;
 
 mod dialogs;
 mod dock;
-mod nav;
 mod panels;
 mod sidebar;
 
@@ -617,6 +617,12 @@ impl Workspace {
                                 .text_color(cx.theme().danger)
                                 .child(SharedString::from(ENC_WARN)),
                         ),
+                )
+                .button_props(
+                    DialogButtonProps::default()
+                        .cancel_text("Cancel")
+                        .ok_text("Reset key")
+                        .ok_variant(ButtonVariant::Danger),
                 )
                 .on_ok(move |_ev, _window, cx| {
                     ent.update(cx, |this, cx| {

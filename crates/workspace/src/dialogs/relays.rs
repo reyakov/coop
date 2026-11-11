@@ -8,10 +8,9 @@ use gpui::{
     WeakEntity, Window, div, rems,
 };
 use gpui_kit::assets::IconName;
-use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
-use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
+use gpui_kit::component::menu::{ContextMenu, ContextMenuExt as _, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::tab::{Tab, TabBar};
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
@@ -174,7 +173,7 @@ impl RelayManager {
             })
     }
 
-    fn gossip_rows(&self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+    fn gossip_rows(&self, cx: &mut Context<Self>) -> Vec<ContextMenu<Stateful<Div>>> {
         let mut rows = Vec::new();
 
         for (relay, metadata) in self.gossip.relays.iter() {
@@ -245,7 +244,7 @@ impl RelayManager {
             })
     }
 
-    fn inbox_rows(&self, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
+    fn inbox_rows(&self, cx: &mut Context<Self>) -> Vec<ContextMenu<Stateful<Div>>> {
         let mut rows = Vec::new();
 
         for relay in self.inbox.relays.iter() {
@@ -635,8 +634,9 @@ fn relay_row(
     badge: Option<SharedString>,
     on_remove: impl Fn(&ClickEvent, &mut Window, &mut App) + 'static,
     cx: &App,
-) -> Stateful<Div> {
+) -> ContextMenu<Stateful<Div>> {
     let label = SharedString::from(url.to_string());
+    let on_remove = std::rc::Rc::new(on_remove);
 
     h_flex()
         .id(label.clone())
@@ -647,6 +647,16 @@ fn relay_row(
         .justify_between()
         .rounded(cx.theme().radius)
         .bg(cx.theme().sidebar)
+        .context_menu({
+            let on_remove = on_remove.clone();
+
+            move |menu, _window, _cx| {
+                menu.item(PopupMenuItem::new("Remove").on_click({
+                    let on_remove = on_remove.clone();
+                    move |event, window, cx| on_remove(event, window, cx)
+                }))
+            }
+        })
         .child(
             h_flex()
                 .gap_1()
@@ -654,11 +664,8 @@ fn relay_row(
                 .child(label)
                 .when_some(badge, |this, badge| {
                     this.child(
-                        div()
-                            .p_0p5()
-                            .rounded_xs()
-                            .text_xs()
-                            .font_medium()
+                        gpui_kit::component::tag::Tag::secondary()
+                            .xsmall()
                             .child(badge),
                     )
                 }),
@@ -667,10 +674,13 @@ fn relay_row(
             Button::new("remove")
                 .icon(IconName::X)
                 .xsmall()
-                .ghost()
+                .danger()
                 .invisible()
                 .group_hover("", |this| this.visible())
-                .on_click(on_remove),
+                .on_click({
+                    let on_remove = on_remove.clone();
+                    move |event, window, cx| on_remove(event, window, cx)
+                }),
         )
 }
 

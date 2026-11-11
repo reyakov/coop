@@ -6,15 +6,16 @@ use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     AnyElement, App, AppContext, ClickEvent, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    InteractiveElement as _, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement as _, Styled, Subscription, Task, Window, div, px, relative,
-    uniform_list,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Task, Window, div, px,
+    relative, uniform_list,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
-use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants as _};
+use gpui_kit::component::dialog::DialogButtonProps;
 use gpui_kit::component::dock::{Panel, PanelEvent};
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::{
@@ -227,7 +228,7 @@ impl SendDialog {
             }),
             cx.subscribe_in(&amount_input, window, |this, _input, event, window, cx| {
                 if let InputEvent::PressEnter { .. } = event {
-                    this.send(window, cx);
+                    this.confirm_send(window, cx);
                 }
             }),
         ];
@@ -413,23 +414,45 @@ impl SendDialog {
         }
     }
 
-    /// Validate the selection and amount, then schedule the nutzap.
-    fn send(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// Validate the form, then confirm before the irreversible nutzap.
+    fn confirm_send(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(recipient) = self.selected else {
             self.set_error("Select a contact to send to", cx);
-            return false;
+            return;
         };
 
         let Some(amount) = parse_amount(&self.amount_input, cx) else {
             self.set_error("Enter an amount in sats", cx);
-            return false;
+            return;
         };
 
-        WalletRegistry::global(cx).update(cx, |registry, cx| {
-            registry.send_nutzap(recipient, amount, None, None, cx);
-        });
+        let recipient_name = self.directory.read(cx).person(&recipient, cx).name();
 
-        true
+        window.open_alert_dialog(cx, move |this, _window, _cx| {
+            this.confirm()
+                .width(px(360.))
+                .title(format!("Send {amount} sats to {recipient_name}?"))
+                .button_props(
+                    DialogButtonProps::default()
+                        .cancel_text("Cancel")
+                        .ok_text("Send")
+                        .ok_variant(ButtonVariant::Danger),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .child("A nutzap cannot be undone once sent."),
+                )
+                .on_ok(move |_event, window, cx| {
+                    WalletRegistry::global(cx).update(cx, |registry, cx| {
+                        registry.send_nutzap(recipient, amount, None, None, cx);
+                    });
+                    // Close the confirmation, then the send dialog beneath it.
+                    window.close_dialog(cx);
+                    window.close_dialog(cx);
+                    true
+                })
+        });
     }
 
     fn clear_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -468,28 +491,28 @@ impl SendDialog {
                 let selected = self.selected == Some(public_key);
                 let id = SharedString::from(format!("contact-{}", public_key.to_hex()));
 
-                h_flex()
-                    .id(id)
+                let mut item = ListItem::new(id)
+                    .accessibility_label(profile.name())
+                    .selected(selected)
+                    .cursor_pointer()
                     .w_full()
                     .h_8()
                     .px_2()
-                    .gap_2()
                     .rounded(cx.theme().radius)
                     .text_sm()
-                    .cursor_pointer()
-                    .hover(|this| this.bg(cx.theme().list_hover))
-                    .when(selected, |this| this.bg(cx.theme().list_active))
-                    .when(!AppSettings::get_hide_avatar(cx), |this| {
-                        this.child(
-                            Avatar::new(profile.avatar())
-                                .seed(profile.avatar_seed())
-                                .small(),
-                        )
-                    })
-                    .child(div().min_w_0().truncate().child(profile.name()))
                     .on_click(cx.listener(move |this, _event, _window, cx| {
                         this.toggle_selection(&public_key, cx);
-                    }))
+                    }));
+
+                if !AppSettings::get_hide_avatar(cx) {
+                    item = item.child(
+                        Avatar::new(profile.avatar())
+                            .seed(profile.avatar_seed())
+                            .small(),
+                    );
+                }
+
+                item.child(div().flex_1().min_w_0().truncate().child(profile.name()))
                     .into_any_element()
             })
             .collect()
@@ -507,12 +530,10 @@ impl SendDialog {
             .gap_1()
             .child(
                 h_flex()
-                    .id(id)
                     .gap_1()
                     .p_0p5()
                     .rounded_full()
                     .bg(cx.theme().secondary)
-                    .hover(|this| this.bg(cx.theme().primary))
                     .child(
                         Avatar::new(profile.avatar())
                             .seed(profile.avatar_seed())
@@ -526,10 +547,18 @@ impl SendDialog {
                             .line_height(relative(1.0))
                             .child(profile.name()),
                     )
-                    .on_click(cx.listener(move |this, _event, _window, cx| {
-                        this.selected = None;
-                        cx.notify();
-                    })),
+                    .child(
+                        Button::new(id)
+                            .icon(IconName::Close)
+                            .tooltip("Remove recipient")
+                            .accessibility_label("Remove recipient")
+                            .ghost()
+                            .xsmall()
+                            .on_click(cx.listener(move |this, _event, _window, cx| {
+                                this.selected = None;
+                                cx.notify();
+                            })),
+                    ),
             )
             .into_any_element()
     }
@@ -602,9 +631,7 @@ impl Render for SendDialog {
                             .label("Send")
                             .primary()
                             .on_click(cx.listener(move |this, _event, window, cx| {
-                                if this.send(window, cx) {
-                                    window.close_dialog(cx);
-                                }
+                                this.confirm_send(window, cx);
                             })),
                     ),
             )
@@ -613,7 +640,12 @@ impl Render for SendDialog {
 
 /// Create a lightning invoice or redeem a pasted cashu token
 fn open_receive_dialog(window: &mut Window, cx: &mut App) {
-    let amount_input = cx.new(|cx| InputState::new(window, cx).placeholder("Amount (sats)"));
+    let amount_input = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder("Amount (sats)")
+            .step(1.)
+            .min(1.)
+    });
     let token_input = cx.new(|cx| InputState::new(window, cx).placeholder("cashu…"));
 
     let create_invoice: SubmitFn = {
@@ -678,7 +710,7 @@ fn open_receive_dialog(window: &mut Window, cx: &mut App) {
                                 h_flex()
                                     .gap_1()
                                     .w_full()
-                                    .child(Input::new(&amount_input).cleanable(true))
+                                    .child(NumberInput::new(&amount_input))
                                     .child(
                                         Button::new("invoice")
                                             .label("Invoice")

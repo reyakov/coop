@@ -12,13 +12,14 @@ use gpui::{
     Focusable, InteractiveElement, IntoElement, ListAlignment, ListOffset, ListState, MouseButton,
     ObjectFit, ParentElement, Render, SharedString, SharedUri, StatefulInteractiveElement, Styled,
     StyledImage, Subscription, SystemNotification, SystemNotificationAction, Task, WeakEntity,
-    Window, div, img, list, px, red, relative, retain_all, svg, white,
+    Window, div, img, list, px, relative, retain_all, svg,
 };
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{Panel, PanelEvent};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
-use gpui_kit::component::menu::DropdownMenu;
+use gpui_kit::component::menu::{ContextMenuExt as _, DropdownMenu, PopupMenuItem};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::scroll::Scrollbar;
 use gpui_kit::component::speech::{SpeechButton, SpeechEvent, SpeechState, SpeechWaveform};
@@ -35,9 +36,9 @@ use state::{
     FileAttachment, LocalFile, NostrRegistry, PickedFile, download_and_decrypt_file, pick_file,
 };
 use ui::{
-    Avatar, COMPACT_REACTION_EMOJIS, IconName, MessageActions, MessageMedia, MessageRow,
-    REACTION_EMOJIS, ReactionBar, RenderedText, ReplyPreview, RevealText, WelcomeMessage,
-    group_reactions, opens_run, rendered_text,
+    Avatar, COMPACT_REACTION_EMOJIS, MessageActions, MessageMedia, MessageRow, REACTION_EMOJIS,
+    ReactionBar, RenderedText, ReplyPreview, RevealText, WelcomeMessage, group_reactions,
+    opens_run, react_menu, rendered_text,
 };
 
 use crate::file::*;
@@ -674,6 +675,36 @@ impl ChatPanel {
         }
     }
 
+    /// Read a message aloud, tracking its reveal state until utterance end.
+    fn speak_message(&mut self, id: &EventId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(text) = self.message(id).map(|message| message.preview()) else {
+            return;
+        };
+
+        match self.speaker.speak(&text) {
+            Ok(duration) => {
+                self.speech_reveal = Some((*id, duration));
+
+                // Re-enable speaking when no end event ever arrives
+                let session = (*id, duration);
+                let timer = cx.background_executor().timer(duration + END_GRACE);
+                self.reveal_timeout = Some(cx.spawn(async move |this, cx| {
+                    timer.await;
+                    this.update(cx, |this, cx| {
+                        if this.speech_reveal.as_ref() == Some(&session) {
+                            this.speech_reveal = None;
+                            cx.notify();
+                        }
+                    })?;
+
+                    Ok(())
+                }));
+                cx.notify();
+            }
+            Err(error) => window.push_notification(Notification::error(error.to_string()), cx),
+        }
+    }
+
     fn remove_reply(&mut self, id: &EventId, cx: &mut Context<Self>) {
         self.replies_to.update(cx, |this, cx| {
             this.remove(id);
@@ -1026,7 +1057,9 @@ impl ChatPanel {
                                         .bg(cx.theme().secondary)
                                         .rounded(cx.theme().radius)
                                         .text_xs()
-                                        .child(div().size_1p5().rounded_full().bg(gpui::green()))
+                                        .child(
+                                            div().size_1p5().rounded_full().bg(cx.theme().success),
+                                        )
                                         .child(SharedString::from(url.to_string())),
                                 );
                             }
@@ -1058,7 +1091,7 @@ impl ChatPanel {
                                 .bg(cx.theme().secondary)
                                 .rounded(cx.theme().radius)
                                 .text_xs()
-                                .child(div().size_1p5().rounded_full().bg(gpui::green()))
+                                .child(div().size_1p5().rounded_full().bg(cx.theme().success))
                                 .child(SharedString::from(url.to_string())),
                         );
                     }
@@ -1126,7 +1159,7 @@ impl ChatPanel {
                             .rounded_full()
                             .bg(cx.theme().warning.opacity(0.15))
                             .text_color(cx.theme().warning)
-                            .child(Icon::new(IconName::Warning).small()),
+                            .child(Icon::new(IconName::TriangleAlert).small()),
                     )
                     .child(
                         div()
@@ -1237,7 +1270,7 @@ impl ChatPanel {
             None => rendered_text,
         };
 
-        MessageRow::new(ix)
+        let row = MessageRow::new(ix)
             .show_author(show_author)
             .hide_avatar(hide_avatar)
             .avatar(
@@ -1286,7 +1319,76 @@ impl ChatPanel {
             )
             .on_double_click(cx.listener(move |this, _, _window, cx| {
                 this.reply_to(&id, cx);
-            }))
+            }));
+
+        let panel = cx.weak_entity();
+        let speaking = self.speech_reveal.is_some();
+
+        div()
+            .id(SharedString::from(format!("message-menu-{}", id.to_hex())))
+            .w_full()
+            .child(row)
+            .context_menu(move |menu, window, cx| {
+                let menu = menu.item({
+                    let panel = panel.clone();
+                    let id = id;
+
+                    PopupMenuItem::new("Reply").on_click(move |_, _window, cx| {
+                        if let Err(error) = panel.update(cx, |panel, cx| {
+                            panel.reply_to(&id, cx);
+                        }) {
+                            log::warn!("starting a reply failed: {error}");
+                        }
+                    })
+                });
+
+                let menu = menu.submenu("React", window, cx, {
+                    let panel = panel.clone();
+
+                    move |menu, _window, _cx| {
+                        let panel = panel.clone();
+
+                        react_menu(menu, REACTION_EMOJIS, &[], move |emoji, _window, cx| {
+                            if let Err(error) = panel.update_in(cx, |panel, window, cx| {
+                                panel.send_reaction(emoji, &id, window, cx);
+                            }) {
+                                log::warn!("sending a reaction failed: {error}");
+                            }
+                        })
+                    }
+                });
+
+                menu.item({
+                    let panel = panel.clone();
+                    let id = id;
+
+                    PopupMenuItem::new("Copy message").on_click(move |_, _window, cx| {
+                        if let Err(error) = panel.update(cx, |panel, cx| {
+                            panel.copy_message(&id, cx);
+                        }) {
+                            log::warn!("copying a message failed: {error}");
+                        }
+                    })
+                })
+                .item({
+                    let panel = panel.clone();
+                    let id = id;
+                    let speaking = speaking;
+
+                    PopupMenuItem::new("Read aloud")
+                        .disabled(speaking)
+                        .on_click(move |_, _window, cx| {
+                            if let Err(error) = panel.update_in(cx, |panel, window, cx| {
+                                panel.speak_message(&id, window, cx);
+                            }) {
+                                log::warn!("reading the message aloud failed: {error}");
+                            }
+                        })
+                })
+                .separator()
+                .menu("Copy author", Box::new(Command::Copy(pk)))
+                .menu("Seen on", Box::new(Command::Trace(id)))
+            })
             .into_any_element()
     }
 
@@ -1515,34 +1617,7 @@ impl ChatPanel {
         let actions = actions.speech(
             speaking,
             cx.listener(move |this, _event, window, cx| {
-                let text = this.message(&speech_id).map(|message| message.preview());
-
-                if let Some(text) = text {
-                    match this.speaker.speak(&text) {
-                        Ok(duration) => {
-                            this.speech_reveal = Some((speech_id, duration));
-
-                            // Re-enable speaking when no end event ever arrives
-                            let session = (speech_id, duration);
-                            let timer = cx.background_executor().timer(duration + END_GRACE);
-                            this.reveal_timeout = Some(cx.spawn(async move |this, cx| {
-                                timer.await;
-                                this.update(cx, |this, cx| {
-                                    if this.speech_reveal.as_ref() == Some(&session) {
-                                        this.speech_reveal = None;
-                                        cx.notify();
-                                    }
-                                })?;
-
-                                Ok(())
-                            }));
-                            cx.notify();
-                        }
-                        Err(error) => {
-                            window.push_notification(Notification::error(error.to_string()), cx)
-                        }
-                    }
-                }
+                this.speak_message(&speech_id, window, cx);
             }),
         );
 
@@ -1574,8 +1649,12 @@ impl ChatPanel {
                     .items_center()
                     .justify_center()
                     .rounded_full()
-                    .bg(red())
-                    .child(Icon::new(IconName::Close).size_2().text_color(white())),
+                    .bg(cx.theme().danger)
+                    .child(
+                        Icon::new(IconName::Close)
+                            .size_2()
+                            .text_color(cx.theme().danger_foreground),
+                    ),
             )
             .on_click({
                 let url = url.clone();
@@ -1727,8 +1806,12 @@ impl ChatPanel {
                     .rounded_full()
                     .border_1()
                     .border_color(cx.theme().border)
-                    .bg(gpui::green())
-                    .child(Icon::new(IconName::Lock).size_2().text_color(gpui::white())),
+                    .bg(cx.theme().success)
+                    .child(
+                        Icon::new(IconName::Lock)
+                            .size_2()
+                            .text_color(cx.theme().success_foreground),
+                    ),
             )
             .on_click({
                 let url = file.url.clone();
@@ -1752,51 +1835,20 @@ impl ChatPanel {
         items
     }
 
-    fn render_reply(&self, id: &EventId, cx: &Context<Self>) -> impl IntoElement {
+    fn render_reply(&self, ix: usize, id: &EventId, cx: &Context<Self>) -> impl IntoElement {
         if let Some(text) = self.message(id) {
             let profile = self.directory.read(cx).person(&text.author, cx);
 
-            div()
-                .w_full()
-                .pl_2()
-                .border_l_2()
-                .border_color(cx.theme().list_active)
-                .child(
-                    h_flex()
-                        .justify_between()
-                        .child(
-                            div()
-                                .flex()
-                                .items_baseline()
-                                .gap_1()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("Replying to:")
-                                .child(div().text_color(cx.theme().primary).child(profile.name())),
-                        )
-                        .child(
-                            Button::new("remove-reply")
-                                .icon(IconName::Close)
-                                .xsmall()
-                                .ghost()
-                                .on_click({
-                                    let id = text.id;
-                                    cx.listener(move |this, _, _, cx| {
-                                        this.remove_reply(&id, cx);
-                                    })
-                                }),
-                        ),
-                )
-                .child(
-                    div()
-                        .w_full()
-                        .text_xs()
-                        .text_ellipsis()
-                        .line_clamp(1)
-                        .child(text.preview()),
-                )
+            ReplyPreview::new(ix, profile.name(), text.preview())
+                .on_remove({
+                    let id = text.id;
+                    cx.listener(move |this, _, _, cx| {
+                        this.remove_reply(&id, cx);
+                    })
+                })
+                .into_any_element()
         } else {
-            div()
+            div().into_any_element()
         }
     }
 
@@ -1807,8 +1859,8 @@ impl ChatPanel {
     ) -> impl IntoIterator<Item = impl IntoElement> {
         let mut items = vec![];
 
-        for id in self.replies_to.read(cx).iter() {
-            items.push(self.render_reply(id, cx));
+        for (ix, id) in self.replies_to.read(cx).iter().enumerate() {
+            items.push(self.render_reply(ix, id, cx));
         }
 
         items
@@ -1883,7 +1935,8 @@ impl ChatPanel {
             .unwrap_or_default();
 
         Button::new("emoji")
-            .icon(IconName::Emoji)
+            .icon(IconName::FaceGrinning)
+            .tooltip("Emoji")
             .ghost()
             .disabled(disabled)
             .dropdown_menu_with_anchor(gpui::Anchor::BottomLeft, move |this, _window, _cx| {
@@ -1931,7 +1984,7 @@ impl Panel for ChatPanel {
 
         Some(vec![
             Button::new("subject")
-                .icon(IconName::Input)
+                .icon(IconName::TextCursorInput)
                 .tooltip("Change subject")
                 .small()
                 .ghost()
@@ -1978,7 +2031,7 @@ impl Render for ChatPanel {
                         .child(Input::new(&self.subject_input))
                         .child(
                             Button::new("change")
-                                .icon(IconName::CheckCircle)
+                                .icon(IconName::CircleCheck)
                                 .label("Change")
                                 .secondary()
                                 .disabled(self.uploading)
@@ -2093,9 +2146,10 @@ impl Render for ChatPanel {
                                     .child(self.render_config_menu(dictating, window, cx))
                                     .child(
                                         Button::new("send")
-                                            .icon(IconName::PaperPlaneFill)
+                                            .icon(IconName::SendHorizontal)
+                                            .tooltip("Send")
                                             .disabled(dictating || self.uploading)
-                                            .ghost()
+                                            .primary()
                                             .on_click(cx.listener(move |this, _ev, window, cx| {
                                                 this.send_text_message(window, cx);
                                             })),

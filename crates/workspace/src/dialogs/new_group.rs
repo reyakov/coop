@@ -1,20 +1,22 @@
 use anyhow::Error;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Div, Entity, FocusHandle, InteractiveElement as _, IntoElement,
+    AnyElement, App, AppContext, Context, Div, Entity, InteractiveElement as _, IntoElement,
     ParentElement, Render, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled,
-    Subscription, Task, WeakEntity, Window, div, px, rems,
+    Subscription, Task, WeakEntity, Window, div, px,
 };
-use gpui_base::{Popup, Select};
-use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{DockArea, DockPlacement, PanelHandle};
 use gpui_kit::component::group_box::{GroupBox, GroupBoxVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
+use gpui_kit::component::searchable_list::{SearchableListDelegate, SearchableListItem};
+use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::switch::Switch;
-use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, WindowExt, h_flex, v_flex};
+use gpui_kit::component::{
+    ActiveTheme, Disableable, IndexPath, Sizable, WindowExt, h_flex, v_flex,
+};
 use nip29::{GroupCreateOptions, GroupKey, GroupsEvent, GroupsRegistry};
 use nostr_sdk::prelude::*;
 use settings::AppSettings;
@@ -72,13 +74,10 @@ struct NewGroup {
     name_input: Entity<InputState>,
     about_input: Entity<TextareaState>,
     custom_relay_input: Entity<InputState>,
-    /// The relays offered in the relay select.
-    relays: Vec<RelayUrl>,
     /// The selected relay; `None` selects the custom relay field.
     selected_relay: Option<RelayUrl>,
-    /// Whether the relay select popup is open.
-    relay_select_open: bool,
-    relay_options_focus: FocusHandle,
+    /// The relay select; its options end with the custom relay choice.
+    relay_select: Entity<SelectState<RelayDelegate>>,
     /// Keep the group in the NIP-44 encrypted section of the user's group list.
     list_private: bool,
     /// The uploaded group picture, ready to be published with the metadata.
@@ -113,8 +112,6 @@ impl NewGroup {
                 .placeholder("What is this group about?")
         });
 
-        let relay_options_focus = cx.focus_handle();
-
         let relays: Vec<RelayUrl> = DEFAULT_RELAYS
             .iter()
             .filter_map(|url| match RelayUrl::parse(url) {
@@ -127,8 +124,36 @@ impl NewGroup {
             .collect();
         let selected_relay = relays.first().cloned();
 
+        let mut options: Vec<RelayOption> = relays
+            .iter()
+            .map(|relay| RelayOption {
+                label: relay_label(relay),
+                value: Some(relay.clone()),
+            })
+            .collect();
+        options.push(RelayOption {
+            label: "Custom relay".into(),
+            value: None,
+        });
+
         let registry = GroupsRegistry::global(cx);
         let mut subscriptions = vec![];
+
+        let delegate = RelayDelegate { options };
+        let selected_index = delegate.position(&selected_relay);
+        let relay_select = cx.new(|cx| SelectState::new(delegate, selected_index, window, cx));
+
+        subscriptions.push(cx.subscribe_in(
+            &relay_select,
+            window,
+            |this, _select, event, _window, cx| {
+                let SelectEvent::Confirm(value) = event;
+
+                if let Some(choice) = value {
+                    this.select_relay(choice.clone(), cx);
+                }
+            },
+        ));
 
         subscriptions.push(cx.subscribe_in(
             &registry,
@@ -165,10 +190,8 @@ impl NewGroup {
             name_input,
             about_input,
             custom_relay_input,
-            relays,
             selected_relay,
-            relay_select_open: false,
-            relay_options_focus,
+            relay_select,
             list_private: false,
             picture: None,
             uploading: false,
@@ -275,20 +298,6 @@ impl NewGroup {
         cx.notify();
     }
 
-    fn set_relay_select_open(&mut self, open: bool, cx: &mut Context<Self>) {
-        self.relay_select_open = open;
-        cx.notify();
-    }
-
-    fn activate_relay_option(&mut self, index: usize, cx: &mut Context<Self>) {
-        if index < self.relays.len() {
-            self.select_relay(Some(self.relays[index].clone()), cx);
-        } else {
-            self.select_relay(None, cx);
-        }
-        self.set_relay_select_open(false, cx);
-    }
-
     fn set_uploading(&mut self, uploading: bool, cx: &mut Context<Self>) {
         self.uploading = uploading;
         cx.notify();
@@ -339,7 +348,7 @@ impl NewGroup {
         }
     }
 
-    fn render_relay(&self, selected: &str, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_relay(&self, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(parent) = &self.parent {
             return v_flex().gap_1p5().child(field_label("Relay", cx)).child(
                 div()
@@ -352,108 +361,13 @@ impl NewGroup {
             );
         }
 
-        let this = cx.entity().downgrade();
-        let open = self.relay_select_open;
-
-        let trigger = h_flex()
-            .id("relay-trigger")
-            .justify_between()
-            .w_full()
-            .h_8()
-            .px_3()
-            .rounded(cx.theme().radius)
-            .text_xs()
-            .cursor_default()
-            .bg(if open {
-                cx.theme().list_active
-            } else {
-                cx.theme().secondary
-            })
-            .when(!open, |this| {
-                this.hover(|this| this.bg(cx.theme().primary))
-                    .active(|this| this.bg(cx.theme().list_active))
-            })
-            .on_click(cx.listener(move |this, _, _window, cx| {
-                this.relay_select_open = !open;
-                cx.notify();
-            }))
-            .child(selected.to_owned())
-            .child(
-                Icon::new(IconName::ChevronDown)
-                    .small()
-                    .text_color(cx.theme().muted_foreground),
-            );
-
-        let select = Select::new("relay-select")
-            .open(open)
-            .on_open_change({
-                let this = this.clone();
-                move |open, _, cx| {
-                    let _ = this.update(cx, |this, cx| {
-                        this.set_relay_select_open(open, cx);
-                    });
-                }
-            })
-            .content_focus_handle(&self.relay_options_focus)
-            .accessibility_label("Relay")
-            .accessibility_value(selected.to_owned())
-            .w_full()
-            .child(trigger);
-
-        let options = v_flex()
-            .id("relay-options")
-            .occlude()
-            .track_focus(&self.relay_options_focus)
-            .key_context("Select")
-            .on_mouse_down_out(cx.listener(|this, _, _, cx| {
-                this.set_relay_select_open(false, cx);
-            }))
-            .bg(cx.theme().popover)
-            .border_1()
-            .border_color(cx.theme().border)
-            .shadow_md()
-            .rounded(cx.theme().radius_lg)
-            .p_1()
-            .gap_y_1()
-            .min_w(rems(8.))
-            .text_color(cx.theme().foreground)
-            .children(self.relays.iter().enumerate().map(|(index, relay)| {
-                h_flex()
-                    .id(SharedString::from(format!("option-{relay}")))
-                    .px_1p5()
-                    .py_1()
-                    .rounded(cx.theme().radius)
-                    .text_xs()
-                    .cursor_default()
-                    .hover(|this| this.bg(cx.theme().primary))
-                    .child(relay_label(relay))
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.activate_relay_option(index, cx);
-                    }))
-            }))
-            .child(Separator::horizontal())
-            .child(
-                h_flex()
-                    .id("relay-add")
-                    .px_1p5()
-                    .py_1()
-                    .rounded(cx.theme().radius)
-                    .text_xs()
-                    .cursor_default()
-                    .child("Custom relay")
-                    .hover(|this| this.bg(cx.theme().primary))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.activate_relay_option(this.relays.len(), cx);
-                    })),
-            );
-
         v_flex()
             .gap_1p5()
             .child(field_label("Relay", cx))
             .when(self.selected_relay.is_none(), |this| {
                 this.child(Input::new(&self.custom_relay_input))
             })
-            .child(Popup::new("relay-popup", select).when(open, |this| this.content(options)))
+            .child(Select::new(&self.relay_select).accessibility_label("Relay"))
     }
 
     fn render_access(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -567,12 +481,6 @@ impl NewGroup {
 
 impl Render for NewGroup {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let selected = self
-            .selected_relay
-            .as_ref()
-            .map(relay_label)
-            .unwrap_or_else(|| "Add relay".into());
-
         let web_url = self
             .effective_relay(cx)
             .ok()
@@ -614,7 +522,7 @@ impl Render for NewGroup {
                             ),
                     )
                     .child(input_field("Name", Input::new(&self.name_input), cx))
-                    .child(self.render_relay(&selected, cx))
+                    .child(self.render_relay(cx))
                     .child(input_field("About", Textarea::new(&self.about_input), cx))
                     .child(self.render_access(cx))
                     .child(self.render_list_setting(cx))
@@ -643,6 +551,76 @@ impl Render for NewGroup {
                             .on_click(cx.listener(|this, _event, _window, cx| this.create(cx))),
                     ),
             )
+    }
+}
+
+/// One choice in the relay select: a fixed relay, or the custom relay field.
+#[derive(Clone)]
+struct RelayOption {
+    label: SharedString,
+    value: Option<RelayUrl>,
+}
+
+impl SearchableListItem for RelayOption {
+    type Value = Option<RelayUrl>;
+
+    fn title(&self) -> SharedString {
+        self.label.clone()
+    }
+
+    fn value(&self) -> &Self::Value {
+        &self.value
+    }
+
+    /// The trigger reads "Add relay" while the custom relay field is active.
+    fn display_title(&self) -> Option<AnyElement> {
+        (self.value.is_none()).then(|| "Add relay".into_any_element())
+    }
+}
+
+/// Relay options with a separator before the trailing custom relay choice.
+struct RelayDelegate {
+    options: Vec<RelayOption>,
+}
+
+impl SearchableListDelegate for RelayDelegate {
+    type Item = RelayOption;
+
+    fn items_count(&self, _section: usize) -> usize {
+        self.options.len()
+    }
+
+    fn item(&self, ix: IndexPath) -> Option<&RelayOption> {
+        self.options.get(ix.row)
+    }
+
+    fn position<V>(&self, value: &V) -> Option<IndexPath>
+    where
+        Self::Item: SearchableListItem<Value = V>,
+        V: PartialEq,
+    {
+        self.options
+            .iter()
+            .position(|option| option.value() == value)
+            .map(IndexPath::new)
+    }
+
+    fn render_item(
+        &self,
+        _ix: IndexPath,
+        item: &RelayOption,
+        _checked: bool,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Option<AnyElement> {
+        (item.value.is_none()).then(|| {
+            v_flex()
+                .w_full()
+                .gap_1()
+                .child(Separator::horizontal())
+                .child(item.title())
+                .into_any_element()
+        })
     }
 }
 

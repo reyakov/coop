@@ -27,7 +27,7 @@ use person::Directory;
 use serde::Deserialize;
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
-use speech::speaker::Speaker;
+use speech::speaker::{END_GRACE, Speaker};
 use state::{NostrRegistry, pick_file, upload_file};
 use ui::{Avatar, REACTION_EMOJIS, RenderedText, RevealText, WelcomeMessage, rendered_text};
 use util::{attachment_name, display_name, opens_run, pin_label, report};
@@ -261,17 +261,43 @@ pub fn confirm_delete(group: WeakEntity<Group>, window: &mut Window, cx: &mut Ap
     });
 }
 
-/// Remove a member from the group and surface any relay error as a notification.
-pub fn remove_member(
+/// Confirm removing a member, then remove them and surface any relay error.
+pub fn confirm_remove_member(
     group: WeakEntity<Group>,
     public_key: PublicKey,
+    member: SharedString,
     window: &mut Window,
     cx: &mut App,
 ) {
-    match group.update(cx, |group, cx| group.remove_user(public_key, cx)) {
-        Ok(task) => report(window, cx, task),
-        Err(error) => log::warn!("nip29: removing a group member failed: {error}"),
-    }
+    let Some(group_name) = group.read_with(cx, |group, _cx| group.display_name()).ok() else {
+        return;
+    };
+
+    window.open_alert_dialog(cx, move |this, _window, _cx| {
+        let group = group.clone();
+
+        this.confirm()
+            .width(px(360.))
+            .title(format!("Remove {member} from {group_name}?"))
+            .button_props(
+                DialogButtonProps::default()
+                    .cancel_text("Cancel")
+                    .ok_text("Remove")
+                    .ok_variant(ButtonVariant::Danger),
+            )
+            .child(
+                div()
+                    .text_xs()
+                    .child("The relay will remove them from this group."),
+            )
+            .on_ok(move |_event, window, cx| {
+                match group.update(cx, |group, cx| group.remove_user(public_key, cx)) {
+                    Ok(task) => report(window, cx, task),
+                    Err(error) => log::warn!("nip29: removing a group member failed: {error}"),
+                }
+                true
+            })
+    });
 }
 
 /// Grant a member the admin role and surface any relay error as a notification.
@@ -559,6 +585,39 @@ impl GroupPanel {
         }
     }
 
+    /// Read a message aloud, tracking its reveal state until utterance end.
+    fn speak(
+        &mut self,
+        id: EventId,
+        text: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match self.speaker.speak(&text) {
+            Ok(duration) => {
+                self.speech_reveal = Some((id, duration));
+
+                let session = (id, duration);
+                let timer = cx.background_executor().timer(duration + END_GRACE);
+
+                self.reveal_timeout = Some(cx.spawn(async move |this, cx| {
+                    timer.await;
+                    this.update(cx, |this, cx| {
+                        if this.speech_reveal.as_ref() == Some(&session) {
+                            this.speech_reveal = None;
+                            cx.notify();
+                        }
+                    })?;
+
+                    Ok(())
+                }));
+
+                cx.notify();
+            }
+            Err(error) => window.push_notification(Notification::error(error.to_string()), cx),
+        }
+    }
+
     fn start_reply(&mut self, id: EventId, window: &mut Window, cx: &mut Context<Self>) {
         self.reply_to = Some(id);
         self.input.update(cx, |input, cx| {
@@ -716,18 +775,46 @@ impl GroupPanel {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Ok(delete) = group.update(cx, |group, cx| group.delete_event(id, cx)) else {
-            return;
-        };
+        window.open_alert_dialog(cx, move |this, _window, _cx| {
+            let group = group.clone();
 
-        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            if let Err(error) = delete.await {
-                this.update_in(cx, |_this, window, cx| {
-                    window.push_notification(Notification::error(error.to_string()), cx);
-                })?;
-            }
-            Ok(())
-        }));
+            this.confirm()
+                .width(px(360.))
+                .title("Delete message?")
+                .button_props(
+                    DialogButtonProps::default()
+                        .cancel_text("Cancel")
+                        .ok_text("Delete")
+                        .ok_variant(ButtonVariant::Danger),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .child("The relay will delete this message for everyone."),
+                )
+                .on_ok(move |_event, window, cx| {
+                    let Ok(delete) = group.update(cx, |group, cx| group.delete_event(id, cx))
+                    else {
+                        return true;
+                    };
+
+                    window
+                        .spawn(cx, async move |cx| -> Result<()> {
+                            if let Err(error) = delete.await {
+                                cx.update(|window, cx| {
+                                    window.push_notification(
+                                        Notification::error(error.to_string()),
+                                        cx,
+                                    );
+                                })?;
+                            }
+                            Ok(())
+                        })
+                        .detach();
+
+                    true
+                })
+        });
     }
 
     fn toggle_pin(
@@ -1162,7 +1249,7 @@ impl GroupPanel {
                     .items_end()
                     .child(
                         Button::new("upload")
-                            .icon(ui::IconName::Paperclip)
+                            .icon(IconName::Paperclip)
                             .tooltip("Upload media")
                             .loading(self.uploading)
                             .disabled(dictating || self.uploading)
@@ -1202,8 +1289,9 @@ impl GroupPanel {
                             .child(self.render_emoji_menu(dictating, window, cx))
                             .child(
                                 Button::new("send")
-                                    .icon(ui::IconName::PaperPlaneFill)
-                                    .ghost()
+                                    .icon(IconName::SendHorizontal)
+                                    .tooltip("Send")
+                                    .primary()
                                     .disabled(dictating || self.uploading)
                                     .on_click(cx.listener(|this, _event, window, cx| {
                                         this.send(window, cx);
@@ -1234,7 +1322,8 @@ impl GroupPanel {
             .unwrap_or_default();
 
         Button::new("emoji")
-            .icon(ui::IconName::Emoji)
+            .icon(IconName::FaceGrinning)
+            .tooltip("Emoji")
             .ghost()
             .disabled(disabled)
             .dropdown_menu_with_anchor(Anchor::BottomLeft, move |this, _window, _cx| {
@@ -1305,7 +1394,7 @@ impl GroupPanel {
             )
             .child(
                 Button::new("cancel-reply")
-                    .icon(ui::IconName::Close)
+                    .icon(IconName::Close)
                     .tooltip("Cancel reply")
                     .ghost()
                     .small()
@@ -1342,7 +1431,7 @@ impl GroupPanel {
                     )
                     .child(
                         Button::new(SharedString::from(format!("remove-attachment-{ix}")))
-                            .icon(ui::IconName::Close)
+                            .icon(IconName::Close)
                             .tooltip("Remove")
                             .ghost()
                             .xsmall()

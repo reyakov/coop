@@ -12,6 +12,7 @@ use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{Panel, PanelEvent};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
 use instant::Duration;
@@ -229,6 +230,7 @@ impl ContactListPanel {
 
     fn render_list_items(&mut self, cx: &mut Context<Self>) -> Vec<impl IntoElement> {
         let mut items = Vec::new();
+        let panel = cx.weak_entity();
 
         for (ix, public_key) in self.contacts.iter().enumerate() {
             let profile = self.directory.read(cx).person(public_key, cx);
@@ -243,7 +245,24 @@ impl ContactListPanel {
                     .px_2()
                     .justify_between()
                     .rounded(cx.theme().radius)
-                    .hover(|this| this.bg(cx.theme().primary))
+                    .hover(|this| this.bg(cx.theme().list_hover))
+                    .context_menu({
+                        let panel = panel.clone();
+                        let public_key = *public_key;
+
+                        move |menu, _window, _cx| {
+                            menu.item(PopupMenuItem::new("Remove").on_click({
+                                let panel = panel.clone();
+                                move |_, _window, cx| {
+                                    if let Err(error) = panel.update(cx, |panel, cx| {
+                                        panel.remove(&public_key, cx);
+                                    }) {
+                                        log::warn!("removing a contact failed: {error}");
+                                    }
+                                }
+                            }))
+                        }
+                    })
                     .child(
                         h_flex()
                             .gap_2()
@@ -256,18 +275,21 @@ impl ContactListPanel {
                             .child(profile.name()),
                     )
                     .child(
-                        Button::new("remove_{ix}")
-                            .icon(IconName::X)
-                            .xsmall()
-                            .ghost()
-                            .invisible()
-                            .group_hover("", |this| this.visible())
-                            .on_click({
-                                let public_key = public_key.to_owned();
-                                cx.listener(move |this, _ev, _window, cx| {
-                                    this.remove(&public_key, cx);
-                                })
-                            }),
+                        Button::new(SharedString::from(format!(
+                            "remove-{}",
+                            public_key.to_hex()
+                        )))
+                        .icon(IconName::X)
+                        .xsmall()
+                        .ghost()
+                        .invisible()
+                        .group_hover("", |this| this.visible())
+                        .on_click({
+                            let public_key = public_key.to_owned();
+                            cx.listener(move |this, _ev, _window, cx| {
+                                this.remove(&public_key, cx);
+                            })
+                        }),
                     ),
             )
         }

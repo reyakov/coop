@@ -662,6 +662,7 @@ impl Render for Preferences {
                     .child(
                         Button::new("update-file-server")
                             .icon(IconName::Check)
+                            .tooltip("Update")
                             .ghost()
                             .size_8()
                             .on_click(cx.listener(move |this, _ev, window, cx| {

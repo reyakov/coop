@@ -13,6 +13,7 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::dock::{DockArea, DockPlacement, Panel, PanelEvent, PanelHandle};
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::scroll::ScrollableElement;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use nostr_sdk::prelude::*;
@@ -23,7 +24,6 @@ use ui::Avatar;
 
 use super::browse;
 use crate::dock::add_panel_to;
-use crate::nav::Nav;
 use crate::sidebar::open_room;
 
 /// How many requests and follow ups to show per section.
@@ -457,9 +457,19 @@ impl GreeterPanel {
                 v_flex()
                     .w_full()
                     .child(
-                        Nav::new("browse-group")
-                            .prefix(Icon::new(IconName::Compass))
-                            .label("Browse Public Groups")
+                        ListItem::new("browse-group")
+                            .accessibility_label("Browse Public Groups")
+                            .h_8()
+                            .rounded(cx.theme().radius)
+                            .cursor_pointer()
+                            .child(div().flex_shrink_0().child(Icon::new(IconName::Compass)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child("Browse Public Groups"),
+                            )
                             .text_sm()
                             .on_click(cx.listener(|this, _, window, cx| {
                                 let panel = browse::init(this.dock.clone(), window, cx);
@@ -473,9 +483,19 @@ impl GreeterPanel {
                             })),
                     )
                     .child(
-                        Nav::new("browse-posts")
-                            .prefix(Icon::new(IconName::Link))
-                            .label("Browse Nostr via Jumble")
+                        ListItem::new("browse-posts")
+                            .accessibility_label("Browse Nostr via Jumble")
+                            .h_8()
+                            .rounded(cx.theme().radius)
+                            .cursor_pointer()
+                            .child(div().flex_shrink_0().child(Icon::new(IconName::Link)))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .truncate()
+                                    .child("Browse Nostr via Jumble"),
+                            )
                             .text_sm()
                             .on_click(|_, _, cx| {
                                 cx.open_url(JUMBLE_URL);

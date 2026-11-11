@@ -2,19 +2,18 @@ use std::rc::Rc;
 
 use chat::{ChatRegistry, RoomKind};
 use gpui::prelude::FluentBuilder;
-use gpui::{
-    AnyElement, App, Context, IntoElement, ParentElement, SharedString, Styled, div, uniform_list,
-};
+use gpui::{AnyElement, App, Context, IntoElement, ParentElement, Styled, div, uniform_list};
+use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::badge::Badge;
+use gpui_kit::component::list::ListItem;
 use gpui_kit::component::{ActiveTheme, Icon, Sizable, h_flex, v_flex};
 use nip29::GroupsRegistry;
 use settings::AppSettings;
-use ui::IconName;
 
 use super::Sidebar;
 use super::rows::SidebarRow;
 use crate::Command;
-use crate::nav::Nav;
 
 /// A collapsible section of the sidebar's main list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +37,7 @@ impl Sidebar {
     pub(super) fn render_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let requests_open = self.requests_open;
         let contacts_open = self.contacts_open && !requests_open;
+        let new_requests = self.new_requests;
         let rows = Rc::new(self.rows_for(cx));
         // Whether to show the create button for the contact picker
         let create_button = contacts_open && !self.selected_contacts.is_empty();
@@ -69,9 +69,17 @@ impl Sidebar {
                     .justify_start()
                     .when(cfg!(not(target_arch = "wasm32")), |this| {
                         this.child(
-                            Nav::new("wallet")
-                                .prefix(Icon::new(gpui_kit::assets::IconName::Wallet).small())
-                                .label("Wallet")
+                            ListItem::new("wallet")
+                                .accessibility_label("Wallet")
+                                .h_8()
+                                .rounded(cx.theme().radius)
+                                .cursor_pointer()
+                                .child(
+                                    div().flex_shrink_0().child(
+                                        Icon::new(gpui_kit::assets::IconName::Wallet).small(),
+                                    ),
+                                )
+                                .child(div().flex_1().min_w_0().truncate().child("Wallet"))
                                 .text_sm()
                                 .on_click(|_, window, cx| {
                                     window.dispatch_action(Box::new(crate::Command::ShowWallet), cx)
@@ -79,48 +87,55 @@ impl Sidebar {
                         )
                     })
                     .child(
-                        Nav::new("browse")
-                            .prefix(Icon::new(IconName::Compass).small())
-                            .label("Browse")
+                        ListItem::new("browse")
+                            .accessibility_label("Browse")
+                            .h_8()
+                            .rounded(cx.theme().radius)
+                            .cursor_pointer()
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .child(Icon::new(IconName::Compass).small()),
+                            )
+                            .child(div().flex_1().min_w_0().truncate().child("Browse"))
                             .text_sm()
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(Box::new(Command::ShowBrowse), cx)
                             }),
                     )
                     .child(
-                        Nav::new("reqs")
-                            .prefix(Icon::new(IconName::Invite).small())
-                            .label("Requests")
+                        ListItem::new("reqs")
+                            .accessibility_label("Requests")
+                            .h_8()
+                            .rounded(cx.theme().radius)
+                            .cursor_pointer()
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .child(Icon::new(IconName::UserPlus).small()),
+                            )
+                            .child(div().flex_1().min_w_0().truncate().child("Requests"))
                             .text_sm()
                             .when(request_count > 0, |this| {
-                                this.suffix(
-                                    h_flex()
-                                        .gap_1()
-                                        .child(
-                                            h_flex()
-                                                .py_0p5()
-                                                .px_1()
-                                                .min_w_6()
-                                                .justify_center()
-                                                .text_xs()
-                                                .font_medium()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .text_center()
-                                                .rounded(cx.theme().radius)
-                                                .bg(cx.theme().secondary)
-                                                .child(SharedString::from(
-                                                    request_count.to_string(),
-                                                )),
-                                        )
-                                        .when(self.new_requests && !requests_open, |this| {
-                                            this.child(
-                                                div()
-                                                    .size_1()
-                                                    .rounded_full()
-                                                    .bg(cx.theme().primary),
+                                this.suffix(move |_, cx| {
+                                    div().flex_shrink_0().child(
+                                        h_flex()
+                                            .gap_1()
+                                            .child(
+                                                Badge::new()
+                                                    .count(request_count)
+                                                    .child(div().size_4()),
                                             )
-                                        }),
-                                )
+                                            .when(new_requests && !requests_open, |this| {
+                                                this.child(
+                                                    div()
+                                                        .size_1()
+                                                        .rounded_full()
+                                                        .bg(cx.theme().primary),
+                                                )
+                                            }),
+                                    )
+                                })
                             })
                             .when(requests_open, |this| this.bg(cx.theme().list_active))
                             .on_click(cx.listener(|this, _event, _window, cx| {
@@ -128,9 +143,17 @@ impl Sidebar {
                             })),
                     )
                     .child(
-                        Nav::new("contacts")
-                            .prefix(Icon::new(IconName::Book).small())
-                            .label("Contacts")
+                        ListItem::new("contacts")
+                            .accessibility_label("Contacts")
+                            .h_8()
+                            .rounded(cx.theme().radius)
+                            .cursor_pointer()
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .child(Icon::new(IconName::Book).small()),
+                            )
+                            .child(div().flex_1().min_w_0().truncate().child("Contacts"))
                             .text_sm()
                             .when(contacts_open, |this| this.bg(cx.theme().list_active))
                             .on_click(cx.listener(|this, _event, window, cx| {

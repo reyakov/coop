@@ -4,8 +4,8 @@ use anyhow::Error;
 use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
-    App, AppContext, Context, Div, Entity, InteractiveElement, IntoElement, ParentElement, Render,
-    SharedString, Styled, Subscription, Task, Window, div, px, relative, uniform_list,
+    App, AppContext, Context, Div, Entity, IntoElement, ParentElement, Render, SharedString,
+    Styled, Subscription, Task, Window, div, px, relative, uniform_list,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
@@ -313,7 +313,6 @@ impl Screening {
                                     .gap_1p5()
                                     .rounded(cx.theme().radius)
                                     .text_xs()
-                                    .hover(|this| this.bg(cx.theme().primary))
                                     .child(
                                         Avatar::new(profile.avatar())
                                             .seed(profile.avatar_seed())
@@ -545,6 +544,7 @@ impl Render for Screening {
                                     .child(
                                         Button::new("mutuals")
                                             .icon(IconName::Info)
+                                            .tooltip("Show mutual contacts")
                                             .xsmall()
                                             .ghost()
                                             .disabled(mutuals == 0)

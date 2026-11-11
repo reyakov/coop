@@ -1,8 +1,9 @@
 use gpui::{
     AnyElement, App, IntoElement, ParentElement, SharedString, Styled, WeakEntity, Window, div, px,
-    relative,
 };
 use gpui_kit::base::StyledExt as _;
+use gpui_kit::component::description_list::{DescriptionItem, DescriptionList};
+use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ActiveTheme, Sizable, WindowExt, h_flex, v_flex};
 use nip29::{Group, GroupMetadata};
 use ui::Avatar;
@@ -23,6 +24,7 @@ fn body(group: &WeakEntity<Group>, cx: &App) -> AnyElement {
 
     let group = entity.read(cx);
     let mut body = v_flex().gap_3().text_xs().child(header(group, cx));
+    let mut items = Vec::new();
 
     if let Some(metadata) = group.metadata() {
         if let Some(about) = metadata.about.as_ref() {
@@ -36,86 +38,100 @@ fn body(group: &WeakEntity<Group>, cx: &App) -> AnyElement {
         let flags = flags(metadata);
 
         if !flags.is_empty() {
-            body = body.child(section(
-                "Flags",
-                wrap(flags.into_iter().map(|f| chip(f, cx))),
-                cx,
-            ));
+            items.push(
+                DescriptionItem::new("Flags").value(wrap(
+                    flags
+                        .into_iter()
+                        .map(|flag| Tag::secondary().child(flag).into_any_element()),
+                )),
+            );
         }
 
         if let Some(parent) = metadata.parent.as_ref() {
-            body = body.child(section(
-                "Parent",
-                div()
-                    .child(SharedString::from(parent.as_str().to_owned()))
-                    .into_any_element(),
-                cx,
-            ));
+            items.push(
+                DescriptionItem::new("Parent").value(
+                    div()
+                        .child(SharedString::from(parent.as_str().to_owned()))
+                        .into_any_element(),
+                ),
+            );
         }
 
         if !metadata.children.is_empty() {
-            body = body.child(section(
-                "Children",
-                wrap(
-                    metadata
-                        .children
-                        .iter()
-                        .map(|child| chip(child.as_str().to_owned(), cx)),
-                ),
-                cx,
-            ));
+            items.push(
+                DescriptionItem::new("Children").value(wrap(metadata.children.iter().map(
+                    |child| {
+                        Tag::secondary()
+                            .child(SharedString::from(child.as_str().to_owned()))
+                            .into_any_element()
+                    },
+                ))),
+            );
         }
 
         if let Some(kinds) = metadata.supported_kinds.as_ref() {
-            let items: Vec<AnyElement> = kinds
+            let values: Vec<AnyElement> = kinds
                 .iter()
-                .map(|kind| chip(kind.to_string(), cx))
+                .map(|kind| {
+                    Tag::secondary()
+                        .child(SharedString::from(kind.to_string()))
+                        .into_any_element()
+                })
                 .collect();
 
-            body = body.child(section(
-                "Supported kinds",
-                if items.is_empty() {
+            items.push(
+                DescriptionItem::new("Supported kinds").value(if values.is_empty() {
                     div()
                         .text_color(cx.theme().muted_foreground)
                         .child("None")
                         .into_any_element()
                 } else {
-                    wrap(items)
-                },
-                cx,
-            ));
+                    wrap(values)
+                }),
+            );
         }
     }
 
     let roles = group.roles().roles();
     if !roles.is_empty() {
-        body = body.child(section(
-            "Roles",
-            wrap(roles.iter().map(|role| chip(role.name.clone(), cx))),
-            cx,
-        ));
+        items.push(
+            DescriptionItem::new("Roles").value(wrap(roles.iter().map(|role| {
+                Tag::secondary()
+                    .child(SharedString::from(role.name.clone()))
+                    .into_any_element()
+            }))),
+        );
     }
 
     let pins = group.pins().pins();
     if !pins.is_empty() {
-        body = body.child(section(
-            "Pinned",
-            v_flex()
-                .gap_1()
-                .children(
-                    pins.iter()
-                        .map(|pin| {
-                            div()
-                                .truncate()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(crate::util::pin_label(group, pin))
-                                .into_any_element()
-                        })
-                        .collect::<Vec<_>>(),
-                )
-                .into_any_element(),
-            cx,
-        ));
+        items.push(
+            DescriptionItem::new("Pinned").value(
+                v_flex()
+                    .gap_1()
+                    .children(
+                        pins.iter()
+                            .map(|pin| {
+                                div()
+                                    .truncate()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(crate::util::pin_label(group, pin))
+                                    .into_any_element()
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .into_any_element(),
+            ),
+        );
+    }
+
+    if !items.is_empty() {
+        body = body.child(
+            DescriptionList::vertical()
+                .bordered(false)
+                .columns(1)
+                .children(items),
+        );
     }
 
     body.into_any_element()
@@ -157,38 +173,11 @@ fn header(group: &Group, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-fn section(label: &'static str, content: AnyElement, cx: &App) -> AnyElement {
-    v_flex()
-        .gap_1()
-        .child(
-            div()
-                .text_xs()
-                .font_medium()
-                .text_color(cx.theme().muted_foreground)
-                .child(label),
-        )
-        .child(content)
-        .into_any_element()
-}
-
 fn wrap(items: impl IntoIterator<Item = AnyElement>) -> AnyElement {
     h_flex()
         .flex_wrap()
         .gap_1()
         .children(items)
-        .into_any_element()
-}
-
-fn chip(label: impl Into<SharedString>, cx: &App) -> AnyElement {
-    div()
-        .px_2()
-        .py_1()
-        .rounded(cx.theme().radius)
-        .bg(cx.theme().secondary)
-        .text_color(cx.theme().foreground)
-        .text_xs()
-        .line_height(relative(1.))
-        .child(label.into())
         .into_any_element()
 }
 
