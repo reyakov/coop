@@ -1208,7 +1208,10 @@ impl GroupsRegistry {
                             tx.send_async(signal).await.ok();
                         }
                     }
-                    RelayMessage::EndOfStoredEvents(id) if is_own_subscription(&id) => {
+                    RelayMessage::EndOfStoredEvents {
+                        subscription_id: id,
+                        ..
+                    } if is_own_subscription(&id) => {
                         tx.send_async(Signal::Eose(id.into_owned())).await.ok();
                     }
                     RelayMessage::Closed {
@@ -1222,7 +1225,7 @@ impl GroupsRegistry {
                     RelayMessage::NegMsg { .. } => {
                         tx.send_async(Signal::Syncing(relay_url)).await.ok();
                     }
-                    RelayMessage::NegErr { .. } | RelayMessage::EndOfStoredEvents(_) => {
+                    RelayMessage::NegErr { .. } | RelayMessage::EndOfStoredEvents { .. } => {
                         tx.send_async(Signal::Synced(relay_url)).await.ok();
                     }
                     _ => {}

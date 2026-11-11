@@ -47,11 +47,7 @@ chacha20 = "0.9"
 hmac = "0.12"
 # Pinned to the instance `nostr-sdk` already builds, so NIP-44 nonces share it
 rand = { version = "0.10", default-features = false, features = [ "std", "sys_rng", "thread_rng" ] }
-
-# Cashu (NIP-60). From git: the published 0.18.x line targets nostr 0.44 and
-# cannot unify with the git rust-nostr used here, while main targets 0.45.x
-# (redirected to this repo by the [patch.crates-io] section below). redb
-# storage: pure Rust, avoids the libsqlite3-sys links clash with nostr-sqlite.
+# Cashu (NIP-60).
 cdk = { git = "https://github.com/cashubtc/cdk", default-features = false, features = [ "wallet" ] }
 cdk-redb = { git = "https://github.com/cashubtc/cdk", default-features = false, features = [ "wallet" ] }
 

@@ -344,9 +344,10 @@ impl ChatRegistry {
                             }
                         }
                     }
-                    RelayMessage::EndOfStoredEvents(id)
-                        if (id.as_ref() == &sub_id1 || id.as_ref() == &sub_id2) =>
-                    {
+                    RelayMessage::EndOfStoredEvents {
+                        subscription_id: id,
+                        ..
+                    } if (id.as_ref() == &sub_id1 || id.as_ref() == &sub_id2) => {
                         tx.send_async(Signal::Eose).await?;
                     }
                     _ => {}
