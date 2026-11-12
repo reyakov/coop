@@ -48,9 +48,6 @@ person = { path = "../crates/person" }
 gpui.workspace = true
 gpui_platform.workspace = true
 gpui-kit.workspace = true
-gpui_linux.workspace = true
-gpui_windows.workspace = true
-gpui_macos.workspace = true
 reqwest_client.workspace = true
 
 log.workspace = true

@@ -9,18 +9,14 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
-gpui = { package = "gpui-pre", version = "0.3.10" }
-gpui_platform = { package = "gpui-pre-platform", version = "0.3.10", features = ["font-kit", "x11", "wayland"] }
-gpui_linux = { package = "gpui-pre-linux", version = "0.3.10" }
-gpui_windows = { package = "gpui-pre-windows", version = "0.3.10" }
-gpui_macos = { package = "gpui-pre-macos", version = "0.3.10" }
-gpui_web = { package = "gpui-pre-web", version = "0.3.10" }
-gpui_util = { package = "gpui-pre-util", version = "0.3.10" }
-reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.10" }
+gpui = { package = "gpui-pre", version = "0.3.12" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.12", features = ["font-kit", "x11", "wayland"] }
+gpui_util = { package = "gpui-pre-util", version = "0.3.12" }
+reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.12" }
 gpui_tokio = { path = "crates/gpui_tokio" }
 
-gpui-base = "0.8.1"
-gpui-kit = "0.8.1"
+gpui-base = "0.9.1"
+gpui-kit = "0.9.1"
 
 # Nostr
 nostr-lmdb = { git = "https://github.com/rust-nostr/nostr" }

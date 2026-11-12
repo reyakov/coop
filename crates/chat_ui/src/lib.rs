@@ -1101,7 +1101,7 @@ impl ChatPanel {
                 svg()
                     .path("brand/coop.svg")
                     .size_12()
-                    .text_color(cx.theme().list_active),
+                    .text_color(cx.theme().muted_foreground),
             )
             .child(PRIVATE_NOTICE)
             .into_any_element()
