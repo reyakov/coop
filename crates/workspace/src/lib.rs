@@ -2,7 +2,7 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use ::settings::{AppSettings, AppearanceMode};
+use ::settings::{AppSettings, AppearanceMode, persisted_onboarded};
 use anyhow::Error;
 #[cfg(not(target_arch = "wasm32"))]
 use auto_update::AutoUpdater;
@@ -30,7 +30,9 @@ use smallvec::{SmallVec, smallvec};
 use state::{NostrRegistry, StateEvent};
 
 use crate::dialogs::restore::RestoreEncryption;
-use crate::dialogs::{import, join_group, new_chat, new_group, profile, relays, settings};
+use crate::dialogs::{
+    import, join_group, new_chat, new_group, onboarding, profile, relays, settings,
+};
 use crate::panels::{backup, browse, contact_list, greeter, inbox};
 use crate::sidebar::Sidebar;
 
@@ -94,6 +96,7 @@ impl Workspace {
             let skin = dock::CoopDockSkin::new(cx);
             gpui_kit::component::dock::DockArea::new("coop", None, window, cx).with_renderer(skin)
         });
+
         let sidebar = cx.new(|cx| Sidebar::new(window, dock.downgrade(), cx));
         let left_sidebar = sidebar.clone();
 
@@ -107,10 +110,18 @@ impl Workspace {
             }
         }));
 
+        let login_nostr = nostr.clone();
         subscriptions.push(
             // Subscribe to the nostr events
             cx.subscribe_in(&nostr, window, move |_, _, event, window, cx| match event {
-                StateEvent::SignerChanged => window.close_all_dialogs(cx),
+                StateEvent::SignerChanged => {
+                    window.close_all_dialogs(cx);
+
+                    // Show the first-run onboarding once the user is signed in
+                    if !persisted_onboarded() && login_nostr.read(cx).current_user().is_some() {
+                        onboarding::open(window, cx);
+                    }
+                }
                 StateEvent::PassphraseRequired => import::open_unlock(window, cx),
                 _ => {}
             }),
@@ -265,6 +276,10 @@ impl Workspace {
                 this.set_dock_size(DockPlacement::Left, SIDEBAR_WIDTH, window, cx);
                 this.set_center(center, window, cx);
             });
+
+            if !persisted_onboarded() && nostr.read(cx).current_user().is_some() {
+                onboarding::open(window, cx);
+            }
         });
 
         Self {
@@ -343,9 +358,10 @@ impl Workspace {
                 let panel = browse::init(self.dock.downgrade(), window, cx);
                 self.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
             }
-            Command::ShowWallet => {
+            Command::ShowWallet =>
+            {
                 #[cfg(not(target_arch = "wasm32"))]
-                {
+                if AppSettings::get_wallet(cx) {
                     let panel = nip60_ui::wallet::init(window, cx);
                     self.add_panel_to_dock(panel, DockPlacement::Center, window, cx);
                 }

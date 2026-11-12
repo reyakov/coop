@@ -67,17 +67,23 @@ impl Sidebar {
                     .gap_1()
                     .items_start()
                     .justify_start()
-                    .when(cfg!(not(target_arch = "wasm32")), |this| {
-                        this.child(
-                            Nav::new("wallet")
-                                .prefix(Icon::new(gpui_kit::assets::IconName::Wallet).small())
-                                .label("Wallet")
-                                .text_sm()
-                                .on_click(|_, window, cx| {
-                                    window.dispatch_action(Box::new(crate::Command::ShowWallet), cx)
-                                }),
-                        )
-                    })
+                    .when(
+                        cfg!(not(target_arch = "wasm32")) && AppSettings::get_wallet(cx),
+                        |this| {
+                            this.child(
+                                Nav::new("wallet")
+                                    .prefix(Icon::new(gpui_kit::assets::IconName::Wallet).small())
+                                    .label("Wallet")
+                                    .text_sm()
+                                    .on_click(|_, window, cx| {
+                                        window.dispatch_action(
+                                            Box::new(crate::Command::ShowWallet),
+                                            cx,
+                                        )
+                                    }),
+                            )
+                        },
+                    )
                     .child(
                         Nav::new("browse")
                             .prefix(Icon::new(IconName::Compass).small())

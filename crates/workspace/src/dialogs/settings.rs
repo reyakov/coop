@@ -7,6 +7,8 @@ use gpui::PathPromptOptions;
 #[cfg(not(target_arch = "wasm32"))]
 use gpui::Task;
 use gpui::http_client::Url;
+#[cfg(not(target_arch = "wasm32"))]
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled,
     Subscription, Window, div,
@@ -28,8 +30,8 @@ use speech::model::{self as speech_model};
 use ui::{settings_block, settings_row};
 
 /// Bounds for the theme number inputs
-const FONT_SIZE_RANGE: (f32, f32) = (10., 32.);
-const RADIUS_RANGE: (f32, f32) = (0., 24.);
+pub(super) const FONT_SIZE_RANGE: (f32, f32) = (10., 32.);
+pub(super) const RADIUS_RANGE: (f32, f32) = (0., 24.);
 
 pub fn init(window: &mut Window, cx: &mut App) -> Entity<Preferences> {
     cx.new(|cx| Preferences::new(window, cx))
@@ -95,7 +97,7 @@ impl Preferences {
         #[cfg(not(target_arch = "wasm32"))]
         let mint_input = cx.new(|cx| InputState::new(window, cx).placeholder("https://mint…"));
 
-        let subscriptions = vec![
+        let mut subscriptions = vec![
             Self::wire_number_input(&font_size_input, FONT_SIZE_RANGE, cx, |value, cx| {
                 if let Some(font_size) = value {
                     AppSettings::update_theme(|theme| theme.font_size = font_size, cx);
@@ -111,6 +113,12 @@ impl Preferences {
                 AppSettings::apply_theme_style(cx);
             }),
         ];
+
+        // Keep the switches in sync with the settings they edit
+        subscriptions.push({
+            let settings = AppSettings::global(cx);
+            cx.observe(&settings, |_, _, cx| cx.notify())
+        });
 
         #[cfg(not(target_arch = "wasm32"))]
         let _speech_poll = cx.spawn_in(window, async move |this, cx| {
@@ -219,26 +227,42 @@ impl Preferences {
         #[cfg(not(target_arch = "wasm32"))]
         {
             const WALLET: &str = "Cashu mint for your NIP-60 wallet. Set up creates the wallet, Add extends it with another mint.";
+            let enabled = AppSettings::get_wallet(cx);
             let has_wallet = nip60::WalletRegistry::global(cx).read(cx).has_wallet();
 
-            settings_block(
-                "Wallet",
-                WALLET,
-                h_flex()
-                    .gap_1()
-                    .child(div().flex_1().child(Input::new(&self.mint_input)))
-                    .child(
-                        Button::new("setup-mint")
-                            .label(if has_wallet { "Add" } else { "Set up" })
-                            .ghost()
-                            .size_8()
-                            .on_click(cx.listener(move |this, _ev, window, cx| {
-                                this.setup_mint(window, cx);
-                            })),
-                    ),
-                cx,
-            )
-            .into_any_element()
+            v_flex()
+                .w_full()
+                .gap_3()
+                .child(settings_row(
+                    "Wallet",
+                    "Show the wallet and allow ecash payments.",
+                    Switch::new("wallet")
+                        .checked(enabled)
+                        .on_click(move |checked, _window, cx| {
+                            AppSettings::update_wallet(*checked, cx);
+                        }),
+                    cx,
+                ))
+                .when(enabled, |this| {
+                    this.child(settings_block(
+                        "Mint",
+                        WALLET,
+                        h_flex()
+                            .gap_1()
+                            .child(div().flex_1().child(Input::new(&self.mint_input)))
+                            .child(
+                                Button::new("setup-mint")
+                                    .label(if has_wallet { "Add" } else { "Set up" })
+                                    .ghost()
+                                    .size_8()
+                                    .on_click(cx.listener(move |this, _ev, window, cx| {
+                                        this.setup_mint(window, cx);
+                                    })),
+                            ),
+                        cx,
+                    ))
+                })
+                .into_any_element()
         }
     }
 
@@ -458,6 +482,7 @@ impl Render for Preferences {
         const RADIUS_LG: &str =
             "Corner radius for large elements like dialogs. Empty follows the OS theme.";
         const FOCUS_RING: &str = "Draw a ring around focused controls.";
+        const SHADOW: &str = "Draw soft shadows on buttons, inputs and dialogs.";
         const NIP4E: &str = "Use a dedicated key to encrypt and decrypt messages.";
         const NIP4E_ROTATION: &str = "Automatically rotate the encryption key every 30 days, keeping the previous key for messages still sealed to it.";
         const BACKGROUND: &str = "Show an image behind chat and group panels.";
@@ -566,13 +591,21 @@ impl Render for Preferences {
                         FOCUS_RING,
                         Switch::new("focus-ring")
                             .checked(theme.focus_ring)
-                            .on_click(move |_, _window, cx| {
-                                AppSettings::update_theme(
-                                    |theme| theme.focus_ring = !theme.focus_ring,
-                                    cx,
-                                );
+                            .on_click(move |checked, _window, cx| {
+                                AppSettings::update_theme(|theme| theme.focus_ring = *checked, cx);
                                 AppSettings::apply_theme_style(cx);
                             }),
+                        cx,
+                    ))
+                    .child(settings_row(
+                        "Shadows",
+                        SHADOW,
+                        Switch::new("shadow").checked(theme.shadow).on_click(
+                            move |checked, _window, cx| {
+                                AppSettings::update_theme(|theme| theme.shadow = *checked, cx);
+                                AppSettings::apply_theme_style(cx);
+                            },
+                        ),
                         cx,
                     )),
             )

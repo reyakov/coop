@@ -28,6 +28,14 @@ pub const NIP4E_ROTATION_DEFAULT_DAYS: u32 = 30;
 /// Built-in image shown behind chat and group panels
 pub const DEFAULT_BACKGROUND: &str = "brand/default-bg.jpg";
 
+fn default_onboarded() -> bool {
+    true
+}
+
+fn default_shadow() -> bool {
+    true
+}
+
 /// The user's appearance preference, persisted with the rest of the settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum AppearanceMode {
@@ -78,6 +86,9 @@ pub struct ThemeSettings {
     pub radius: Option<f32>,
     /// Corner radius for large elements like dialogs; follows the OS theme when unset
     pub radius_lg: Option<f32>,
+    /// Draw soft shadows on inputs, buttons and dialogs
+    #[serde(default = "default_shadow")]
+    pub shadow: bool,
 }
 
 impl Default for ThemeSettings {
@@ -87,6 +98,7 @@ impl Default for ThemeSettings {
             focus_ring: false,
             radius: None,
             radius_lg: None,
+            shadow: true,
         }
     }
 }
@@ -145,6 +157,12 @@ pub struct Settings {
     /// Hide the notice that messages in public groups are not encrypted
     #[serde(default)]
     pub hide_group_notice: bool,
+    /// Enable the NIP-60 wallet
+    #[serde(default)]
+    pub wallet: bool,
+    /// Whether the first-run onboarding has been completed
+    #[serde(default = "default_onboarded")]
+    pub onboarded: bool,
     /// Tuning applied on top of the native OS theme
     #[serde(default)]
     pub theme: ThemeSettings,
@@ -178,10 +196,12 @@ impl Default for Settings {
             appearance_mode: AppearanceMode::default(),
             hide_avatar: false,
             screening: true,
-            wot_auto_trust: true,
+            wot_auto_trust: false,
             nip4e: false,
             nip4e_rotation_days: None,
             hide_group_notice: false,
+            wallet: false,
+            onboarded: false,
             theme: ThemeSettings::default(),
             theme_light: None,
             theme_dark: None,
@@ -222,6 +242,9 @@ macro_rules! setting_accessors {
                                 inner.$field = value;
                                 cx.notify();
                             });
+                            // Notify the handle too, so observers of AppSettings
+                            // react to the change
+                            cx.notify();
                         });
                     }
                 }
@@ -257,6 +280,8 @@ setting_accessors! {
     pub panel_background_path: Option<PathBuf>,
     pub theme_light: Option<String>,
     pub theme_dark: Option<String>,
+    pub wallet: bool,
+    pub onboarded: bool,
 }
 
 setting_getters! {
@@ -314,6 +339,8 @@ impl AppSettings {
                 edit(&mut inner.theme);
                 cx.notify();
             });
+            // Notify the handle too, so observers of AppSettings react
+            cx.notify();
         });
     }
 
@@ -326,6 +353,7 @@ impl AppSettings {
             let styled = Theme::global_mut(cx);
             styled.font_size = px(tuning.font_size);
             styled.focus_ring = tuning.focus_ring;
+            styled.shadow = tuning.shadow;
             if let Some(radius) = tuning.radius {
                 styled.radius = px(radius);
             }
@@ -582,6 +610,11 @@ fn persisted_content() -> Option<String> {
     common::web_store::get(SETTINGS_KEY).ok().flatten()
 }
 
+/// Read the persisted onboarding flag synchronously.
+pub fn persisted_onboarded() -> bool {
+    persisted_settings().is_some_and(|settings| settings.onboarded)
+}
+
 pub fn persisted_appearance_mode() -> AppearanceMode {
     persisted_settings()
         .map(|settings| settings.appearance_mode)
@@ -672,6 +705,40 @@ mod tests {
         assert_eq!(settings.theme, ThemeSettings::default());
         assert_eq!(settings.theme_light, None);
         assert_eq!(settings.theme_dark, None);
+
+        // Files written before onboarding and the wallet flag existed count
+        // as onboarded with the wallet off
+        assert!(settings.onboarded);
+        assert!(!settings.wallet);
+    }
+
+    /// Fresh installs start un-onboarded with optional features off, and the
+    /// flags round-trip through serde
+    #[test]
+    fn onboarding_and_wallet_persist() {
+        let settings = Settings::default();
+        assert!(!settings.onboarded);
+        assert!(!settings.wallet);
+        assert!(!settings.wot_auto_trust);
+        assert!(settings.theme.shadow);
+
+        let settings: Settings = serde_json::from_str(
+            r#"{
+                "appearance_mode": "Dark",
+                "hide_avatar": false,
+                "screening": true,
+                "wot_auto_trust": true,
+                "nip4e": false,
+                "trusted_relays": [],
+                "file_server": "https://nostr.download/",
+                "onboarded": true,
+                "wallet": true
+            }"#,
+        )
+        .unwrap();
+
+        assert!(settings.onboarded);
+        assert!(settings.wallet);
     }
 
     /// The theme selection round-trips through serde.

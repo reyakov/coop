@@ -2,6 +2,7 @@ pub mod import;
 pub mod join_group;
 pub mod new_chat;
 pub mod new_group;
+pub mod onboarding;
 pub mod profile;
 pub mod relays;
 pub mod restore;
