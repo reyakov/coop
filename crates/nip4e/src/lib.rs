@@ -1,5 +1,5 @@
 use std::cell::Cell;
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -19,14 +19,12 @@ use nostr_sdk::prelude::*;
 use person::Directory;
 use settings::{AppSettings, NIP4E_ROTATION_MAX_DAYS, NIP4E_ROTATION_MIN_DAYS};
 use smallvec::{SmallVec, smallvec};
-use state::{Announcement, NostrRegistry, UniversalSigner, credentials};
+use state::{Announcement, NostrRegistry, UniversalSigner};
 use storage::{SECONDS_PER_DAY, archive_key, get_keys, load_device_keys, set_keys};
 use ui::Avatar;
 
 mod storage;
 
-/// Keep the durable processed-request log bounded
-const PROCESSED_REQUESTS_LIMIT: usize = 256;
 /// Ignore key requests older than a day so stale events on relays cannot resurface
 const REQUEST_MAX_AGE: u64 = SECONDS_PER_DAY;
 
@@ -79,8 +77,6 @@ pub struct DeviceRegistry {
     app_keys: Option<Keys>,
     /// The key request currently awaiting user approval on this device
     pending_request: Option<PendingRequest>,
-    /// Handled key-sync request ids, bounded and persisted
-    processed_requests: VecDeque<EventId>,
     /// Whether an announcement has been made for this device
     pub(crate) announcement_existed: Arc<AtomicBool>,
     /// Whether the local key is stale against the current announcement.
@@ -110,7 +106,6 @@ impl DeviceRegistry {
 
     /// Create a new device registry instance
     fn new(cx: &mut Context<Self>) -> Self {
-        let entity = cx.entity().downgrade();
         let nostr = NostrRegistry::global(cx);
         let settings = AppSettings::global(cx);
 
@@ -153,17 +148,10 @@ impl DeviceRegistry {
             }),
         );
 
-        cx.defer(move |cx| {
-            let _ = entity.update(cx, |this, cx| {
-                this.handle_notifications(cx);
-            });
-        });
-
         Self {
             signer,
             app_keys: None,
             pending_request: None,
-            processed_requests: VecDeque::new(),
             announcement_existed: Arc::new(AtomicBool::new(false)),
             resync: Arc::new(AtomicBool::new(false)),
             rotating: false,
@@ -183,8 +171,6 @@ impl DeviceRegistry {
 
         let announcement_existed = self.announcement_existed.clone();
         let (tx, rx) = flume::bounded::<Event>(100);
-
-        let read = credentials::read_processed_requests(cx);
 
         self.notification_listener = Some(cx.background_spawn(async move {
             let mut notifications = client.notifications();
@@ -220,21 +206,6 @@ impl DeviceRegistry {
         }));
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            // Hydrate the processed-request log before routing any events
-            match read.await {
-                Ok(bytes) => {
-                    let processed = bytes
-                        .map(|bytes| parse_processed_requests(&bytes))
-                        .unwrap_or_default();
-
-                    this.update(cx, |this, _cx| {
-                        this.processed_requests = processed;
-                    })
-                    .ok();
-                }
-                Err(e) => log::error!("Failed to read processed key-sync requests: {e}"),
-            }
-
             while let Ok(event) = rx.recv_async().await {
                 match event.kind {
                     Kind::Custom(10044) => {
@@ -261,36 +232,11 @@ impl DeviceRegistry {
         }));
     }
 
-    /// Record a handled key-sync request id, persisting a bounded log
-    fn mark_request_processed(&mut self, event_id: EventId, cx: &mut Context<Self>) {
-        if self.processed_requests.contains(&event_id) {
-            return;
-        }
-        self.processed_requests.push_back(event_id);
-        while self.processed_requests.len() > PROCESSED_REQUESTS_LIMIT {
-            self.processed_requests.pop_front();
-        }
-
-        let bytes: Vec<u8> = self
-            .processed_requests
-            .iter()
-            .flat_map(|id| id.to_hex().into_bytes())
-            .collect();
-        let write = credentials::write_processed_requests(cx, &bytes);
-        cx.background_spawn(async move {
-            if let Err(e) = write.await {
-                log::error!("Failed to persist processed key-sync requests: {e}");
-            }
-        })
-        .detach();
-    }
-
     /// Withdraw the pending approval.
     fn resolve_pending_request(&mut self, cx: &mut Context<Self>) {
-        let Some(pending) = self.pending_request.take() else {
+        if self.pending_request.take().is_none() {
             return;
-        };
-        self.mark_request_processed(pending.event.id, cx);
+        }
 
         if let Some(window) = cx.windows().first().copied() {
             window
@@ -504,6 +450,7 @@ impl DeviceRegistry {
             let elapsed = Timestamp::now()
                 .as_secs()
                 .saturating_sub(keys.created_at.as_secs());
+
             if elapsed < u64::from(interval_days) * SECONDS_PER_DAY {
                 return Ok(());
             }
@@ -530,7 +477,6 @@ impl DeviceRegistry {
 
         let secret = keys.secret_key().to_secret_hex();
         let n = keys.public_key();
-        let created_at = Timestamp::now();
 
         cx.background_spawn(async move {
             // Construct an announcement event
@@ -540,7 +486,7 @@ impl DeviceRegistry {
                 .await?;
 
             // Persist the key locally before announcing it
-            set_keys(&client, &signer, &secret, created_at).await?;
+            set_keys(&client, &signer, &secret, Timestamp::now()).await?;
 
             // Publish announcement
             client
@@ -831,7 +777,6 @@ impl DeviceRegistry {
         let signer = nostr.read(cx).signer();
 
         let event = event.clone();
-        let request_id = event.id;
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             // Get device keys
@@ -890,9 +835,6 @@ impl DeviceRegistry {
             match task.await {
                 Ok(_) => {
                     this.update(cx, |this, cx| {
-                        // Record the request as handled so it cannot resurface
-                        this.mark_request_processed(request_id, cx);
-                        // Allow future requests to surface again
                         this.pending_request = None;
                         cx.notify();
                     })?;
@@ -933,51 +875,27 @@ impl DeviceRegistry {
             return;
         };
 
-        let read = credentials::read_processed_requests(cx);
+        match self.pending_request.take() {
+            // A retry signs a new request id but keeps the same client key
+            Some(mut pending) if pending.client_key == client_key => {
+                pending.event = event;
+                self.pending_request = Some(pending);
+            }
 
-        cx.spawn(async move |this, cx| {
-            let processed = match read.await {
-                Ok(bytes) => bytes
-                    .map(|bytes| parse_processed_requests(&bytes).contains(&event.id))
-                    .unwrap_or(false),
-                Err(e) => {
-                    log::error!("Failed to read processed key-sync requests: {e}");
-                    false
+            // A different client key is a remounted requester
+            other => {
+                if other.is_some()
+                    && let Some(window) = cx.windows().first().copied()
+                {
+                    window
+                        .update(cx, |_view, window, cx| {
+                            window.remove_notification::<DeviceNotification>(cx);
+                        })
+                        .ok();
                 }
-            };
-
-            this.update(cx, |this, cx| {
-                if processed || this.processed_requests.contains(&event.id) {
-                    return;
-                }
-
-                match this.pending_request.take() {
-                    // A retry signs a new request id but keeps the same client key
-                    Some(mut pending) if pending.client_key == client_key => {
-                        this.mark_request_processed(event.id, cx);
-                        pending.event = event;
-                        this.pending_request = Some(pending);
-                    }
-
-                    // A different client key is a remounted requester
-                    other => {
-                        if let Some(pending) = other {
-                            this.mark_request_processed(pending.event.id, cx);
-                            if let Some(window) = cx.windows().first().copied() {
-                                window
-                                    .update(cx, |_view, window, cx| {
-                                        window.remove_notification::<DeviceNotification>(cx);
-                                    })
-                                    .ok();
-                            }
-                        }
-                        this.show_approval(event, client_key, cx);
-                    }
-                }
-            })
-            .ok();
-        })
-        .detach();
+                self.show_approval(event, client_key, cx);
+            }
+        }
     }
 
     /// Build and surface the approval notification for a key request
@@ -1103,19 +1021,6 @@ impl DeviceRegistry {
                     )
                     .into_any_element()
             })
-            .on_close({
-                let entity = entity.clone();
-                let request_id = event.id;
-
-                move |_window, cx| {
-                    // Closing without approving rejects the request, so it must not resurface
-                    entity
-                        .update(cx, |this, cx| {
-                            this.mark_request_processed(request_id, cx);
-                        })
-                        .ok();
-                }
-            })
             .action(move |_this, _window, _cx| {
                 let view = entity.clone();
                 let event = event.clone();
@@ -1138,20 +1043,6 @@ impl DeviceRegistry {
                     })
             }))
     }
-}
-
-/// Parse concatenated hex event ids
-fn parse_processed_requests(bytes: &[u8]) -> VecDeque<EventId> {
-    let Ok(hex) = std::str::from_utf8(bytes) else {
-        return VecDeque::new();
-    };
-
-    hex.as_bytes()
-        .as_chunks::<64>()
-        .0
-        .iter()
-        .filter_map(|chunk| EventId::from_hex(std::str::from_utf8(chunk).ok()?).ok())
-        .collect()
 }
 
 /// Extract the client public key from an event.
