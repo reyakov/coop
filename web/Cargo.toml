@@ -20,6 +20,7 @@ person = { path = "../crates/person" }
 
 gpui.workspace = true
 gpui_platform.workspace = true
+gpui_web.workspace = true
 gpui-kit.workspace = true
 
 log.workspace = true
