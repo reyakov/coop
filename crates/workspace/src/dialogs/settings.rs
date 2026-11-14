@@ -7,7 +7,6 @@ use gpui::PathPromptOptions;
 #[cfg(not(target_arch = "wasm32"))]
 use gpui::Task;
 use gpui::http_client::Url;
-#[cfg(not(target_arch = "wasm32"))]
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, AppContext, Context, Entity, IntoElement, ParentElement, Render, Styled,

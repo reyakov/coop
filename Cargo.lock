@@ -1837,6 +1837,7 @@ dependencies = [
  "gpui-kit",
  "gpui-pre",
  "gpui-pre-platform",
+ "gpui-pre-web",
  "instant",
  "js-sys",
  "log",

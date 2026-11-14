@@ -11,6 +11,7 @@ publish = false
 [workspace.dependencies]
 gpui = { package = "gpui-pre", version = "0.3.12" }
 gpui_platform = { package = "gpui-pre-platform", version = "0.3.12", features = ["font-kit", "x11", "wayland"] }
+gpui_web = { package = "gpui-pre-web", version = "0.3.12" }
 gpui_util = { package = "gpui-pre-util", version = "0.3.12" }
 reqwest_client = { package = "gpui-pre-reqwest-client", version = "0.3.12" }
 gpui_tokio = { path = "crates/gpui_tokio" }
