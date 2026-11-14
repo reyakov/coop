@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow};
@@ -30,7 +30,7 @@ impl SpeechRecognizer for ParakeetRecognizer {
         cx: &mut App,
     ) -> Result<Box<dyn RecognitionSession>, SpeechError> {
         if super::model::installed() {
-            worker().send_or_log(Command::Warm(super::model::dir()));
+            send(Command::Warm(super::model::dir())).map_err(SpeechError::recognizer)?;
         } else if super::model::status().is_downloading() {
             return Err(SpeechError::recognizer(anyhow!(
                 "The speech model is still downloading. Try again when it finishes."
@@ -79,7 +79,11 @@ impl RecognitionSession for ParakeetSession {
         }
 
         let (sender, receiver) = flume::unbounded();
-        worker().send_or_log(Command::Transcribe { samples, sender });
+
+        if let Err(error) = send(Command::Transcribe { samples, sender }) {
+            sink.error(SpeechError::recognizer(error), cx);
+            return;
+        }
 
         self._result = Some(cx.spawn(async move |cx| {
             let result = receiver.recv_async().await;
@@ -109,23 +113,50 @@ enum Command {
     Unload,
 }
 
-/// A handle to the single inference worker.
-fn worker() -> &'static flume::Sender<Command> {
-    static WORKER: OnceLock<flume::Sender<Command>> = OnceLock::new();
+fn worker_slot() -> &'static Mutex<Option<flume::Sender<Command>>> {
+    static WORKER: OnceLock<Mutex<Option<flume::Sender<Command>>>> = OnceLock::new();
+    WORKER.get_or_init(|| Mutex::new(None))
+}
 
-    WORKER.get_or_init(|| {
-        let (sender, receiver) = flume::unbounded::<Command>();
+/// A handle to the live worker, spawning a replacement after an idle exit.
+fn worker() -> Result<flume::Sender<Command>> {
+    let mut slot = worker_slot()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
 
-        let spawned = std::thread::Builder::new()
-            .name("speech-parakeet".into())
-            .spawn(move || run_worker(receiver));
+    if slot.as_ref().is_some_and(|sender| sender.is_disconnected()) {
+        *slot = None;
+    }
 
-        if let Err(error) = spawned {
-            log::error!("failed to spawn the speech worker: {error}");
+    if let Some(sender) = slot.as_ref() {
+        return Ok(sender.clone());
+    }
+
+    let (sender, receiver) = flume::unbounded::<Command>();
+
+    match std::thread::Builder::new()
+        .name("speech-parakeet".into())
+        .spawn(move || run_worker(receiver))
+    {
+        Ok(_) => {
+            *slot = Some(sender.clone());
+            Ok(sender)
         }
+        Err(error) => {
+            log::error!("failed to spawn the speech worker: {error}");
+            Err(anyhow!("Could not start the speech worker: {error}"))
+        }
+    }
+}
 
-        sender
-    })
+/// Deliver a command, retrying once on a fresh worker if the previous one exited.
+fn send(command: Command) -> Result<()> {
+    let command = match worker()?.send(command) {
+        Ok(()) => return Ok(()),
+        Err(error) => error.into_inner(),
+    };
+    // The worker can exit between the liveness check and the send, so retry once.
+    worker()?.send(command).context("the speech worker exited")
 }
 
 fn run_worker(receiver: flume::Receiver<Command>) {
@@ -192,21 +223,11 @@ fn transcribe(cached: &mut Option<(PathBuf, ParakeetTDT)>, samples: Vec<f32>) ->
         .map_err(|error| anyhow!("Could not transcribe this recording: {error}"))
 }
 
-trait SendOrLog {
-    fn send_or_log(&self, command: Command);
-}
-
-impl SendOrLog for flume::Sender<Command> {
-    fn send_or_log(&self, command: Command) {
-        if self.send(command).is_err() {
-            log::debug!("speech worker is gone; command dropped");
-        }
-    }
-}
-
 /// Retire cached weights, e.g. after the model was deleted.
 pub(crate) fn unload() {
-    worker().send_or_log(Command::Unload);
+    if let Err(error) = send(Command::Unload) {
+        log::warn!("failed to unload the speech model: {error}");
+    }
 }
 
 fn flatten_panic<T>(result: std::thread::Result<T>) -> Result<T> {

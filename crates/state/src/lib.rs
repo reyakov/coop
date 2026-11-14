@@ -16,6 +16,8 @@ use nostr_connect::prelude::*;
 use nostr_gossip_memory::prelude::*;
 #[cfg(not(target_arch = "wasm32"))]
 use nostr_lmdb::prelude::*;
+#[cfg(not(target_arch = "wasm32"))]
+use nostr_memory::prelude::MemoryDatabase;
 use nostr_sdk::prelude::*;
 
 mod blossom;
@@ -89,8 +91,6 @@ pub struct NostrRegistry {
     signer: UniversalSigner,
     /// Current user's public key
     current_user: Option<PublicKey>,
-    /// Whether the stored credential needs a passphrase to unlock
-    passphrase_required: bool,
     /// Tasks for asynchronous operations
     tasks: Vec<Task<Result<(), Error>>>,
 }
@@ -114,15 +114,27 @@ impl NostrRegistry {
         let signer = UniversalSigner::new(Keys::generate());
         let authenticator = SignerAuthenticator::new(signer.clone());
 
+        // NostrLmdb::open schedules nothing back onto the GPUI executor, so blocking here can't deadlock
         #[cfg(not(target_arch = "wasm32"))]
-        let database = cx.foreground_executor().block_on(async move {
-            NostrLmdb::open(config_dir().join("nostr"))
-                .await
-                .expect("Failed to initialize database")
-        });
+        let (database, database_error) = match cx
+            .foreground_executor()
+            .block_on(NostrLmdb::open(config_dir().join("nostr")))
+        {
+            Ok(database) => (Arc::new(database) as Arc<dyn NostrDatabase>, None),
+            Err(e) => {
+                log::error!("Failed to open the local database, falling back to memory: {e}");
+
+                (
+                    Arc::new(MemoryDatabase::unbounded()) as Arc<dyn NostrDatabase>,
+                    Some(format!(
+                        "Local database unavailable, using an in-memory database instead: {e}"
+                    )),
+                )
+            }
+        };
 
         #[cfg(target_arch = "wasm32")]
-        let database = web_database::take();
+        let (database, database_error) = (web_database::take(), None::<String>);
 
         // Construct the nostr client
         let client = ClientBuilder::default()
@@ -141,6 +153,10 @@ impl NostrRegistry {
         // Connect to bootstrap relays once the registry has been returned to the app
         cx.defer(move |cx| {
             let _ = entity.update(cx, |this, cx| {
+                if let Some(error) = database_error {
+                    cx.emit(StateEvent::error(error));
+                }
+
                 this.connect_bootstrap_relays(cx);
 
                 if let Some(secret) = cli_key {
@@ -157,7 +173,6 @@ impl NostrRegistry {
             client,
             signer,
             current_user: None,
-            passphrase_required: false,
             tasks: vec![],
         }
     }
@@ -191,7 +206,6 @@ impl NostrRegistry {
                     this.update(cx, |this, cx| {
                         this.signer.swap_inner(new_signer);
                         this.current_user = Some(public_key);
-                        this.passphrase_required = false;
 
                         cx.emit(StateEvent::SignerChanged);
                         cx.notify();
@@ -273,8 +287,7 @@ impl NostrRegistry {
                                 this.set_signer(signer, cx);
                             })?;
                         } else if content.starts_with("ncryptsec1") {
-                            this.update(cx, |this, cx| {
-                                this.passphrase_required = true;
+                            this.update(cx, |_this, cx| {
                                 cx.emit(StateEvent::PassphraseRequired);
                             })?;
                         } else if content == "proxy" {
@@ -445,8 +458,14 @@ impl NostrRegistry {
         };
 
         let keys = Keys::generate();
-        let credential = with_master_key(&uri_string, &keys);
-        let write = credentials::write(cx, "bunker", credential.as_bytes());
+
+        // The URI embeds the client key, so never persist it where web stores it unencrypted
+        #[cfg(not(target_arch = "wasm32"))]
+        let write =
+            credentials::write(cx, "bunker", with_master_key(&uri_string, &keys).as_bytes());
+
+        #[cfg(target_arch = "wasm32")]
+        let write = Task::ready(Ok::<(), Error>(()));
 
         cx.spawn(async move |this, cx| {
             let signer = NostrConnect::builder(connect_uri, keys)
@@ -468,9 +487,8 @@ impl NostrRegistry {
     /// Sign out and remove the stored credential
     pub fn sign_out(&mut self, cx: &mut Context<Self>) {
         self.current_user = None;
-        self.passphrase_required = false;
-
         credentials::delete(cx).detach_and_log_err(cx);
+
         cx.emit(StateEvent::SignerChanged);
         cx.emit(StateEvent::NoSigner);
         cx.notify();
@@ -495,7 +513,6 @@ impl NostrRegistry {
                         credentials::write(cx, "extension", b"extension").detach_and_log_err(cx);
                         this.signer.swap_inner(signer);
                         this.current_user = Some(public_key);
-                        this.passphrase_required = false;
 
                         cx.emit(StateEvent::SignerChanged);
                         cx.notify();
@@ -709,6 +726,7 @@ fn extract_master_key(credential: &str) -> (&str, Keys) {
 }
 
 // Embed the master key in a bunker URI so reconnects reuse the same local key
+#[cfg(not(target_arch = "wasm32"))]
 fn with_master_key(uri: &str, keys: &Keys) -> String {
     let separator = if uri.contains('?') { '&' } else { '?' };
     let nsec = keys.secret_key().to_bech32().expect("infallible");

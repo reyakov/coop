@@ -227,10 +227,11 @@ impl BrowsePanel {
     /// Open the group's panel to preview (or revisit) it.
     fn open_panel(dock: &WeakEntity<DockArea>, key: GroupKey, window: &mut Window, cx: &mut App) {
         let registry = GroupsRegistry::global(cx);
-        let group = registry.update(cx, |registry, cx| registry.open(key, cx));
+        let group = registry.update(cx, |registry, cx| registry.open(key.clone(), cx));
 
-        crate::dock::add_panel_to(
+        crate::dock::add_group_panel_to(
             dock,
+            key,
             PanelHandle::new(nip29_ui::init(group, window, cx)),
             DockPlacement::Center,
             window,

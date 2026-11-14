@@ -1,12 +1,12 @@
 #[cfg(not(target_arch = "wasm32"))]
-use auto_update::AutoUpdater;
+use auto_update::{AutoUpdater, UpdateDisplay};
+#[cfg(not(target_arch = "wasm32"))]
+use gpui::AnyElement;
 use gpui::prelude::FluentBuilder;
 use gpui::{
     Anchor, App, Context, Div, InteractiveElement, IntoElement, ParentElement, SharedString,
     Stateful, Styled, Window, div, px,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use gpui::{AnyElement, Entity};
 use gpui_kit::base::StyledExt as _;
 #[cfg(not(target_arch = "wasm32"))]
 use gpui_kit::component::Disableable;
@@ -35,7 +35,7 @@ impl Sidebar {
         cx: &mut Context<Self>,
     ) -> Stateful<Div> {
         #[cfg(not(target_arch = "wasm32"))]
-        let updater = AutoUpdater::try_global(cx);
+        let updater_display = self.updater_display.read(cx).clone();
         let profile = self.directory.read(cx).person(current_user, cx);
         let avatar = profile.avatar();
         let encryption_key = profile
@@ -78,8 +78,8 @@ impl Sidebar {
                 let actions = h_flex().gap_1();
 
                 #[cfg(not(target_arch = "wasm32"))]
-                let actions = actions.when_some(updater, |this, updater| {
-                    this.child(self.render_updater(updater, cx))
+                let actions = actions.when_some(updater_display, |this, display| {
+                    this.child(self.render_updater(display))
                 });
 
                 actions
@@ -233,10 +233,12 @@ impl Sidebar {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn render_updater(&self, updater: Entity<AutoUpdater>, cx: &mut App) -> AnyElement {
-        let status = updater.read(cx).status();
-        let up_to_date = updater.read(cx).up_to_date();
-        let staged = updater.read(cx).staged();
+    fn render_updater(&self, display: UpdateDisplay) -> AnyElement {
+        let UpdateDisplay {
+            up_to_date,
+            staged,
+            status,
+        } = display;
 
         h_flex()
             .gap_2()
@@ -257,10 +259,12 @@ impl Sidebar {
                         .tooltip("Quit and relaunch into the installed update")
                         .small()
                         .ghost()
-                        .on_click(move |_, _window, cx| {
-                            updater.update(cx, |this, cx| {
-                                this.restart(cx);
-                            });
+                        .on_click(|_, _window, cx| {
+                            if let Some(updater) = AutoUpdater::try_global(cx) {
+                                updater.update(cx, |this, cx| {
+                                    this.restart(cx);
+                                });
+                            }
                         }),
                 )
             })

@@ -5,16 +5,17 @@ use chat::{ChatRegistry, Room, RoomKind};
 use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Div, Entity, IntoElement, ParentElement, Render, SharedString,
-    Styled, Task, Window, div, retain_all,
+    Styled, Subscription, Task, Window, div, retain_all,
 };
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::dock::DockPlacement;
-use gpui_kit::component::input::{Input, InputState, Textarea, TextareaState};
+use gpui_kit::component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{ActiveTheme, Disableable, Sizable, WindowExt, h_flex, v_flex};
+use instant::Duration;
 use nostr_sdk::prelude::*;
 use person::{Directory, Person, PersonRegistry, shorten_pubkey};
 use settings::AppSettings;
@@ -51,13 +52,19 @@ struct ProfileDialog {
     uploading: bool,
     /// Updating state
     updating: bool,
+    /// Error message
+    error: Option<SharedString>,
     /// Tasks
     tasks: Vec<Task<Result<(), Error>>>,
+    /// Keeps the avatar preview live while the URL is typed
+    _subscription: Option<Subscription>,
 }
 
 impl ProfileDialog {
     fn new(public_key: PublicKey, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let directory = Directory::new(cx);
         let nostr = NostrRegistry::global(cx);
+
         let is_current_user = nostr
             .read(cx)
             .current_user()
@@ -75,7 +82,17 @@ impl ProfileDialog {
                 .placeholder("A short introduce about you.")
         });
 
-        let directory = Directory::new(cx);
+        let subscription = cx.subscribe_in(
+            &avatar_input,
+            window,
+            |_this, _avatar_input, event, _window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    // The avatar preview only re-renders when the dialog does
+                    cx.notify();
+                }
+            },
+        );
+
         directory.update(cx, |directory, cx| {
             directory.track([public_key], cx);
         });
@@ -91,7 +108,9 @@ impl ProfileDialog {
             website_input,
             uploading: false,
             updating: false,
+            error: None,
             tasks: vec![],
+            _subscription: Some(subscription),
         }
     }
 
@@ -190,6 +209,26 @@ impl ProfileDialog {
         cx.notify();
     }
 
+    fn set_error<E>(&mut self, error: E, window: &mut Window, cx: &mut Context<Self>)
+    where
+        E: Into<SharedString>,
+    {
+        self.error = Some(error.into());
+        cx.notify();
+
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(3)).await;
+
+            // Clear the error message after a delay
+            this.update(cx, |this, cx| {
+                this.error = None;
+                cx.notify();
+            })?;
+
+            Ok(())
+        }));
+    }
+
     /// Set the metadata for the current user
     fn publish(&self, metadata: &Metadata, cx: &App) -> Task<Result<(), Error>> {
         let nostr = NostrRegistry::global(cx);
@@ -218,19 +257,51 @@ impl ProfileDialog {
         let bio = self.bio_input.read(cx).value();
         let website = self.website_input.read(cx).value();
 
+        // Validate both URLs before publishing anything so a partial profile is never sent
+        let avatar_url = if avatar.is_empty() {
+            None
+        } else {
+            match Url::from_str(&avatar) {
+                Ok(url) => Some(url),
+                Err(_) => {
+                    self.set_error(
+                        "Avatar URL is invalid. Include the full address, e.g. https://example.com/avatar.jpg",
+                        window,
+                        cx,
+                    );
+                    return;
+                }
+            }
+        };
+
+        let website_url = if website.is_empty() {
+            None
+        } else {
+            match Url::from_str(&website) {
+                Ok(url) => Some(url),
+                Err(_) => {
+                    self.set_error(
+                        "Website URL is invalid. Include the full address, e.g. https://example.com",
+                        window,
+                        cx,
+                    );
+                    return;
+                }
+            }
+        };
+
         // Construct the new metadata
         let mut new_metadata = old_metadata
             .display_name(name.as_ref())
             .name(name.as_ref())
             .about(bio.as_ref());
 
-        // Verify the avatar URL before adding it
-        if let Ok(url) = Url::from_str(&avatar) {
+        // An empty input keeps the saved value, a valid URL replaces it
+        if let Some(url) = avatar_url {
             new_metadata = new_metadata.picture(url);
         }
 
-        // Verify the website URL before adding it
-        if let Ok(url) = Url::from_str(&website) {
+        if let Some(url) = website_url {
             new_metadata = new_metadata.website(url);
         }
 
@@ -428,6 +499,15 @@ impl Render for ProfileDialog {
                     .when(!self.is_current_user, |this| {
                         this.child(field("Web of Trust", score, "Not loaded yet", cx))
                     })
+            })
+            .when_some(self.error.as_ref(), |this, error| {
+                this.child(
+                    div()
+                        .italic()
+                        .text_xs()
+                        .text_color(cx.theme().danger)
+                        .child(error.clone()),
+                )
             })
             .child(
                 h_flex()

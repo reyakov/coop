@@ -35,7 +35,6 @@ pub(crate) struct Actions {
 }
 
 pub(crate) fn render(
-    ix: usize,
     message: &Message,
     content: AnyElement,
     show_author: bool,
@@ -60,7 +59,8 @@ pub(crate) fn render(
         nostr.read(cx).current_user(),
     );
 
-    let row = MessageRow::new(ix)
+    // Key by event id: indices shift on prepend and would re-key descendants' state
+    let row = MessageRow::new(SharedString::from(message.id.to_hex()))
         .show_author(show_author)
         .hide_avatar(hide_avatar)
         .avatar(
@@ -337,7 +337,7 @@ fn replies(
 
     let mut items = Vec::with_capacity(targets.len());
 
-    for (ix, id) in targets.iter().enumerate() {
+    for id in targets.iter() {
         let context = entity.read_with(cx, |group, cx| {
             let message = group.message(*id)?;
             let author = persons.read(cx).person(&message.author, cx);
@@ -356,7 +356,7 @@ fn replies(
         let panel = panel.clone();
 
         items.push(
-            ReplyPreview::new(ix, author, preview)
+            ReplyPreview::new(SharedString::from(format!("reply-{id}")), author, preview)
                 .on_click(move |_event, _window, cx| {
                     if let Err(error) = panel.update(cx, |panel, cx| {
                         panel.scroll_to(&id, cx);

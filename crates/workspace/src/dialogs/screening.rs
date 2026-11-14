@@ -10,6 +10,7 @@ use gpui::{
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::{ActiveTheme, Disableable, Icon, Sizable, WindowExt, h_flex, v_flex};
 use instant::Duration;
@@ -23,11 +24,23 @@ pub fn init(public_key: PublicKey, window: &mut Window, cx: &mut App) -> Entity<
     cx.new(|cx| Screening::new(public_key, window, cx))
 }
 
+/// Outcome of verifying the person's NIP-05 address
+enum IdentifierStatus {
+    /// The check is still running
+    Pending,
+    /// The address matches the person's public key
+    Verified,
+    /// The address does not match the person's public key
+    Mismatched,
+    /// The check could not run, e.g. the network is unreachable
+    Failed,
+}
+
 pub struct Screening {
     /// Public Key of the person being screened.
     public_key: PublicKey,
-    /// Whether the person's address is verified.
-    verified: bool,
+    /// Outcome of the NIP-05 address verification
+    identifier_status: IdentifierStatus,
     /// Whether the person is followed by current user.
     followed: bool,
     /// Last time the person was active.
@@ -49,9 +62,8 @@ impl Screening {
 
         let mut subscriptions = smallvec![];
 
-        subscriptions.push(cx.on_release_in(window, move |this, window, cx| {
+        subscriptions.push(cx.on_release_in(window, move |this, _window, _cx| {
             this.tasks.clear();
-            window.close_all_dialogs(cx);
         }));
 
         subscriptions.push(cx.subscribe(&wot, |_this, _wot, _event, cx| {
@@ -71,7 +83,7 @@ impl Screening {
 
         Self {
             public_key,
-            verified: false,
+            identifier_status: IdentifierStatus::Pending,
             followed: false,
             last_active: None,
             mutual_contacts: vec![],
@@ -221,10 +233,17 @@ impl Screening {
             cx.background_spawn(async move { address.verify(&http_client, &public_key).await });
 
         self.tasks.push(cx.spawn(async move |this, cx| {
-            let result = task.await.unwrap_or(false);
+            let result = task.await;
 
             this.update(cx, |this, cx| {
-                this.verified = result;
+                this.identifier_status = match result {
+                    Ok(true) => IdentifierStatus::Verified,
+                    Ok(false) => IdentifierStatus::Mismatched,
+                    Err(error) => {
+                        log::error!("failed to verify NIP-05 address: {error:#}");
+                        IdentifierStatus::Failed
+                    }
+                };
                 cx.notify();
             })
             .ok();
@@ -270,15 +289,27 @@ impl Screening {
             Ok(())
         });
 
-        self.tasks.push(cx.spawn_in(window, async move |_, cx| {
-            if task.await.is_ok() {
-                cx.update(|window, cx| {
-                    window.close_dialog(cx);
-                    window.push_notification("Report submitted successfully", cx);
-                })
-                .ok();
-            }
-        }));
+        self.tasks
+            .push(cx.spawn_in(window, async move |_, cx| match task.await {
+                Ok(_) => {
+                    cx.update(|window, cx| {
+                        window.close_dialog(cx);
+                        window.push_notification("Report submitted successfully", cx);
+                    })
+                    .ok();
+                }
+                Err(error) => {
+                    log::error!("failed to submit report: {error:#}");
+
+                    cx.update(|window, cx| {
+                        window.push_notification(
+                            Notification::error(error.to_string()).autohide(false),
+                            cx,
+                        );
+                    })
+                    .ok();
+                }
+            }));
     }
 
     fn mutual_contacts(
@@ -341,6 +372,9 @@ impl Render for Screening {
         const NO_MUTUAL: &str = "You don't have any mutual contacts.";
         const NIP05_MATCH: &str = "The address matches the user's public key.";
         const NIP05_NOT_MATCH: &str = "The address does not match the user's public key.";
+        const NIP05_PENDING: &str = "Checking the address…";
+        const NIP05_FAILED: &str =
+            "The address could not be verified, the network may be unavailable.";
         const NO_NIP05: &str = "This person has not set up their friendly address";
 
         let persons = PersonRegistry::global(cx);
@@ -348,6 +382,20 @@ impl Render for Screening {
         let shorten_pubkey = shorten_pubkey(self.public_key, 8);
 
         let last_active = self.last_active.map(|_| true);
+
+        let (identifier_badge, identifier_message) = match self.identifier_status {
+            IdentifierStatus::Pending => (None, NIP05_PENDING),
+            IdentifierStatus::Verified => (Some(true), NIP05_MATCH),
+            IdentifierStatus::Mismatched => (Some(false), NIP05_NOT_MATCH),
+            IdentifierStatus::Failed => (Some(false), NIP05_FAILED),
+        };
+
+        // Without an address the check never runs
+        let (identifier_badge, identifier_message) = if self.address(cx).is_some() {
+            (identifier_badge, identifier_message)
+        } else {
+            (Some(false), NO_NIP05)
+        };
 
         // Pull from the web of trust once loaded, else use the database fallback
         let mutual_contacts = {
@@ -491,7 +539,7 @@ impl Render for Screening {
                         h_flex()
                             .items_start()
                             .gap_2()
-                            .child(status_badge(Some(self.verified), cx))
+                            .child(status_badge(identifier_badge, cx))
                             .child(
                                 v_flex()
                                     .text_xs()
@@ -508,17 +556,7 @@ impl Render for Screening {
                                         div()
                                             .line_clamp(1)
                                             .text_color(cx.theme().muted_foreground)
-                                            .child({
-                                                if self.address(cx).is_some() {
-                                                    if self.verified {
-                                                        SharedString::from(NIP05_MATCH)
-                                                    } else {
-                                                        SharedString::from(NIP05_NOT_MATCH)
-                                                    }
-                                                } else {
-                                                    SharedString::from(NO_NIP05)
-                                                }
-                                            }),
+                                            .child(SharedString::from(identifier_message)),
                                     ),
                             ),
                     )

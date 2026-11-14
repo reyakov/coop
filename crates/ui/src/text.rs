@@ -8,7 +8,7 @@ use person::Directory;
 
 /// A span of the source content, by byte range, that renders as `text` instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InlineReplacement {
+pub(crate) struct InlineReplacement {
     pub range: Range<usize>,
     pub text: SharedString,
     /// When set, the span renders as this image (NIP-30 custom emoji)
@@ -44,7 +44,7 @@ pub struct RenderedText {
 }
 
 impl RenderedText {
-    pub fn new(content: &str, replacements: &[InlineReplacement]) -> Self {
+    pub(crate) fn new(content: &str, replacements: &[InlineReplacement]) -> Self {
         let mut text = String::with_capacity(content.len());
         let mut last = 0;
 

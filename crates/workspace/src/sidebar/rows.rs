@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use chat::{Room, RoomKind};
+use chat::{ChatRegistry, Room, RoomKind};
 use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -9,7 +9,7 @@ use gpui::{
 };
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::dialog::DialogButtonProps;
-use gpui_kit::component::dock::{ClosePanel, DockArea, DockPlacement, PanelHandle};
+use gpui_kit::component::dock::{DockArea, DockPlacement, PanelHandle};
 use gpui_kit::component::menu::{ContextMenuExt as _, PopupMenuItem};
 use gpui_kit::component::{ActiveTheme, Icon, Selectable, Sizable, WindowExt, h_flex};
 use nip29::Group;
@@ -30,9 +30,12 @@ pub(crate) fn open_room(
     window: &mut Window,
     cx: &mut App,
 ) {
+    let panel = chat_ui::init(room.downgrade(), window, cx);
+    let room_id = panel.read(cx).room_id().clone();
+
     crate::dock::add_panel_to(
         dock,
-        PanelHandle::new(chat_ui::init(room.downgrade(), window, cx)),
+        PanelHandle::new(panel),
         DockPlacement::Center,
         window,
         cx,
@@ -41,8 +44,11 @@ pub(crate) fn open_room(
     if room.read(cx).kind != RoomKind::Ongoing && AppSettings::get_screening(cx) {
         let peer = room.read(cx).display_member(cx).public_key();
         let view = screening::init(peer, window, cx);
+        let dock = dock.clone();
 
         window.open_alert_dialog(cx, move |alert, _window, _cx| {
+            let dock = dock.clone();
+            let room_id = room_id.clone();
             alert
                 .confirm()
                 .child(view.clone())
@@ -52,7 +58,11 @@ pub(crate) fn open_room(
                         .ok_text("Response"),
                 )
                 .on_cancel(move |_event, window, cx| {
-                    window.dispatch_action(Box::new(ClosePanel), cx);
+                    if let Err(error) = dock.update(cx, |area, cx| {
+                        crate::dock::close_room_panel(area, &room_id, window, cx);
+                    }) {
+                        log::warn!("Failed to close the request room's tab: {error}");
+                    }
                     true
                 })
         });
@@ -78,6 +88,8 @@ pub(super) enum SidebarRow {
     Message {
         hit: MessageHit,
     },
+    /// Entry point to the trash panel, shown under requests
+    Trash,
     /// A non-interactive label, such as a search results section.
     Heading(&'static str),
     Empty(&'static str),
@@ -95,10 +107,7 @@ impl Sidebar {
         rows.get(range.clone())
             .into_iter()
             .flatten()
-            .enumerate()
-            .map(|(offset, row)| {
-                let index = range.start + offset;
-
+            .map(|row| {
                 let element = match row {
                     SidebarRow::Section(section) => {
                         let section = *section;
@@ -171,7 +180,7 @@ impl Sidebar {
                         let dock = self.dock.clone();
                         let room = room.clone();
 
-                        let nav = Nav::new(index)
+                        let nav = Nav::new(id)
                             .label(name)
                             .text_sm()
                             .when(!hide_avatar, |this| {
@@ -210,7 +219,7 @@ impl Sidebar {
                             });
 
                         div()
-                            .id(index)
+                            .id(id)
                             .w_full()
                             .child(nav)
                             .context_menu(move |menu, _window, _cx| {
@@ -241,7 +250,7 @@ impl Sidebar {
                         let sidebar = cx.entity().downgrade();
                         let public_key = public_key.to_owned();
 
-                        Nav::new(index)
+                        Nav::new(public_key.to_hex())
                             .label(person.name())
                             .text_sm()
                             .when(!hide_avatar, |this| {
@@ -265,7 +274,7 @@ impl Sidebar {
                         let person = self.directory.read(cx).person(public_key, cx);
                         let public_key = public_key.to_owned();
 
-                        Nav::new(index)
+                        Nav::new(public_key.to_hex())
                             .label(person.name())
                             .text_sm()
                             .when(!hide_avatar, |this| {
@@ -298,7 +307,7 @@ impl Sidebar {
                             .or_else(|| group.read(cx).elsewhere().map(|_| "Moved"))
                             .map(SharedString::from);
 
-                        let nav = Nav::new(index)
+                        let nav = Nav::new(tag.clone())
                             .label(name)
                             .text_sm()
                             .when(!hide_avatar, |this| {
@@ -318,8 +327,11 @@ impl Sidebar {
                                 )
                             })
                             .on_click(move |_event, window, cx| {
-                                crate::dock::add_panel_to(
+                                let group_key = group.read(cx).key().clone();
+
+                                crate::dock::add_group_panel_to(
                                     &dock,
+                                    group_key,
                                     PanelHandle::new(nip29_ui::init(group.clone(), window, cx)),
                                     DockPlacement::Center,
                                     window,
@@ -334,7 +346,7 @@ impl Sidebar {
                             });
 
                         div()
-                            .id(index)
+                            .id(tag.clone())
                             .w_full()
                             .child(nav)
                             .context_menu(move |menu, _window, _cx| {
@@ -370,8 +382,15 @@ impl Sidebar {
                         let dock = self.dock.clone();
                         let room = hit.room.clone();
                         let content = hit.content.clone();
+                        // Several hits can share a room, so the id digests the whole hit
+                        let hit_id = common::stable_id_u64(&[
+                            hit.room.read(cx).id.to_string().as_str(),
+                            hit.author.to_string().as_str(),
+                            hit.created_at.as_secs().to_string().as_str(),
+                            hit.content.as_ref(),
+                        ]);
 
-                        Nav::new(index)
+                        Nav::new(hit_id)
                             .label(content)
                             .text_sm()
                             .font_medium()
@@ -391,6 +410,34 @@ impl Sidebar {
                             )
                             .on_click(move |_event, window, cx| {
                                 open_room(&room, &dock, window, cx);
+                            })
+                            .into_any_element()
+                    }
+                    SidebarRow::Trash => {
+                        let count = ChatRegistry::global(cx).read(cx).trashed_count(cx);
+                        let dock = self.dock.clone();
+
+                        Nav::new("sidebar-trash")
+                            .label("Trash")
+                            .text_sm()
+                            .when(!hide_avatar, |this| {
+                                this.prefix(Avatar::new(None).seed("trash").small())
+                            })
+                            .suffix(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(SharedString::from(count.to_string())),
+                            )
+                            .on_click(move |_event, window, cx| {
+                                let panel = chat_ui::trash::init(window, cx);
+                                crate::dock::add_panel_to(
+                                    &dock,
+                                    PanelHandle::new(panel),
+                                    DockPlacement::Center,
+                                    window,
+                                    cx,
+                                );
                             })
                             .into_any_element()
                     }

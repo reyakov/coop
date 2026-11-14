@@ -76,6 +76,8 @@ pub struct GroupsRegistry {
     groups: Vec<Entity<Group>>,
     previews: HashMap<GroupKey, Entity<Group>>,
     list: GroupList,
+    /// The (created_at, id) of the last accepted group list event.
+    list_stamp: Option<(Timestamp, EventId)>,
     browse: HashMap<SubscriptionId, RelayUrl>,
     routes: HashMap<SubscriptionId, GroupKey>,
     observers: HashMap<GroupKey, Subscription>,
@@ -132,6 +134,7 @@ impl GroupsRegistry {
             groups: Vec::new(),
             previews: HashMap::new(),
             list: GroupList::default(),
+            list_stamp: None,
             browse: HashMap::new(),
             routes: HashMap::new(),
             observers: HashMap::new(),
@@ -455,6 +458,8 @@ impl GroupsRegistry {
         self.fork_authors.clear();
         self.syncing.clear();
         self.list = GroupList::default();
+        // A new signer's list events must not be judged against the old stamp.
+        self.list_stamp = None;
 
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
@@ -488,24 +493,26 @@ impl GroupsRegistry {
         let signer = nostr.read(cx).signer();
 
         // Show the cached groups before the relays answer.
-        let task: Task<Result<GroupList, Error>> = cx.background_spawn(async move {
-            let me = signer.get_public_key_async().await?;
-            let filter = Filter::new().author(me).kind(Kind::SimpleGroups).limit(1);
+        let task: Task<Result<(GroupList, Option<Event>), Error>> =
+            cx.background_spawn(async move {
+                let me = signer.get_public_key_async().await?;
+                let filter = Filter::new().author(me).kind(Kind::SimpleGroups).limit(1);
 
-            match client.database().query(filter).await?.into_iter().next() {
-                Some(event) => {
-                    let list = GroupList::parse(&event)?;
-                    Ok(Self::hydrate_list(list, &signer, &me).await)
+                match client.database().query(filter).await?.into_iter().next() {
+                    Some(event) => {
+                        let list =
+                            Self::hydrate_list(GroupList::parse(&event)?, &signer, &me).await;
+                        Ok((list, Some(event)))
+                    }
+                    None => Ok((GroupList::default(), None)),
                 }
-                None => Ok(GroupList::default()),
-            }
-        });
+            });
 
         self.tasks
             .push(cx.spawn(async move |this, cx| match task.await {
-                Ok(list) => {
+                Ok((list, event)) => {
                     this.update(cx, |this, cx| {
-                        this.merge(list, cx);
+                        this.merge(list, event.as_ref(), cx);
                     })
                     .ok();
                 }
@@ -538,7 +545,16 @@ impl GroupsRegistry {
         self.watch_forks(cx);
     }
 
-    fn merge(&mut self, list: GroupList, cx: &mut Context<Self>) {
+    fn merge(&mut self, list: GroupList, event: Option<&Event>, cx: &mut Context<Self>) {
+        if let Some(event) = event {
+            // Relays replay list events out of order; only strictly newer applies.
+            if !is_newer_event(self.list_stamp, event.created_at, event.id) {
+                return;
+            }
+
+            self.list_stamp = Some((event.created_at, event.id));
+        }
+
         // Carry the event's private section so a later publish can preserve it.
         self.list
             .set_content(list.content().map(str::to_owned), list.content_readable());
@@ -589,20 +605,21 @@ impl GroupsRegistry {
         };
 
         if list.content().is_none() {
-            self.merge(list, cx);
+            self.merge(list, Some(&event), cx);
             return;
         }
 
         let nostr = NostrRegistry::global(cx);
         let signer = nostr.read(cx).signer();
         let Some(me) = nostr.read(cx).current_user() else {
-            self.merge(list, cx);
+            self.merge(list, Some(&event), cx);
             return;
         };
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             let list = Self::hydrate_list(list, &signer, &me).await;
-            this.update(cx, |this, cx| this.merge(list, cx)).ok();
+            this.update(cx, |this, cx| this.merge(list, Some(&event), cx))
+                .ok();
         }));
     }
 
@@ -864,7 +881,7 @@ impl GroupsRegistry {
         let me = nostr.read(cx).current_user();
         let list = self.list.clone();
 
-        self.tasks.push(cx.spawn(async move |_this, _cx| {
+        self.tasks.push(cx.spawn(async move |this, cx| {
             // Re-encrypt the private section when it carries local entries; a
             // section this session could not read is carried verbatim.
             let content = match (list.has_private(), list.content_readable()) {
@@ -892,6 +909,15 @@ impl GroupsRegistry {
                     return;
                 }
             };
+
+            // Our own publish is the newest list until a newer event arrives.
+            if let Err(error) = this.update(cx, |this, _cx| {
+                if is_newer_event(this.list_stamp, event.created_at, event.id) {
+                    this.list_stamp = Some((event.created_at, event.id));
+                }
+            }) {
+                log::warn!("recording the published list failed: {error}");
+            }
 
             match client.send_event(&event).to_nip65().await {
                 Ok(output) if output.failed.is_empty() => {}

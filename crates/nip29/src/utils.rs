@@ -1,7 +1,6 @@
 use std::collections::HashSet;
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
 
+use common::stable_id_u64;
 use nostr_sdk::prelude::*;
 
 use crate::{GroupId, GroupKey};
@@ -25,10 +24,10 @@ pub(crate) fn subscription_id(key: &GroupKey) -> SubscriptionId {
 }
 
 pub(crate) fn browse_subscription(relay: &RelayUrl) -> SubscriptionId {
-    let mut hasher = DefaultHasher::new();
-    relay.hash(&mut hasher);
-
-    SubscriptionId::new(format!("{BROWSE_PREFIX}{:08x}", hasher.finish() as u32))
+    SubscriptionId::new(format!(
+        "{BROWSE_PREFIX}{:08x}",
+        stable_id_u64(&[relay.as_str()]) as u32
+    ))
 }
 
 pub(crate) fn page_subscription(key: &GroupKey) -> SubscriptionId {

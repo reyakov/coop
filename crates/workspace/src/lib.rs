@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -17,7 +18,7 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::command::{
     Command as CommandPalette, CommandGroup, CommandItem, CommandState,
 };
-use gpui_kit::component::dock::{DockArea, DockLayout, DockPlacement, Panel, PanelHandle};
+use gpui_kit::component::dock::{DockArea, DockLayout, DockPlacement, Panel, PanelHandle, PanelId};
 use gpui_kit::component::notification::{Notification, NotificationType};
 use gpui_kit::component::{
     ActiveTheme, IndexPath, Theme, ThemeConfig, ThemeRegistry, WindowExt, v_flex,
@@ -51,7 +52,7 @@ pub fn init(window: &mut Window, cx: &mut App) -> Entity<Workspace> {
     cx.new(|cx| Workspace::new(window, cx))
 }
 
-struct DeviceNotifcation;
+struct DeviceNotification;
 struct MsgRelayNotification;
 
 #[derive(Action, Clone, PartialEq, Eq, Deserialize)]
@@ -80,6 +81,9 @@ enum Command {
 pub struct Workspace {
     dock: Entity<DockArea>,
     sidebar: Entity<Sidebar>,
+    /// Group panels docked by group key, so reopening a group focuses its panel.
+    /// Group panels hide their group, so the dock cannot tell them apart.
+    group_panels: HashMap<GroupKey, PanelId>,
     /// Async tasks
     tasks: Vec<Task<Result<(), Error>>>,
     /// Event subscriptions
@@ -137,7 +141,7 @@ impl Workspace {
                                            one shown there before approving.";
 
                         let note = Notification::new()
-                            .id::<DeviceNotifcation>()
+                            .id::<DeviceNotification>()
                             .autohide(false)
                             .title(format!("Wait for approval · {code}"))
                             .message(MSG)
@@ -151,7 +155,7 @@ impl Workspace {
                                            from the settings.";
 
                         let note = Notification::new()
-                            .id::<DeviceNotifcation>()
+                            .id::<DeviceNotification>()
                             .message(MSG)
                             .with_type(NotificationType::Info)
                             .action(|_this, _window, _cx| {
@@ -161,7 +165,7 @@ impl Workspace {
                                         device.update(cx, |this, cx| {
                                             this.get_announcement(cx);
                                         });
-                                        window.remove_notification::<DeviceNotifcation>(cx);
+                                        window.remove_notification::<DeviceNotification>(cx);
                                     },
                                 )
                             });
@@ -170,7 +174,7 @@ impl Workspace {
                     }
                     DeviceEvent::Set => {
                         let note = Notification::new()
-                            .id::<DeviceNotifcation>()
+                            .id::<DeviceNotification>()
                             .message("Encryption Key has been set")
                             .with_type(NotificationType::Success);
 
@@ -227,14 +231,6 @@ impl Workspace {
                     ::nip60::WalletEvent::Error(error) => {
                         window.push_notification(Notification::error(error.clone()), cx);
                     }
-                    ::nip60::WalletEvent::TokenCreated(_) => {
-                        window.push_notification(
-                            Notification::new()
-                                .message("Cashu token created, copy it from the wallet panel")
-                                .with_type(NotificationType::Success),
-                            cx,
-                        );
-                    }
                     ::nip60::WalletEvent::Updated => {}
                 },
             ));
@@ -285,6 +281,7 @@ impl Workspace {
         Self {
             dock,
             sidebar,
+            group_panels: HashMap::new(),
             tasks: vec![],
             _subscriptions: subscriptions,
         }
@@ -317,6 +314,43 @@ impl Workspace {
         self.dock.update(cx, |area, cx| {
             crate::dock::add_panel(area, PanelHandle::new(panel), placement, window, cx)
         });
+    }
+
+    fn add_group_panel_to_dock(
+        &mut self,
+        group_key: GroupKey,
+        panel: PanelHandle,
+        placement: DockPlacement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let panel_id = panel.panel_id(cx);
+        let docked = self.group_panels.get(&group_key).copied();
+
+        let mut added = false;
+        let mut focused = false;
+
+        self.dock.update(cx, |area, cx| {
+            if let Some(id) = docked
+                && area.panel(id).is_some()
+            {
+                crate::dock::focus_panel(area, id, window, cx);
+                focused = true;
+                return;
+            }
+            crate::dock::add_panel(area, panel, placement, window, cx);
+            added = area.panel(panel_id).is_some();
+        });
+
+        if focused {
+            return;
+        }
+
+        if added {
+            self.group_panels.insert(group_key, panel_id);
+        } else {
+            self.group_panels.remove(&group_key);
+        }
     }
 
     /// Handle command events

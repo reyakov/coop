@@ -13,7 +13,7 @@ use crate::LOCAL_KEYS;
 use crate::protocol::{
     ACTIVITY_KINDS, Activity, GroupAdmins, GroupId, GroupKey, GroupMembers, GroupMetadata,
     GroupPins, GroupRoles, MEMBERSHIP_KINDS, Membership, PIN_LIST, Pin, RENDER_KINDS, STATE_KINDS,
-    TimelineWindow, tag_value,
+    TimelineWindow, is_newer_event, tag_value,
 };
 
 const REPLAY_LIMIT: usize = 100;
@@ -91,7 +91,8 @@ pub struct Group {
     membership: Membership,
     membership_events: Vec<Event>,
     elsewhere: Option<GroupKey>,
-    state_ids: HashMap<Kind, EventId>,
+    /// The last accepted (created_at, id) per state kind.
+    state_ids: HashMap<Kind, (Timestamp, EventId)>,
     rows: Vec<Row>,
     index: HashSet<EventId>,
     reactions: HashMap<EventId, Vec<Reaction>>,
@@ -694,6 +695,15 @@ impl Group {
     }
 
     fn absorb_state(&mut self, event: &Event, me: PublicKey) -> bool {
+        // Relays deliver same-kind state events in any order.
+        if !is_newer_event(
+            self.state_ids.get(&event.kind).copied(),
+            event.created_at,
+            event.id,
+        ) {
+            return false;
+        }
+
         match event.kind {
             Kind::GroupMetadata => match GroupMetadata::parse(event) {
                 Ok(metadata) => self.metadata = Some(metadata),
@@ -724,7 +734,10 @@ impl Group {
             _ => return false,
         }
 
-        self.state_ids.insert(event.kind, event.id) != Some(event.id)
+        self.state_ids
+            .insert(event.kind, (event.created_at, event.id));
+
+        true
     }
 
     fn adopt_roster_membership(&mut self, me: PublicKey) -> bool {

@@ -12,8 +12,5 @@ gpui.workspace = true
 gpui-base.workspace = true
 gpui-kit.workspace = true
 nostr-sdk.workspace = true
-web-time = "1.1"
 smallvec.workspace = true
 log.workspace = true
-
-uuid = "1.10"

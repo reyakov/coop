@@ -1,4 +1,5 @@
 use anyhow::Error;
+use gpui::prelude::FluentBuilder;
 use gpui::{
     App, AppContext, Context, Entity, EventEmitter, FocusHandle, Focusable, IntoElement,
     ParentElement, Render, SharedString, Styled, Task, Window, div,
@@ -9,6 +10,7 @@ use gpui_kit::component::dock::{Panel, PanelEvent};
 use gpui_kit::component::input::{Input, InputState};
 use gpui_kit::component::separator::Separator;
 use gpui_kit::component::{ActiveTheme, v_flex};
+use instant::Duration;
 use nostr_sdk::prelude::*;
 use state::USER_KEYRING;
 
@@ -23,14 +25,12 @@ pub fn init(window: &mut Window, cx: &mut App) -> Entity<BackupPanel> {
 pub struct BackupPanel {
     name: SharedString,
     focus_handle: FocusHandle,
-
     /// Public key input
     npub_input: Entity<InputState>,
-
     /// Secret key input
     nsec_input: Entity<InputState>,
-
-    /// Background tasks
+    /// Error message
+    error: Option<SharedString>,
     tasks: Vec<Task<Result<(), Error>>>,
 }
 
@@ -49,6 +49,7 @@ impl BackupPanel {
             focus_handle: cx.focus_handle(),
             npub_input,
             nsec_input,
+            error: None,
             tasks: vec![],
         }
     }
@@ -57,20 +58,58 @@ impl BackupPanel {
         let keyring = cx.read_credentials(USER_KEYRING);
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            if let Some((_, secret)) = keyring.await? {
-                let secret = SecretKey::from_slice(&secret)?;
-                let keys = Keys::new(secret);
+            let result: Result<(), Error> = async {
+                let Some((_, secret)) = keyring.await? else {
+                    return Ok(());
+                };
+
+                let keys = Keys::new(SecretKey::from_slice(&secret)?);
+
+                // Bech32 encoding of a valid key cannot fail today, but handle it instead of panicking
+                let npub = keys.public_key().to_bech32()?;
+                let nsec = keys.secret_key().to_bech32()?;
 
                 this.update_in(cx, |this, window, cx| {
                     this.npub_input.update(cx, |this, cx| {
-                        this.set_value(keys.public_key().to_bech32().unwrap(), window, cx);
+                        this.set_value(npub.as_str(), window, cx);
                     });
 
                     this.nsec_input.update(cx, |this, cx| {
-                        this.set_value(keys.secret_key().to_bech32().unwrap(), window, cx);
+                        this.set_value(nsec.as_str(), window, cx);
                     });
                 })?;
+
+                Ok(())
             }
+            .await;
+
+            if let Err(error) = result {
+                log::error!("failed to load account keys: {error:#}");
+
+                this.update_in(cx, |this, window, cx| {
+                    this.set_error(format!("Failed to load your keys: {error}"), window, cx);
+                })?;
+            }
+
+            Ok(())
+        }));
+    }
+
+    fn set_error<E>(&mut self, error: E, window: &mut Window, cx: &mut Context<Self>)
+    where
+        E: Into<SharedString>,
+    {
+        self.error = Some(error.into());
+        cx.notify();
+
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor().timer(Duration::from_secs(2)).await;
+
+            // Clear the error message after a delay
+            this.update(cx, |this, cx| {
+                this.error = None;
+                cx.notify();
+            })?;
 
             Ok(())
         }));
@@ -110,6 +149,15 @@ impl Render for BackupPanel {
                     .child(SharedString::from(MSG)),
             )
             .child(Separator::horizontal())
+            .when_some(self.error.as_ref(), |this, error| {
+                this.child(
+                    div()
+                        .italic()
+                        .text_xs()
+                        .text_color(cx.theme().danger)
+                        .child(error.clone()),
+                )
+            })
             .child(
                 v_flex()
                     .gap_2()

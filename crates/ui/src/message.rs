@@ -25,7 +25,7 @@ type SharedClickListener = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>;
 type DropdownBuilder = Rc<dyn Fn(PopupMenu, &mut Window, &mut Context<PopupMenu>) -> PopupMenu>;
 
 /// Messages from the same author within this window are grouped into one run.
-pub const RUN_WINDOW_SECS: u64 = 300;
+pub(crate) const RUN_WINDOW_SECS: u64 = 300;
 
 /// Whether a message starts a new run, given the previous message's author and unix time.
 pub fn opens_run<T: PartialEq>(previous: Option<(T, u64)>, current: (T, u64)) -> bool {
@@ -758,14 +758,19 @@ impl RenderOnce for MessageActions {
 /// A message's text revealed word by word, paced by the estimated speech duration.
 #[derive(IntoElement)]
 pub struct RevealText {
-    text: SharedString,
+    words: Vec<SharedString>,
     duration: Duration,
 }
 
 impl RevealText {
+    /// Create text that reveals its words over `duration`.
     pub fn new(text: impl Into<SharedString>, duration: Duration) -> Self {
         Self {
-            text: text.into(),
+            words: text
+                .into()
+                .split_whitespace()
+                .map(SharedString::from)
+                .collect(),
             duration,
         }
     }
@@ -773,11 +778,7 @@ impl RevealText {
 
 impl RenderOnce for RevealText {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        let words: Vec<SharedString> = self
-            .text
-            .split_whitespace()
-            .map(SharedString::from)
-            .collect();
+        let words = self.words;
         let total = words.len().max(1) as f32;
 
         div().flex().flex_wrap().gap_x_1().with_animation(

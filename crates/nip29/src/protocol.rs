@@ -1,10 +1,9 @@
 use std::collections::HashSet;
-use std::collections::hash_map::DefaultHasher;
 use std::fmt;
-use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use anyhow::{Result, anyhow, bail};
+use common::stable_id_u64;
 use nostr_sdk::prelude::*;
 
 pub(crate) const TIMELINE_WINDOW: usize = 50;
@@ -48,6 +47,15 @@ pub(crate) fn tag_value<'a>(tags: &'a Tags, name: &str) -> Option<&'a str> {
     tags.iter()
         .find(|tag| tag.kind() == name)
         .and_then(|tag| tag.content())
+}
+
+/// Whether `(created_at, id)` is strictly newer than the last accepted stamp.
+pub(crate) fn is_newer_event(
+    accepted: Option<(Timestamp, EventId)>,
+    created_at: Timestamp,
+    id: EventId,
+) -> bool {
+    accepted.is_none_or(|last| (created_at, id) > last)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -280,9 +288,7 @@ impl GroupKey {
     }
 
     pub fn uniq_id(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        self.hash(&mut hasher);
-        hasher.finish()
+        stable_id_u64(&[self.relay.as_str(), self.id.as_str()])
     }
 }
 
@@ -1151,5 +1157,20 @@ mod tests {
         // A malformed reference can't be verified.
         let malformed = Tag::custom("previous", ["nothex"]);
         assert_eq!(window.references_seen(Some(&malformed)), Some(false));
+    }
+
+    #[test]
+    fn is_newer_event_accepts_only_strictly_newer_events() {
+        let lower = EventId::from_byte_array([0x00; 32]);
+        let higher = EventId::from_byte_array([0xff; 32]);
+        let earlier = Timestamp::from(100);
+        let later = Timestamp::from(200);
+
+        assert!(is_newer_event(None, earlier, lower));
+        assert!(!is_newer_event(Some((earlier, lower)), earlier, lower));
+        assert!(is_newer_event(Some((earlier, lower)), later, lower));
+        assert!(!is_newer_event(Some((later, lower)), earlier, higher));
+        assert!(is_newer_event(Some((earlier, lower)), earlier, higher));
+        assert!(!is_newer_event(Some((earlier, higher)), earlier, lower));
     }
 }

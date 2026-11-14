@@ -31,7 +31,6 @@ impl Global for GlobalWalletRegistry {}
 #[derive(Debug, Clone)]
 pub enum WalletEvent {
     Updated,
-    TokenCreated(String),
     Error(String),
 }
 
@@ -55,6 +54,9 @@ pub struct HistoryEntry {
     pub created_at: Timestamp,
 }
 
+/// How many times a failed nutzap redemption is retried before giving up
+const MAX_REDEEM_ATTEMPTS: u32 = 3;
+
 pub struct WalletRegistry {
     wallet: Option<keys::WalletData>,
     tokens: HashMap<EventId, TokenEvent>,
@@ -69,6 +71,10 @@ pub struct WalletRegistry {
     pending_nutzaps: Vec<Event>,
     /// Nutzaps with a redemption job in flight
     redeeming: HashSet<EventId>,
+    /// Redemption attempts per nutzap, reset on success
+    redeem_attempts: HashMap<EventId, u32>,
+    /// A job errored after possibly mutating the store
+    publish_failed: bool,
     store: Option<Arc<WalletRedbDatabase>>,
     wallets: HashMap<MintUrl, Wallet>,
     loading: bool,
@@ -119,6 +125,8 @@ impl WalletRegistry {
             redeemed: HashSet::new(),
             pending_nutzaps: Vec::new(),
             redeeming: HashSet::new(),
+            redeem_attempts: HashMap::new(),
+            publish_failed: false,
             store: None,
             wallets: HashMap::new(),
             loading: false,
@@ -184,34 +192,14 @@ impl WalletRegistry {
         );
     }
 
-    /// Pay a lightning invoice from the wallet.
-    pub fn melt(&mut self, invoice: String, cx: &mut Context<Self>) {
-        let Some(mint_url) = self.primary_mint(cx) else {
+    /// Drop a pending invoice at the user's request.
+    pub fn dismiss_mint_quote(&mut self, quote_id: String, cx: &mut Context<Self>) {
+        if !self.quotes.iter().any(|quote| quote.quote_id == quote_id) {
             return;
-        };
+        }
 
-        self.schedule_job(
-            ops::Job::Melt {
-                mint: mint_url,
-                invoice,
-            },
-            cx,
-        );
-    }
-
-    /// Send ecash as a token string the recipient can paste anywhere.
-    pub fn send_token(&mut self, amount: u64, cx: &mut Context<Self>) {
-        let Some(mint_url) = self.primary_mint(cx) else {
-            return;
-        };
-
-        self.schedule_job(
-            ops::Job::SendToken {
-                mint: mint_url,
-                amount,
-            },
-            cx,
-        );
+        self.quotes.retain(|quote| quote.quote_id != quote_id);
+        self.emit_updated(cx);
     }
 
     /// Send a NIP-61 nutzap to a peer, optionally nutzapping one of their events.
@@ -378,6 +366,8 @@ impl WalletRegistry {
         self.redeemed.clear();
         self.pending_nutzaps.clear();
         self.redeeming.clear();
+        self.redeem_attempts.clear();
+        self.publish_failed = false;
         self.store = None;
         self.wallets.clear();
         self.loading = false;
@@ -397,6 +387,7 @@ impl WalletRegistry {
         let signer = nostr.read(cx).signer().clone();
 
         let (tx, rx) = flume::bounded::<Event>(100);
+        let consumer_signer = signer.clone();
 
         self.notification_listener = Some(cx.background_spawn(async move {
             const MAX_PROCESSED: usize = 1000;
@@ -417,7 +408,7 @@ impl WalletRegistry {
                             | Kind::CashuWalletSpendingHistory
                     );
 
-                    let wallet_event = ours && is_cashu || is_token_deletion(&event);
+                    let wallet_event = ours && (is_cashu || is_token_deletion(&event));
 
                     let nutzap = event.kind == Kind::Custom(9321)
                         && me.is_some_and(|me| event.tags.public_keys().any(|key| key == me));
@@ -443,21 +434,22 @@ impl WalletRegistry {
         }));
 
         self.tasks.push(cx.spawn(async move |this, cx| {
+            let me = consumer_signer.get_public_key_async().await.ok();
             while let Ok(event) = rx.recv_async().await {
                 this.update(cx, |this, cx| {
-                    this.absorb(event, cx);
+                    this.absorb(event, me, cx);
                 })
                 .ok();
             }
         }));
     }
 
-    fn absorb(&mut self, event: Event, cx: &mut Context<Self>) {
+    fn absorb(&mut self, event: Event, me: Option<PublicKey>, cx: &mut Context<Self>) {
         match event.kind {
             Kind::CashuWallet => self.absorb_wallet(event, cx),
             Kind::CashuWalletUnspentProof => self.absorb_token(event, cx),
             Kind::CashuWalletSpendingHistory => self.absorb_history(event, cx),
-            Kind::EventDeletion => self.absorb_deletion(event, cx),
+            Kind::EventDeletion => self.absorb_deletion(event, me, cx),
             Kind::Custom(9321) => self.absorb_nutzap(event, cx),
             _ => {}
         }
@@ -549,7 +541,15 @@ impl WalletRegistry {
         }));
     }
 
-    fn absorb_deletion(&mut self, event: Event, cx: &mut Context<Self>) {
+    fn absorb_deletion(&mut self, event: Event, me: Option<PublicKey>, cx: &mut Context<Self>) {
+        if me != Some(event.pubkey) {
+            log::warn!(
+                "ignoring kind 5 deletion {} from a foreign author",
+                event.id
+            );
+            return;
+        }
+
         let mut removed_any = false;
         for tag in event.tags.iter() {
             if tag.kind() != "e" {
@@ -807,6 +807,9 @@ impl WalletRegistry {
 
         self.job_running = true;
 
+        let job_handle = job.clone();
+        let publish_failed = self.publish_failed;
+
         self.tasks.push(cx.spawn(async move |this, cx| {
             let result = Tokio::spawn_result(cx, async move {
                 let ctx = ops::JobCtx {
@@ -815,6 +818,7 @@ impl WalletRegistry {
                     signer,
                     client,
                     tokens,
+                    publish_failed,
                 };
 
                 job.run(ctx).await
@@ -823,7 +827,7 @@ impl WalletRegistry {
 
             this.update(cx, |this, cx| {
                 this.job_running = false;
-                this.apply_outcome(result, cx);
+                this.apply_outcome(job_handle, result, cx);
 
                 for job in std::mem::take(&mut this.job_queued) {
                     this.schedule_job(job, cx);
@@ -833,18 +837,51 @@ impl WalletRegistry {
         }));
     }
 
-    fn apply_outcome(&mut self, result: Result<ops::Outcome, Error>, cx: &mut Context<Self>) {
+    fn apply_outcome(
+        &mut self,
+        job: ops::Job,
+        result: Result<ops::Outcome, Error>,
+        cx: &mut Context<Self>,
+    ) {
         let outcome = match result {
             Ok(outcome) => outcome,
             Err(error) => {
+                if !matches!(job, ops::Job::CreateQuote { .. }) {
+                    self.publish_failed = true;
+                }
+
+                if !matches!(job, ops::Job::CreateQuote { .. } | ops::Job::Reconcile) {
+                    self.schedule_job(ops::Job::Reconcile, cx);
+                }
+
+                if let ops::Job::RedeemNutzap { nutzap_id, .. } = &job {
+                    self.redeeming.remove(nutzap_id);
+
+                    let attempts = self.redeem_attempts.entry(*nutzap_id).or_default();
+                    *attempts += 1;
+
+                    if *attempts <= MAX_REDEEM_ATTEMPTS {
+                        self.job_queued.push(job.clone());
+                    } else {
+                        log::warn!(
+                            "giving up redeeming nutzap {nutzap_id} after {MAX_REDEEM_ATTEMPTS} attempts"
+                        );
+                    }
+                }
+
                 self.emit_error(format!("{error:#}"), cx);
                 return;
             }
         };
 
         match outcome {
-            ops::Outcome::Idle => {}
+            ops::Outcome::Idle => {
+                if matches!(job, ops::Job::ClaimQuote { .. }) {
+                    self.emit_error("Invoice is not paid yet".to_string(), cx);
+                }
+            }
             ops::Outcome::Reconciled { updates } => {
+                self.publish_failed = false;
                 let changed = !updates.is_empty();
 
                 for update in updates {
@@ -879,16 +916,6 @@ impl WalletRegistry {
                 self.emit_updated(cx);
                 log::info!("minted {amount} sats from quote {quote_id}");
             }
-            ops::Outcome::Melted { update, amount } => {
-                self.apply_token_update(update);
-                self.emit_updated(cx);
-                log::info!("melted {amount} sats");
-            }
-            ops::Outcome::Sent { update, token } => {
-                self.apply_token_update(update);
-                cx.emit(WalletEvent::TokenCreated(token));
-                self.emit_updated(cx);
-            }
             ops::Outcome::NutzapSent { update, amount } => {
                 self.apply_token_update(update);
                 self.emit_updated(cx);
@@ -905,6 +932,7 @@ impl WalletRegistry {
                 amount,
             } => {
                 self.redeeming.remove(&nutzap_id);
+                self.redeem_attempts.remove(&nutzap_id);
                 self.redeemed.insert(nutzap_id);
                 self.apply_token_update(update);
                 self.emit_updated(cx);

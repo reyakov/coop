@@ -34,11 +34,44 @@ impl ListSection {
     }
 }
 
+/// Cheap snapshot of the cached rows' inputs, compared on every render; covers
+/// inputs that never notify the sidebar (pin edits, room kind promotions, and
+/// the visibility flags mutated across the sidebar's modules).
+#[derive(Default, PartialEq)]
+pub(super) struct RowsSignature {
+    contacts_open: bool,
+    requests_open: bool,
+    contacts_loaded: bool,
+    pins_open: bool,
+    groups_open: bool,
+    chats_open: bool,
+    pinned_rooms: Vec<u64>,
+    pinned_groups: Vec<String>,
+    /// Kinds of the rooms held by the cache; a request can turn ongoing with
+    /// no event or registry notify the sidebar can hear
+    room_kinds: Vec<(u64, RoomKind)>,
+    /// Size of the undecryptable-messages trash, which no notify reaches
+    trashed: usize,
+}
+
+/// Read the id and kind of every room row held by the given cache.
+fn room_signature(rows: &[SidebarRow], cx: &App) -> Vec<(u64, RoomKind)> {
+    rows.iter()
+        .filter_map(|row| match row {
+            SidebarRow::Room { room } => {
+                let room = room.read(cx);
+                Some((room.id, room.kind))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 impl Sidebar {
     pub(super) fn render_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let requests_open = self.requests_open;
         let contacts_open = self.contacts_open && !requests_open;
-        let rows = Rc::new(self.rows_for(cx));
+        let rows = self.cached_rows(cx);
         // Whether to show the create button for the contact picker
         let create_button = contacts_open && !self.selected_contacts.is_empty();
 
@@ -50,9 +83,10 @@ impl Sidebar {
             ("sidebar-list", None)
         };
 
-        let request_count = ChatRegistry::global(cx)
-            .read(cx)
-            .count(&RoomKind::Request, cx);
+        let request_count = {
+            let chat = ChatRegistry::global(cx).read(cx);
+            chat.count(&RoomKind::Request, cx) + chat.trashed_count(cx)
+        };
 
         v_flex()
             .size_full()
@@ -173,6 +207,32 @@ impl Sidebar {
                 this.child(self.render_create_overlay(cx))
             })
             .into_any_element()
+    }
+
+    /// Rebuild the rows only when a dirty source fired or the snapshot changed.
+    fn cached_rows(&mut self, cx: &mut Context<Self>) -> Rc<Vec<SidebarRow>> {
+        let mut signature = RowsSignature {
+            contacts_open: self.contacts_open,
+            requests_open: self.requests_open,
+            contacts_loaded: self.contacts.is_some(),
+            pins_open: self.pins_open,
+            groups_open: self.is_groups_open(cx),
+            chats_open: self.is_chats_open(cx),
+            pinned_rooms: AppSettings::get_pinned_rooms(cx),
+            pinned_groups: AppSettings::get_pinned_groups(cx),
+            room_kinds: room_signature(&self.rows, cx),
+            trashed: ChatRegistry::global(cx).read(cx).trashed_count(cx),
+        };
+
+        if self.rows_dirty || self.rows_signature != signature {
+            self.rows = Rc::new(self.rows_for(cx));
+            self.rows_dirty = false;
+            // Describe the rebuilt cache, so the next render compares apples to apples
+            signature.room_kinds = room_signature(&self.rows, cx);
+        }
+
+        self.rows_signature = signature;
+        Rc::clone(&self.rows)
     }
 
     fn rows_for(&self, cx: &App) -> Vec<SidebarRow> {

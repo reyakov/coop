@@ -26,6 +26,13 @@ pub use self::error::Error;
 const DEFAULT_HTML: &str = include_str!("../index.html");
 const JS: &str = include_str!("../proxy.js");
 
+/// Cap on the request line and headers so a peer cannot force unbounded reads
+const MAX_HEADER_BYTES: usize = 16 * 1024;
+/// Cap on the request body so a huge Content-Length cannot force a huge allocation
+const MAX_BODY_BYTES: usize = 1024 * 1024;
+/// Maximum time a connection may stay open before it is dropped
+const CONNECTION_TIMEOUT: Duration = Duration::from_secs(30);
+
 type PendingResponseMap = HashMap<Uuid, channel::Sender<Result<Value, String>>>;
 
 #[derive(Debug, Deserialize)]
@@ -265,6 +272,10 @@ impl BrowserSignerProxy {
         let state: Arc<ProxyState> = self.inner.state.clone();
         let custom_html: &'static str = self.inner.options.custom_html;
         let shutdown: Arc<ShutdownEvent> = self.inner.shutdown.clone();
+        // Regenerated on every startup, never part of the opened URL
+        let session_token: String = Uuid::new_v4().simple().to_string();
+        // Only the exact host:port the server binds may appear in the Host header
+        let expected_host: String = addr.to_string();
 
         smol::spawn(async move {
             tracing::info!("Starting proxy server on {addr}");
@@ -291,13 +302,30 @@ impl BrowserSignerProxy {
                     AcceptEvent::Connection(Ok((stream, _))) => {
                         let state: Arc<ProxyState> = state.clone();
                         let shutdown: Arc<ShutdownEvent> = shutdown.clone();
+                        let expected_host: String = expected_host.clone();
+                        let session_token: String = session_token.clone();
 
                         smol::spawn(async move {
                             let shutdown_listener = shutdown.listen();
 
                             smol::future::or(
                                 async {
-                                    handle_connection(stream, state, custom_html).await;
+                                    smol::future::or(
+                                        async {
+                                            handle_connection(
+                                                stream,
+                                                state,
+                                                custom_html,
+                                                expected_host,
+                                                session_token,
+                                            )
+                                            .await;
+                                        },
+                                        async {
+                                            smol::Timer::after(CONNECTION_TIMEOUT).await;
+                                        },
+                                    )
+                                    .await;
                                 },
                                 async {
                                     shutdown_listener.await;
@@ -336,6 +364,18 @@ impl BrowserSignerProxy {
         outgoing_requests.push(request);
     }
 
+    /// Drop a request from both queues so timed-out request data is not retained.
+    #[inline]
+    async fn cancel_request(&self, id: Uuid) {
+        self.inner.state.pending_responses.lock().await.remove(&id);
+        self.inner
+            .state
+            .outgoing_requests
+            .lock()
+            .await
+            .retain(|request| request.id != id);
+    }
+
     async fn request<T>(&self, method: RequestMethod, params: Value) -> Result<T, Error>
     where
         T: DeserializeOwned,
@@ -345,6 +385,7 @@ impl BrowserSignerProxy {
 
         // Construct the request
         let request: RequestData = RequestData::new(method, params);
+        let request_id = request.id;
 
         // Create a bounded channel of size 1 as a oneshot replacement
         let (tx, rx) = channel::bounded::<Result<Value, String>>(1);
@@ -361,7 +402,10 @@ impl BrowserSignerProxy {
         match response {
             Ok(Ok(res)) => Ok(serde_json::from_value(res)?),
             Ok(Err(error)) => Err(Error::generic(error)),
-            Err(TimeoutError) => Err(Error::timeout()),
+            Err(TimeoutError) => {
+                self.cancel_request(request_id).await;
+                Err(Error::timeout())
+            }
         }
     }
 
@@ -372,10 +416,19 @@ impl BrowserSignerProxy {
 
     #[inline]
     async fn _sign_event(&self, event: UnsignedEvent) -> Result<Event, Error> {
+        let expected_id: EventId = event.compute_id();
         let event: Event = self
             .request(RequestMethod::SignEvent, serde_json::to_value(event)?)
             .await?;
         event.verify()?;
+
+        if event.id != expected_id {
+            return Err(Error::generic(format!(
+                "signed event doesn't match the requested event: expected ID {expected_id}, got {}",
+                event.id
+            )));
+        }
+
         Ok(event)
     }
 
@@ -437,18 +490,83 @@ impl AsyncNip44 for BrowserSignerProxy {
     }
 }
 
-// ── Minimal HTTP server ──────────────────────────────────────────────────
+/// Outcome of reading a line with [`read_line_capped`].
+enum HeaderLine {
+    /// A line, including the trailing newline when present
+    Line(Vec<u8>),
+    /// Clean EOF with no data
+    Eof,
+    /// The line exceeded the allowed length
+    TooLong,
+}
+
+/// Read one `\n`-terminated line with a hard cap so a peer cannot force unbounded buffering.
+async fn read_line_capped(
+    reader: &mut BufReader<TcpStream>,
+    limit: usize,
+) -> Result<HeaderLine, std::io::Error> {
+    let mut line: Vec<u8> = Vec::new();
+    loop {
+        let (data, line_complete) = {
+            let chunk = reader.fill_buf().await?;
+            if chunk.is_empty() {
+                break;
+            }
+            match chunk.iter().position(|byte| *byte == b'\n') {
+                Some(index) => (chunk[..=index].to_vec(), true),
+                None => (chunk.to_vec(), false),
+            }
+        };
+
+        if line.len() + data.len() > limit {
+            return Ok(HeaderLine::TooLong);
+        }
+
+        let taken = data.len();
+        line.extend_from_slice(&data);
+        reader.consume(taken);
+
+        if line_complete {
+            return Ok(HeaderLine::Line(line));
+        }
+    }
+
+    Ok(if line.is_empty() {
+        HeaderLine::Eof
+    } else {
+        HeaderLine::Line(line)
+    })
+}
 
 /// Handle a single HTTP connection.
-async fn handle_connection(stream: TcpStream, state: Arc<ProxyState>, custom_html: &'static str) {
+async fn handle_connection(
+    stream: TcpStream,
+    state: Arc<ProxyState>,
+    custom_html: &'static str,
+    expected_host: String,
+    session_token: String,
+) {
     let mut reader = BufReader::new(stream);
+    let mut header_bytes: usize = 0;
 
     // Read the request line
-    let mut request_line = String::new();
-    if reader.read_line(&mut request_line).await.is_err() {
-        return;
-    }
-    let request_line = request_line.trim_end().to_string();
+    let request_line = match read_line_capped(&mut reader, MAX_HEADER_BYTES).await {
+        Ok(HeaderLine::Line(line)) => line,
+        Ok(HeaderLine::Eof) => Vec::new(),
+        Ok(HeaderLine::TooLong) => {
+            send_response(&mut reader, 400, "Bad Request", "", "").await;
+            return;
+        }
+        Err(_) => return,
+    };
+    header_bytes += request_line.len();
+    let request_line = match String::from_utf8(request_line) {
+        Ok(line) => line.trim_end().to_string(),
+        Err(_) => {
+            send_response(&mut reader, 400, "Bad Request", "", "").await;
+            return;
+        }
+    };
 
     // Parse method, path, and HTTP version from request line
     let parts: Vec<&str> = request_line.split_whitespace().collect();
@@ -462,24 +580,72 @@ async fn handle_connection(stream: TcpStream, state: Arc<ProxyState>, custom_htm
     // Read headers until empty line
     let mut headers = Vec::new();
     let mut content_length: usize = 0;
+    let mut host: Option<String> = None;
+
     loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).await.is_err() {
+        let line = match read_line_capped(&mut reader, MAX_HEADER_BYTES).await {
+            Ok(HeaderLine::Line(line)) => line,
+            Ok(HeaderLine::Eof) => break,
+            Ok(HeaderLine::TooLong) => {
+                send_response(&mut reader, 400, "Bad Request", "", "").await;
+                return;
+            }
+            Err(_) => return,
+        };
+
+        header_bytes += line.len();
+        if header_bytes > MAX_HEADER_BYTES {
+            send_response(&mut reader, 400, "Bad Request", "", "").await;
             return;
         }
-        let line = line.trim_end().to_string();
+
+        let line = match String::from_utf8(line) {
+            Ok(line) => line.trim_end().to_string(),
+            Err(_) => {
+                send_response(&mut reader, 400, "Bad Request", "", "").await;
+                return;
+            }
+        };
         if line.is_empty() {
             break;
         }
+
         if let Some(value) = line.strip_prefix("content-length:") {
             content_length = value.trim().parse().unwrap_or(0);
         } else if let Some(value) = line.strip_prefix("Content-Length:") {
             content_length = value.trim().parse().unwrap_or(0);
+        } else if let Some(value) = line.strip_prefix("host:") {
+            host = Some(value.trim().to_string());
+        } else if let Some(value) = line.strip_prefix("Host:") {
+            host = Some(value.trim().to_string());
         }
+
         headers.push(line);
     }
 
-    match (method.as_str(), path.as_str()) {
+    // Reject oversized bodies before allocating the read buffer
+    if content_length > MAX_BODY_BYTES {
+        send_response(&mut reader, 413, "Payload Too Large", "", "").await;
+        return;
+    }
+
+    // DNS rebinding defense: only the exact bound host:port is accepted
+    if host.as_deref() != Some(expected_host.as_str()) {
+        send_response(&mut reader, 403, "Forbidden", "", "").await;
+        return;
+    }
+
+    let (route, query) = match path.split_once('?') {
+        Some((route, query)) => (route, Some(query)),
+        None => (path.as_str(), None),
+    };
+
+    if route.starts_with("/api/") && query_param(query, "token") != Some(session_token.as_str()) {
+        send_response(&mut reader, 403, "Forbidden", "", "").await;
+        return;
+    }
+
+    match (method.as_str(), route) {
         // Serve the HTML proxy page
         ("GET", "/") => {
             let html = if custom_html.is_empty() {
@@ -487,7 +653,8 @@ async fn handle_connection(stream: TcpStream, state: Arc<ProxyState>, custom_htm
             } else {
                 custom_html
             };
-            send_response(&mut reader, 200, "OK", "text/html", html).await;
+            let html = inject_session_token(html, &session_token);
+            send_response(&mut reader, 200, "OK", "text/html", &html).await;
         }
         // Serve the JS proxy script
         ("GET", "/proxy.js") => {
@@ -516,7 +683,7 @@ async fn handle_connection(stream: TcpStream, state: Arc<ProxyState>, custom_htm
             // Clear the outgoing requests after sending them
             outgoing.clear();
 
-            send_response_cors_json(&mut reader, 200, "OK", &json).await;
+            send_response(&mut reader, 200, "OK", "application/json", &json).await;
         }
         // Receive response from browser extension
         ("POST", "/api/response") => {
@@ -535,33 +702,32 @@ async fn handle_connection(stream: TcpStream, state: Arc<ProxyState>, custom_htm
                 }
             };
 
-            tracing::debug!("Received response from browser: {message:?}");
+            // Never log the response value, it can contain decrypted plaintext
+            let outcome = if message.error.is_some() {
+                "error"
+            } else {
+                "ok"
+            };
+
+            tracing::debug!(
+                "Received response from browser: id={} outcome={outcome}",
+                message.id
+            );
 
             let id: Uuid = message.id;
             let mut pending = state.pending_responses.lock().await;
 
             match pending.remove(&id) {
-                Some(sender) => {
-                    // Use try_send since we already hold the lock
-                    let _ = sender.try_send(message.into_result());
-                    tracing::info!("Forwarded response for request {id}");
-                }
+                Some(sender) => match sender.try_send(message.into_result()) {
+                    Ok(()) => tracing::info!("Forwarded response for request {id}"),
+                    Err(e) => {
+                        tracing::warn!("Failed to forward response for request {id}: {e}")
+                    }
+                },
                 None => tracing::warn!("No pending request found for {id}"),
             }
 
-            send_response_cors(&mut reader, 200, "OK", "text/plain", "OK").await;
-        }
-        // CORS preflight
-        ("OPTIONS", _) => {
-            let response = "HTTP/1.1 200 OK\r\n\
-                Access-Control-Allow-Origin: *\r\n\
-                Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
-                Access-Control-Allow-Headers: Content-Type\r\n\
-                Content-Length: 0\r\n\
-                Connection: close\r\n\
-                \r\n";
-            let _ = reader.get_mut().write_all(response.as_bytes()).await;
-            let _ = reader.get_mut().flush().await;
+            send_response(&mut reader, 200, "OK", "text/plain", "OK").await;
         }
         // 404 - not found
         _ => {
@@ -585,68 +751,44 @@ async fn send_response(
     }
 
     response.push_str(&format!("Content-Length: {}\r\n", body.len()));
-    response.push_str("Access-Control-Allow-Origin: *\r\n");
     response.push_str("Connection: close\r\n");
     response.push_str("\r\n");
     response.push_str(body);
 
-    let _ = stream.write_all(response.as_bytes()).await;
-    let _ = stream.flush().await;
+    write_response(stream, &response).await;
 }
 
-/// Write a response with CORS headers and JSON content type.
-async fn send_response_cors_json(
-    stream: &mut (impl AsyncWriteExt + Unpin),
-    status: u16,
-    status_text: &str,
-    body: &str,
-) {
-    let mut response = format!("HTTP/1.1 {status} {status_text}\r\n");
-    response.push_str("Content-Type: application/json\r\n");
-    response.push_str(&format!("Content-Length: {}\r\n", body.len()));
-    response.push_str("Access-Control-Allow-Origin: *\r\n");
-    response.push_str("Connection: close\r\n");
-    response.push_str("\r\n");
-    response.push_str(body);
-
-    let _ = stream.write_all(response.as_bytes()).await;
-    let _ = stream.flush().await;
-}
-
-/// Write a response with CORS headers.
-async fn send_response_cors(
-    stream: &mut (impl AsyncWriteExt + Unpin),
-    status: u16,
-    status_text: &str,
-    content_type: &str,
-    body: &str,
-) {
-    let mut response = format!("HTTP/1.1 {status} {status_text}\r\n");
-
-    if !content_type.is_empty() {
-        response.push_str(&format!("Content-Type: {content_type}\r\n"));
+async fn write_response(stream: &mut (impl AsyncWriteExt + Unpin), response: &str) {
+    if let Err(e) = stream.write_all(response.as_bytes()).await {
+        tracing::debug!("Failed to write response to peer: {e}");
     }
-
-    response.push_str(&format!("Content-Length: {}\r\n", body.len()));
-    response.push_str("Access-Control-Allow-Origin: *\r\n");
-    response.push_str("Connection: close\r\n");
-    response.push_str("\r\n");
-    response.push_str(body);
-
-    let _ = stream.write_all(response.as_bytes()).await;
-    let _ = stream.flush().await;
+    if let Err(e) = stream.flush().await {
+        tracing::debug!("Failed to flush response to peer: {e}");
+    }
 }
 
-// ── Timeout helper ───────────────────────────────────────────────────────
+/// Get a parameter value from an optional query string.
+fn query_param<'a>(query: Option<&'a str>, name: &str) -> Option<&'a str> {
+    let query = query?;
+    query.split('&').find_map(|pair| {
+        let (key, value) = pair.split_once('=')?;
+        (key == name).then_some(value)
+    })
+}
+
+fn inject_session_token(html: &str, token: &str) -> String {
+    let script = format!("<script>window.proxySessionToken=\"{token}\";</script>");
+    match html.rfind("</body>") {
+        Some(index) => format!("{}{script}{}", &html[..index], &html[index..]),
+        None => format!("{html}{script}"),
+    }
+}
 
 /// An error indicating that an operation timed out.
 #[derive(Debug)]
 struct TimeoutError;
 
 /// Races a channel receive against a duration.
-///
-/// Returns the channel value on success, or [`TimeoutError`] if the duration
-/// elapses first or the channel is closed.
 async fn race_timeout<T>(
     duration: Duration,
     recv: impl Future<Output = Result<T, channel::RecvError>>,
@@ -677,10 +819,6 @@ async fn race_timeout<T>(
     }
 }
 
-// ── Utility ──────────────────────────────────────────────────────────────
-
-/// Gets the current time in seconds since the Unix epoch (1970-01-01). If the
-/// time is before the epoch, returns 0.
 #[inline]
 fn current_time() -> u64 {
     SystemTime::now()

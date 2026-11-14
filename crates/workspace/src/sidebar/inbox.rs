@@ -173,14 +173,20 @@ impl Sidebar {
             .collect()
     }
 
-    /// The chat requests awaiting a response.
+    /// The chat requests awaiting a response, followed by the trash entry when
+    /// it holds messages that could not be decrypted.
     pub(super) fn requests_rows(&self, cx: &App) -> Vec<SidebarRow> {
-        ChatRegistry::global(cx)
-            .read(cx)
+        let chat = ChatRegistry::global(cx).read(cx);
+        let mut rows: Vec<SidebarRow> = chat
             .rooms(&RoomKind::Request, cx)
             .into_iter()
             .map(|room| SidebarRow::Room { room })
-            .collect()
+            .collect();
+
+        if chat.trashed_count(cx) > 0 {
+            rows.push(SidebarRow::Trash);
+        }
+        rows
     }
 
     /// The overlay with the create button and selection count.

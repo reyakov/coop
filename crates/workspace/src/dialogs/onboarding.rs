@@ -19,7 +19,7 @@ use gpui_kit::prelude::FluentBuilder;
 use rand::seq::IndexedRandom;
 use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
-use ui::{settings_block, settings_row};
+use ui::{experimental_tag, settings_block, settings_row, settings_row_tagged};
 
 use super::settings::{FONT_SIZE_RANGE, RADIUS_RANGE};
 
@@ -400,8 +400,9 @@ impl Render for Onboarding {
                     }),
                 cx,
             ))
-            .child(settings_row(
+            .child(settings_row_tagged(
                 "Decoupling Encryption Key",
+                experimental_tag(cx),
                 NIP4E,
                 Switch::new("onboarding-nip4e").checked(nip4e).on_click(
                     move |checked, _window, cx| {
@@ -412,8 +413,9 @@ impl Render for Onboarding {
             ));
 
         #[cfg(not(target_arch = "wasm32"))]
-        let features = features.child(settings_row(
+        let features = features.child(settings_row_tagged(
             "Wallet",
+            experimental_tag(cx),
             WALLET,
             Switch::new("onboarding-wallet")
                 .checked(AppSettings::get_wallet(cx))

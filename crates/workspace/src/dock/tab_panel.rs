@@ -209,7 +209,7 @@ impl CoopTabGroupSkin {
         group: &TabGroupContext,
         cx: &mut App,
     ) -> Option<Button> {
-        if group.is_zoomed() || !self.shared.is_toggle_button_visible() {
+        if group.is_zoomed() {
             return None;
         }
 

@@ -381,7 +381,6 @@ dependencies = [
 name = "assets"
 version = "2.0.0-alpha3"
 dependencies = [
- "anyhow",
  "gpui-kit",
  "gpui-pre",
  "rust-embed",
@@ -1448,7 +1447,6 @@ dependencies = [
  "rand 0.10.3",
  "settings",
  "smallvec",
- "smol",
  "state",
 ]
 
@@ -1463,6 +1461,7 @@ dependencies = [
  "gpui-pre",
  "instant",
  "itertools 0.13.0",
+ "log",
  "nip60_ui",
  "nostr-sdk",
  "person",
@@ -1681,6 +1680,7 @@ dependencies = [
  "nostr",
  "nostr-sdk",
  "regex",
+ "sha2 0.10.9",
  "web-sys",
 ]
 
@@ -1819,7 +1819,6 @@ dependencies = [
  "settings",
  "state",
  "tracing-subscriber",
- "ui",
  "workspace",
 ]
 
@@ -1847,7 +1846,6 @@ dependencies = [
  "settings",
  "state",
  "tracing-wasm",
- "ui",
  "universal-time 0.3.1 (git+https://github.com/shadowylab/universal-time)",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -6050,7 +6048,6 @@ dependencies = [
  "gpui-pre",
  "log",
  "nostr-sdk",
- "person",
  "serde_json",
  "smallvec",
  "state",
@@ -6117,7 +6114,6 @@ dependencies = [
  "sha2 0.10.9",
  "smallvec",
  "state",
- "tokio",
 ]
 
 [[package]]
@@ -10346,8 +10342,6 @@ dependencies = [
  "nostr-sdk",
  "person",
  "smallvec",
- "uuid",
- "web-time",
 ]
 
 [[package]]

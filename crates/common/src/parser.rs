@@ -184,20 +184,11 @@ impl Iterator for FindMatches<'_> {
     }
 }
 
-enum HandleMatch {
-    Token(Token),
-    Recursion,
-}
-
 pub struct NostrParserIter<'a> {
     /// The original text
     text: &'a str,
     /// Matches found
     matches: FindMatches<'a>,
-    /// A pending match
-    pending_match: Option<Match>,
-    /// Last match end index
-    last_match_end: usize,
 }
 
 impl<'a> NostrParserIter<'a> {
@@ -205,62 +196,65 @@ impl<'a> NostrParserIter<'a> {
         Self {
             text,
             matches: FindMatches::new(text),
-            pending_match: None,
-            last_match_end: 0,
         }
     }
 
-    fn handle_match(&mut self, mat: Match) -> HandleMatch {
-        // Update last match end
-        self.last_match_end = mat.end;
-
+    fn handle_match(&self, mat: Match) -> Option<Token> {
         // Extract the matched string
         let data: &str = &self.text[mat.start..mat.end];
 
         // Parse NIP-21 URI
         match Nip21::parse(data) {
-            Ok(uri) => HandleMatch::Token(Token {
+            Ok(uri) => Some(Token {
                 value: uri,
                 range: mat.start..mat.end,
             }),
             // If the nostr URI parsing is invalid, skip it
-            Err(_) => HandleMatch::Recursion,
+            Err(_) => None,
         }
     }
 }
 
-impl<'a> Iterator for NostrParserIter<'a> {
+impl Iterator for NostrParserIter<'_> {
     type Item = Token;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Handle a pending match
-        if let Some(pending_match) = self.pending_match.take() {
-            return match self.handle_match(pending_match) {
-                HandleMatch::Token(token) => Some(token),
-                HandleMatch::Recursion => self.next(),
-            };
-        }
+        // Iterative, not recursive: message text controls the match count
+        loop {
+            let mat = self.matches.next()?;
 
-        match self.matches.next() {
-            Some(mat) => {
-                // Skip any text before this match
-                if mat.start > self.last_match_end {
-                    // Update pending match
-                    // This will be handled at next iteration, in `handle_match` method.
-                    self.pending_match = Some(mat);
-
-                    // Skip the text before the match
-                    self.last_match_end = mat.start;
-                    return self.next();
-                }
-
-                // Handle match
-                match self.handle_match(mat) {
-                    HandleMatch::Token(token) => Some(token),
-                    HandleMatch::Recursion => self.next(),
-                }
+            if let Some(token) = self.handle_match(mat) {
+                return Some(token);
             }
-            None => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A long run of scanner matches that fail `Nip21::parse`: the count is
+    // attacker-controlled, so it must be consumed iteratively.
+    #[test]
+    fn skips_long_run_of_invalid_uris() {
+        let content = "nostr:1q".repeat(50_000);
+
+        let tokens: Vec<Token> = NostrParser::new().parse(&content).collect();
+
+        assert!(tokens.is_empty());
+    }
+
+    #[test]
+    fn yields_valid_uri_after_invalid_run() {
+        let public_key = Keys::new(SecretKey::generate()).public_key();
+        let npub = public_key.to_bech32().unwrap();
+        let content = format!("{}nostr:{npub}", "nostr:1q".repeat(50_000));
+
+        let tokens: Vec<Token> = NostrParser::new().parse(&content).collect();
+
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].range.start, 400_000);
+        assert_eq!(tokens[0].value, Nip21::Pubkey(public_key));
     }
 }

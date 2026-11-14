@@ -1,6 +1,9 @@
 use std::collections::HashSet;
+use std::rc::Rc;
 
 use anyhow::Error;
+#[cfg(not(target_arch = "wasm32"))]
+use auto_update::{AutoUpdater, UpdateDisplay};
 use chat::{ChatEvent, ChatRegistry};
 use common::DebouncedDelay;
 use gpui::prelude::FluentBuilder;
@@ -16,12 +19,13 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::ProgressCircle;
 use gpui_kit::component::{ActiveTheme, WindowExt, h_flex, v_flex};
 use instant::Duration;
+use list::RowsSignature;
 use nip29::{Group, GroupKey, GroupsEvent, GroupsRegistry};
 use nostr_sdk::prelude::*;
 use person::{Directory, PersonRegistry};
+use rows::SidebarRow;
 pub(crate) use rows::open_room;
 use search::SearchResult;
-use settings::AppSettings;
 use smallvec::{SmallVec, smallvec};
 use state::{FIND_DELAY, NostrRegistry, StateEvent};
 use ui::title_bar_drag_handlers;
@@ -44,7 +48,6 @@ pub struct Sidebar {
     dock: WeakEntity<DockArea>,
     /// Random background shown behind the signed-out screen.
     banner: SharedString,
-
     /// The group whose information the sidebar is browsing, if any.
     group: Option<WeakEntity<Group>>,
     /// Whether the sidebar is showing the group's information instead of its list.
@@ -53,14 +56,12 @@ pub struct Sidebar {
     admins_open: bool,
     /// Whether the group view's members section is expanded.
     members_open: bool,
-
     /// Whether the main list's pinned section is expanded.
     pins_open: bool,
     /// Whether the user expanded or collapsed the main list's groups section.
     groups_open: Option<bool>,
     /// Same as `groups_open` for the chats section.
     chats_open: Option<bool>,
-
     /// Whether the main list is showing contacts to start a chat with.
     contacts_open: bool,
     /// The signed-in user's contacts, loaded when the contact picker opens.
@@ -69,11 +70,9 @@ pub struct Sidebar {
     directory: Entity<Directory>,
     /// Contacts selected in the contact picker.
     selected_contacts: HashSet<PublicKey>,
-
     /// Whether the main list is showing chat requests instead of chats and groups.
     requests_open: bool,
     new_requests: bool,
-
     /// Whether the search bar is shown below the header.
     search_open: bool,
     /// Whether searches also cover global (relay) profiles.
@@ -90,12 +89,19 @@ pub struct Sidebar {
     global_results: Option<Vec<PublicKey>>,
     /// The async global profile search.
     global_task: Option<Task<()>>,
-
     /// Simulated gift wrap processing progress, shown while the backlog loads
     chat_progress: f32,
     /// Simulated web of trust sync progress
     sync_progress: f32,
-
+    /// Cached main list rows; rebuilt only when invalidation is signaled
+    rows: Rc<Vec<SidebarRow>>,
+    /// Snapshot of the cached rows' inputs, compared on every render
+    rows_signature: RowsSignature,
+    /// Whether the rows changed through a source the snapshot cannot see
+    rows_dirty: bool,
+    /// The updater facts the header renders, mirrored so updater churn cannot invalidate the cached sidebar
+    #[cfg(not(target_arch = "wasm32"))]
+    updater_display: Entity<Option<UpdateDisplay>>,
     tasks: SmallVec<[Task<Result<(), Error>>; 1]>,
     _subscriptions: SmallVec<[Subscription; 4]>,
 }
@@ -105,7 +111,6 @@ impl Sidebar {
         let chat = ChatRegistry::global(cx);
         let groups = GroupsRegistry::global(cx);
         let nostr = NostrRegistry::global(cx);
-        let settings = AppSettings::global(cx);
         let directory = Directory::new(cx);
 
         let find_input = cx.new(|cx| {
@@ -122,10 +127,12 @@ impl Sidebar {
                 match event {
                     ChatEvent::Ping => {
                         this.new_requests = true;
+                        this.rows_dirty = true;
                         cx.notify();
                     }
                     ChatEvent::Loaded => {
                         this.chat_progress = 0.0;
+                        this.rows_dirty = true;
                         cx.notify();
                     }
                     _ => {}
@@ -134,9 +141,10 @@ impl Sidebar {
         );
 
         subscriptions.push(
-            cx.subscribe_in(&groups, window, |_this, _, event, window, cx| {
+            cx.subscribe_in(&groups, window, |this, _, event, window, cx| {
                 match event {
                     GroupsEvent::Updated => {
+                        this.rows_dirty = true;
                         // TODO: we must not trigger re-render directly like this
                         cx.notify();
                     }
@@ -149,10 +157,23 @@ impl Sidebar {
                     } => {
                         window.push_notification(Notification::warning(warning.clone()), cx);
                     }
+                    // New groups can arrive without `Updated` and without a
+                    // registry notify, so only the event itself can dirty the cache
+                    GroupsEvent::Synced | GroupsEvent::Created { .. } => {
+                        this.rows_dirty = true;
+                    }
                     _ => {}
                 };
             }),
         );
+
+        subscriptions.push(cx.observe(&chat, |this, _, _| {
+            this.rows_dirty = true;
+        }));
+
+        subscriptions.push(cx.observe(&groups, |this, _, _| {
+            this.rows_dirty = true;
+        }));
 
         subscriptions.push(
             cx.subscribe_in(
@@ -209,10 +230,23 @@ impl Sidebar {
             },
         ));
 
-        // The user header reads settings and the tracked profiles on render, so
-        // the encryption button reacts to toggles and announcement arrivals
-        subscriptions.push(cx.observe(&settings, |_, _, cx| cx.notify()));
-        subscriptions.push(cx.observe(&directory, |_, _, cx| cx.notify()));
+        #[cfg(not(target_arch = "wasm32"))]
+        let updater_display =
+            cx.new(|cx| AutoUpdater::try_global(cx).map(|updater| updater.read(cx).display()));
+
+        // Mirror only the header's rendered facts; updater churn must not invalidate the whole cached sidebar
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(updater) = AutoUpdater::try_global(cx) {
+            subscriptions.push(cx.observe(&updater, |this, updater, cx| {
+                let display = updater.read(cx).display();
+                this.updater_display.update(cx, |state, cx| {
+                    if state.as_ref() != Some(&display) {
+                        *state = Some(display);
+                        cx.notify();
+                    }
+                });
+            }));
+        }
 
         tasks.push(cx.spawn(async move |this, cx| {
             let timer = Duration::from_millis(PROGRESS_TICK_MS);
@@ -251,6 +285,11 @@ impl Sidebar {
             global_task: None,
             chat_progress: 0.0,
             sync_progress: 0.0,
+            rows: Rc::default(),
+            rows_signature: RowsSignature::default(),
+            rows_dirty: true,
+            #[cfg(not(target_arch = "wasm32"))]
+            updater_display,
             tasks,
             _subscriptions: subscriptions,
         }

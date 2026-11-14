@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Error, anyhow};
 use common::emojis_from_tags;
@@ -64,7 +64,7 @@ enum Dispatch {
 #[derive(Debug)]
 pub struct PersonRegistry {
     /// Public keys with a metadata request in flight
-    in_flight: RwLock<HashSet<PublicKey>>,
+    in_flight: Arc<RwLock<HashSet<PublicKey>>>,
     /// Web of trust graph of the signed-in user
     wot: Entity<WebOfTrust>,
     sender: flume::Sender<PublicKey>,
@@ -102,8 +102,12 @@ impl PersonRegistry {
 
         let client3 = client.clone();
         let executor = cx.background_executor().clone();
+
+        let in_flight = Arc::new(RwLock::new(HashSet::new()));
+        let in_flight_requests = Arc::clone(&in_flight);
+
         tasks.push(cx.background_spawn(async move {
-            Self::handle_requests(&client3, &metadata_rx, executor).await;
+            Self::handle_requests(&client3, &metadata_rx, executor, &in_flight_requests).await;
         }));
 
         tasks.push(cx.spawn(async move |this, cx| {
@@ -140,7 +144,7 @@ impl PersonRegistry {
         });
 
         Self {
-            in_flight: RwLock::new(HashSet::new()),
+            in_flight,
             wot,
             sender: metadata_tx,
             tasks,
@@ -205,6 +209,7 @@ impl PersonRegistry {
         client: &Client,
         rx: &flume::Receiver<PublicKey>,
         executor: BackgroundExecutor,
+        in_flight: &RwLock<HashSet<PublicKey>>,
     ) {
         let mut batch: HashSet<PublicKey> = HashSet::new();
 
@@ -216,31 +221,41 @@ impl PersonRegistry {
                 result = rx.recv_async().fuse() => match result {
                     Ok(public_key) => public_key,
                     Err(_) => {
-                        if !batch.is_empty()
-                            && let Err(e) = get_metadata(client, std::mem::take(&mut batch)).await
-                        {
-                            log::warn!("Failed to get metadata batch: {e}");
-                        }
+                        Self::flush_batch(client, &mut batch, in_flight).await;
                         return;
                     }
                 },
                 () = timer => {
-                    if !batch.is_empty()
-                        && let Err(e) = get_metadata(client, std::mem::take(&mut batch)).await
-                    {
-                        log::warn!("Failed to get metadata batch: {e}");
-                    }
+                    Self::flush_batch(client, &mut batch, in_flight).await;
                     continue;
                 }
             };
 
             batch.insert(request);
             // Process the batch if it's full
-            if batch.len() >= 20
-                && let Err(e) = get_metadata(client, std::mem::take(&mut batch)).await
-            {
-                log::warn!("Failed to get metadata batch: {e}");
+            if batch.len() >= 20 {
+                Self::flush_batch(client, &mut batch, in_flight).await;
             }
+        }
+    }
+
+    /// Send one metadata request for the batch, releasing its keys for retry on failure
+    async fn flush_batch(
+        client: &Client,
+        batch: &mut HashSet<PublicKey>,
+        in_flight: &RwLock<HashSet<PublicKey>>,
+    ) {
+        let batch = std::mem::take(batch);
+        if batch.is_empty() {
+            return;
+        }
+
+        if let Err(error) = get_metadata(client, batch.iter().cloned()).await {
+            Self::release_keys(in_flight, batch.iter().cloned());
+            log::warn!(
+                "Failed to get metadata for {} public keys, released for retry: {error}",
+                batch.len()
+            );
         }
     }
 
@@ -334,11 +349,21 @@ impl PersonRegistry {
 
     /// Allow future fetches for a key once its metadata has arrived
     fn release_in_flight(&self, public_key: &PublicKey) {
-        let mut in_flight = match self.in_flight.write() {
+        Self::release_keys(&self.in_flight, [*public_key]);
+    }
+
+    /// Remove the given keys from the in-flight set
+    fn release_keys(
+        in_flight: &RwLock<HashSet<PublicKey>>,
+        keys: impl IntoIterator<Item = PublicKey>,
+    ) {
+        let mut in_flight = match in_flight.write() {
             Ok(in_flight) => in_flight,
             Err(poisoned) => poisoned.into_inner(),
         };
-        in_flight.remove(public_key);
+        for public_key in keys {
+            in_flight.remove(&public_key);
+        }
     }
 }
 

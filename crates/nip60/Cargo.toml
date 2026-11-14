@@ -20,7 +20,6 @@ serde_json.workspace = true
 futures.workspace = true
 hkdf.workspace = true
 sha2.workspace = true
-tokio = { version = "1", default-features = false, features = [ "rt" ] }
 
 cdk.workspace = true
 cdk-redb.workspace = true

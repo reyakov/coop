@@ -396,10 +396,21 @@ impl ChatRegistry {
                 }
 
                 if !errors.is_empty() {
+                    let mut newly_trashed = 0;
+
                     trash.update(cx, |trash, cx| {
-                        trash.extend(errors);
+                        newly_trashed = errors
+                            .iter()
+                            .filter(|message| trash.insert((*message).clone()))
+                            .count();
                         cx.notify();
                     })?;
+
+                    if newly_trashed > 0 {
+                        this.update(cx, |_, cx| {
+                            cx.emit(ChatEvent::Ping);
+                        })?;
+                    }
                 }
 
                 if eose && tracking.swap(false, Ordering::AcqRel) {
@@ -539,7 +550,7 @@ impl ChatRegistry {
     }
 
     /// Retry unwrapping trashed gift wraps with the newly available encryption key.
-    fn reprocess_trash(&mut self, cx: &mut Context<Self>) {
+    pub fn reprocess_trash(&mut self, cx: &mut Context<Self>) {
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
@@ -613,6 +624,32 @@ impl ChatRegistry {
             .iter()
             .filter(|room| &room.read(cx).kind == filter)
             .count()
+    }
+
+    /// How many messages are waiting in the trash.
+    pub fn trashed_count(&self, cx: &App) -> usize {
+        self.trash.read(cx).len()
+    }
+
+    /// The messages that could not be decrypted, newest first.
+    pub fn trashed(&self, cx: &App) -> Vec<TrashedMessage> {
+        let mut messages: Vec<TrashedMessage> = self
+            .trash
+            .read(cx)
+            .iter()
+            .filter_map(|message| {
+                let event = Event::from_json(message.raw_event.as_str()).ok()?;
+
+                Some(TrashedMessage {
+                    id: event.id,
+                    created_at: event.created_at,
+                    reason: message.reason.clone(),
+                })
+            })
+            .collect();
+
+        messages.sort_by_key(|message| std::cmp::Reverse(message.created_at));
+        messages
     }
 
     /// Get the relays that have seen a given rumor id.
@@ -837,8 +874,9 @@ impl ChatRegistry {
                 .custom_tags(SingleLetterTag::LOWERCASE_K, ["7", "14", "15"]);
 
             let events = client.database().query(filter).await?;
-            let mut grouped: HashMap<u64, Vec<UnsignedEvent>> = HashMap::new();
 
+            let mut grouped: HashMap<u64, Vec<UnsignedEvent>> = HashMap::new();
+            let mut stale: Vec<(EventId, UnsignedEvent)> = Vec::new();
             // Keep the single-threaded web event loop responsive during large rescans
             let mut last_yield = Instant::now();
 
@@ -852,12 +890,38 @@ impl ChatRegistry {
                     && rumor.tags.public_keys().next().is_some()
                 {
                     search.write().unwrap().insert(&rumor);
+
                     if rumor.pubkey != public_key
                         && !rumor.tags.public_keys().any(|k| k == public_key)
                     {
                         continue;
                     }
+
+                    let room_id = rumor.uniq_id().to_string();
+                    let stored_room = raw
+                        .tags
+                        .iter()
+                        .find(|tag| tag.kind() == "r")
+                        .and_then(|tag| tag.content());
+
+                    if stored_room.is_none_or(|stored| stored != room_id)
+                        && let Some(gift_wrap) = raw
+                            .tags
+                            .iter()
+                            .find(|tag| tag.kind() == "d")
+                            .and_then(|tag| tag.content())
+                            .and_then(|value| EventId::from_hex(value).ok())
+                    {
+                        stale.push((gift_wrap, rumor.clone()));
+                    }
+
                     grouped.entry(rumor.uniq_id()).or_default().push(rumor);
+                }
+            }
+
+            for (gift_wrap, rumor) in stale {
+                if let Err(error) = set_rumor(&client, gift_wrap, &rumor).await {
+                    log::warn!("Failed to re-tag a cached message: {error:#}");
                 }
             }
 

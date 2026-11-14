@@ -22,7 +22,6 @@ use super::tab_panel::CoopTabGroupSkin;
 /// State the skin shares with its per-container renderers.
 pub(crate) struct SkinShared {
     area: WeakEntity<DockArea>,
-    toggle_button_visible: Cell<bool>,
     /// The dock whose resize handle is being dragged, if any. Only one can be.
     resizing_dock: Cell<Option<DockPlacement>>,
 }
@@ -30,10 +29,6 @@ pub(crate) struct SkinShared {
 impl SkinShared {
     pub(crate) fn area(&self) -> &WeakEntity<DockArea> {
         &self.area
-    }
-
-    pub(crate) fn is_toggle_button_visible(&self) -> bool {
-        self.toggle_button_visible.get()
     }
 
     pub(crate) fn resizing_dock(&self) -> &Cell<Option<DockPlacement>> {
@@ -52,7 +47,6 @@ impl CoopDockSkin {
         Rc::new(Self {
             shared: Rc::new(SkinShared {
                 area: cx.weak_entity(),
-                toggle_button_visible: Cell::new(true),
                 resizing_dock: Cell::new(None),
             }),
         })

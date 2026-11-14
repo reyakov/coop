@@ -1065,7 +1065,8 @@ impl GroupPanel {
                         cx,
                     )
                 })
-                .element(ix.into(), window, cx),
+                // Key by event id: parse state is kept per element id and indices shift on prepend
+                .element(SharedString::from(message.id.to_hex()).into(), window, cx),
         };
 
         let admin = nostr
@@ -1077,7 +1078,6 @@ impl GroupPanel {
         let pinned = group.pins().pins().contains(&Pin::Event(message.id));
 
         message::render(
-            ix,
             message,
             content,
             show_author,

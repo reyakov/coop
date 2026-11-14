@@ -1,7 +1,7 @@
 use std::ops::Range;
 use std::rc::Rc;
 
-use ::nip60::{HistoryEntry, WalletEvent, WalletRegistry};
+use ::nip60::{HistoryEntry, MintQuoteEntry, WalletEvent, WalletRegistry};
 use common::TimestampExt;
 use gpui::prelude::FluentBuilder;
 use gpui::{
@@ -13,6 +13,7 @@ use gpui::{
 use gpui_kit::assets::IconName;
 use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
+use gpui_kit::component::clipboard::Clipboard;
 use gpui_kit::component::dock::{Panel, PanelEvent};
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::notification::Notification;
@@ -51,7 +52,6 @@ impl WalletPanel {
                 WalletEvent::Error(error) => {
                     window.push_notification(Notification::error(error.clone()), cx);
                 }
-                WalletEvent::TokenCreated(_) => {}
             },
         ));
 
@@ -106,6 +106,111 @@ impl WalletPanel {
                         .on_click(|_, window, cx| open_receive_dialog(window, cx)),
                 ),
         )
+    }
+
+    fn render_quotes(&self, quotes: Vec<MintQuoteEntry>, cx: &Context<Self>) -> Option<AnyElement> {
+        if quotes.is_empty() {
+            return None;
+        }
+
+        Some(
+            v_flex()
+                .gap_2()
+                .child(
+                    div()
+                        .text_xs()
+                        .font_semibold()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Pending invoices"),
+                )
+                .children(
+                    quotes
+                        .iter()
+                        .map(|quote| self.render_quote_entry(quote, cx)),
+                )
+                .into_any_element(),
+        )
+    }
+
+    fn render_quote_entry(&self, quote: &MintQuoteEntry, cx: &Context<Self>) -> impl IntoElement {
+        let wallet = WalletRegistry::global(cx);
+        let quote_id = quote.quote_id.clone();
+
+        v_flex()
+            .gap_1()
+            .w_full()
+            .child(
+                h_flex()
+                    .justify_between()
+                    .gap_2()
+                    .child(
+                        h_flex()
+                            .gap_2()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .flex_shrink_0()
+                                    .text_color(cx.theme().success)
+                                    .child(SharedString::from(format!("{} sats", quote.amount))),
+                            )
+                            .child(
+                                div()
+                                    .truncate()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(SharedString::from(quote.mint.to_string())),
+                            ),
+                    )
+                    .child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .gap_1()
+                            .child(
+                                Button::new(format!("mint-quote-check-{quote_id}"))
+                                    .label("Check")
+                                    .tooltip("Check payment and claim")
+                                    .ghost()
+                                    .small()
+                                    .on_click({
+                                        let wallet = wallet.clone();
+                                        let quote_id = quote_id.clone();
+                                        move |_, _, cx| {
+                                            wallet.update(cx, |registry, cx| {
+                                                registry.claim_mint_quote(quote_id.clone(), cx)
+                                            });
+                                        }
+                                    }),
+                            )
+                            .child(
+                                Clipboard::new(format!("mint-quote-copy-{quote_id}"))
+                                    .value(quote.request.clone())
+                                    .tooltip("Copy invoice")
+                                    .small(),
+                            )
+                            .child(
+                                Button::new(format!("mint-quote-dismiss-{quote_id}"))
+                                    .icon(IconName::Close)
+                                    .tooltip("Dismiss")
+                                    .ghost()
+                                    .small()
+                                    .on_click({
+                                        let wallet = wallet.clone();
+                                        move |_, _, cx| {
+                                            wallet.update(cx, |registry, cx| {
+                                                registry.dismiss_mint_quote(quote_id.clone(), cx)
+                                            });
+                                        }
+                                    }),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis_middle()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(SharedString::from(quote.request.clone())),
+            )
     }
 
     fn render_history(
@@ -748,6 +853,7 @@ impl Panel for WalletPanel {
                     .text_color(cx.theme().muted_foreground),
             )
             .child(self.name.clone())
+            .child(ui::experimental_tag(cx))
             .into_any_element()
     }
 }
@@ -762,7 +868,9 @@ impl Focusable for WalletPanel {
 
 impl Render for WalletPanel {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let history = WalletRegistry::global(cx).read(cx).history().to_vec();
+        let wallet = WalletRegistry::global(cx);
+        let history = wallet.read(cx).history().to_vec();
+        let quotes = wallet.read(cx).mint_quotes().to_vec();
 
         v_flex()
             .size_full()
@@ -771,6 +879,7 @@ impl Render for WalletPanel {
             .text_xs()
             .child(self.render_balance(cx))
             .child(self.render_actions())
+            .children(self.render_quotes(quotes, cx))
             .child(
                 v_flex()
                     .gap_2()

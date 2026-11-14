@@ -83,6 +83,8 @@ pub struct DeviceRegistry {
     resync: Arc<AtomicBool>,
     /// Whether a key rotation is in flight, to coalesce overlapping requests
     rotating: bool,
+    /// Whether a key approval is in flight, to guard against a double click
+    approving: bool,
     /// Person directory for requesters shown in the approval dialog
     directory: Entity<Directory>,
     /// Relay notification listener
@@ -155,6 +157,7 @@ impl DeviceRegistry {
             announcement_existed: Arc::new(AtomicBool::new(false)),
             resync: Arc::new(AtomicBool::new(false)),
             rotating: false,
+            approving: false,
             directory: Directory::new(cx),
             notification_listener: None,
             tasks: vec![],
@@ -186,22 +189,31 @@ impl DeviceRegistry {
                         continue;
                     }
 
-                    match event.kind {
-                        Kind::Custom(10044) if current_user == Some(event.pubkey) => {
-                            announcement_existed.store(true, Ordering::Relaxed);
-                            tx.send_async(event.into_owned()).await?;
-                        }
-                        Kind::Custom(4454) if current_user == Some(event.pubkey) => {
-                            tx.send_async(event.into_owned()).await?;
-                        }
-                        Kind::Custom(4455) if current_user == Some(event.pubkey) => {
-                            tx.send_async(event.into_owned()).await?;
-                        }
-                        _ => {}
+                    let relevant = matches!(
+                        event.kind,
+                        Kind::Custom(10044) | Kind::Custom(4454) | Kind::Custom(4455)
+                    ) && current_user == Some(event.pubkey);
+
+                    if !relevant {
+                        continue;
+                    }
+
+                    if event.kind == Kind::Custom(10044) {
+                        announcement_existed.store(true, Ordering::Relaxed);
+                    }
+
+                    let event_id = event.id;
+                    // Dropping keeps the listener alive when the consumer is gone;
+                    // missed 4e events are re-synced on the next signer change
+                    if let Err(error) = tx.send_async(event.into_owned()).await {
+                        log::error!("Dropping device key event {event_id}: {error}");
                     }
                 }
             }
 
+            // The stream only ends without being replaced when the relay source is
+            // gone, after which no 4e event is processed anymore
+            log::error!("Device key notification listener stopped");
             Ok(())
         }));
 
@@ -399,10 +411,16 @@ impl DeviceRegistry {
 
         self.tasks.push(cx.spawn(async move |this, cx| {
             let result: Result<Keys, Error> = async {
-                // Archive the current key before replacing it
-                if let Ok(old) = get_keys(&client, &signer).await {
-                    archive_key(&client, &signer, &old.secret_key().to_secret_hex()).await?;
-                }
+                // Archive the current key before replacing it; a failed load or
+                // archive aborts the rotation so the old key is never overwritten
+                // without a record
+                let old = get_keys(&client, &signer)
+                    .await
+                    .context("Failed to load the current encryption key before rotation")?;
+
+                archive_key(&client, &signer, &old.secret_key().to_secret_hex())
+                    .await
+                    .context("Failed to archive the current encryption key")?;
 
                 let created = this
                     .update(cx, |this, cx| this.create_encryption(Keys::generate(), cx))?
@@ -772,11 +790,20 @@ impl DeviceRegistry {
 
     /// Approve requests for device keys from other devices
     fn approve(&mut self, event: &Event, window: &mut Window, cx: &mut Context<Self>) {
+        // An approval already in flight must not send the device secret twice;
+        // the toast's disabled state only applies after its next re-render
+        if self.approving {
+            return;
+        }
+        self.approving = true;
+        cx.notify();
+
+        let approved_id = event.id;
+        let event = event.clone();
+
         let nostr = NostrRegistry::global(cx);
         let client = nostr.read(cx).client();
         let signer = nostr.read(cx).signer();
-
-        let event = event.clone();
 
         let task: Task<Result<(), Error>> = cx.background_spawn(async move {
             // Get device keys
@@ -834,17 +861,41 @@ impl DeviceRegistry {
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
             match task.await {
                 Ok(_) => {
-                    this.update(cx, |this, cx| {
-                        this.pending_request = None;
+                    let superseded = this.update(cx, |this, cx| {
+                        this.approving = false;
                         cx.notify();
+                        // Keep a newer request's pending state and toast
+                        if this
+                            .pending_request
+                            .as_ref()
+                            .is_some_and(|pending| pending.event.id == approved_id)
+                        {
+                            this.pending_request = None;
+                            false
+                        } else {
+                            true
+                        }
                     })?;
 
-                    cx.update(|window, cx| {
-                        window.remove_notification::<DeviceNotification>(cx);
-                    })
-                    .ok();
+                    if !superseded {
+                        cx.update(|window, cx| {
+                            window.remove_notification::<DeviceNotification>(cx);
+                        })
+                        .ok();
+                    }
                 }
                 Err(e) => {
+                    this.update(cx, |this, cx| {
+                        this.approving = false;
+                        cx.notify();
+
+                        // Pushing a fresh toast replaces the wedged one whose
+                        // button stays disabled
+                        if let Some(pending) = this.pending_request.take() {
+                            this.show_approval(pending.event, pending.client_key, cx);
+                        }
+                    })?;
+
                     cx.update(|window, cx| {
                         window.push_notification(
                             Notification::error(e.to_string()).autohide(false),
@@ -1032,9 +1083,10 @@ impl DeviceRegistry {
                     .on_click({
                         let loading = Rc::clone(&loading);
                         move |_ev, window, cx| {
-                            // Set loading state to true
                             loading.set(true);
-                            // Process to approve the request
+                            // The toast caches its render, so force a redraw
+                            // to disable the button while the approval is in flight
+                            window.refresh();
                             view.update(cx, |this, cx| {
                                 this.approve(&event, window, cx);
                             })

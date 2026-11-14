@@ -223,6 +223,11 @@ impl Global for GlobalAppSettings {}
 pub struct AppSettings {
     /// Settings
     inner: Entity<Settings>,
+    /// The pending save task, so writes to the settings file complete in order
+    #[cfg(not(target_arch = "wasm32"))]
+    save_task: Option<Task<()>>,
+    /// Set after a failed load so its own save cannot overwrite the file with defaults
+    suppress_next_save: bool,
     /// Event subscriptions
     _subscriptions: SmallVec<[Subscription; 2]>,
 }
@@ -315,11 +320,16 @@ impl AppSettings {
 
         // Run at the end of current cycle
         cx.defer(move |cx| {
-            entity.update(cx, |this, cx| this.load(cx)).ok();
+            if let Err(error) = entity.update(cx, |this, cx| this.load(cx)) {
+                log::error!("failed to load settings: {error:#}");
+            }
         });
 
         Self {
             inner,
+            #[cfg(not(target_arch = "wasm32"))]
+            save_task: None,
+            suppress_next_save: false,
             _subscriptions: subscriptions,
         }
     }
@@ -381,27 +391,46 @@ impl AppSettings {
 
     /// Load settings
     fn load(&mut self, cx: &mut Context<Self>) {
-        let task: Task<Result<Settings, Error>> = cx.background_spawn(async move {
+        let task: Task<Result<Option<Settings>, Error>> = cx.background_spawn(async move {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let path = config_dir().join(".settings");
-                if let Ok(content) = smol::fs::read_to_string(&path).await {
-                    return Ok(serde_json::from_str(&content)?);
+                match smol::fs::read_to_string(&path).await {
+                    Ok(content) => {
+                        let settings: Settings =
+                            serde_json::from_str(&content).map_err(|error| {
+                                anyhow!("failed to parse {}: {error}", path.display())
+                            })?;
+                        return Ok(Some(settings));
+                    }
+                    // No settings file yet on a fresh install, so keep the defaults
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(anyhow!("failed to read {}: {error}", path.display()));
+                    }
                 }
             }
 
             #[cfg(target_arch = "wasm32")]
             {
                 if let Some(content) = common::web_store::get(SETTINGS_KEY)? {
-                    return Ok(serde_json::from_str(&content)?);
+                    let settings: Settings = serde_json::from_str(&content)
+                        .map_err(|error| anyhow!("failed to parse saved settings: {error}"))?;
+                    return Ok(Some(settings));
                 }
             }
 
-            Err(anyhow!("Not found"))
+            Ok(None)
         });
 
         cx.spawn(async move |this, cx| {
-            let mut settings = task.await.unwrap_or(Settings::default());
+            let (mut settings, load_failed) = match task.await {
+                Ok(settings) => (settings.unwrap_or_default(), false),
+                Err(error) => {
+                    log::error!("failed to load settings, keeping defaults: {error:#}");
+                    (Settings::default(), true)
+                }
+            };
 
             // Move settings still pointed at the old default file server over to the new one
             if settings.file_server.host_str() == Some(LEGACY_FILE_SERVER) {
@@ -409,31 +438,63 @@ impl AppSettings {
             }
 
             // Update settings
-            this.update(cx, |this, cx| {
+            if let Err(error) = this.update(cx, |this, cx| {
+                // A failed load must not trigger the save that would overwrite the file
+                this.suppress_next_save = load_failed;
                 this.set_settings(settings, cx);
                 this.apply_theme(cx);
                 cx.refresh_windows();
-            })
-            .ok();
+            }) {
+                log::error!("failed to apply loaded settings: {error:#}");
+            }
         })
         .detach();
     }
 
     /// Save settings
     pub fn save(&mut self, cx: &mut Context<Self>) {
-        let settings = self.inner.read(cx);
-        if let Ok(content) = serde_json::to_string(&settings) {
-            #[cfg(not(target_arch = "wasm32"))]
-            cx.background_spawn(async move {
-                let path = config_dir().join(".settings");
-                smol::fs::write(&path, content).await.ok();
-            })
-            .detach();
+        // Consume the failed-load suppression, so the next user change saves again
+        if self.suppress_next_save {
+            self.suppress_next_save = false;
+            return;
+        }
 
-            #[cfg(target_arch = "wasm32")]
-            if let Err(e) = common::web_store::set(SETTINGS_KEY, &content) {
-                log::warn!("failed to persist settings: {e}");
+        let settings = self.inner.read(cx);
+        let content = match serde_json::to_string(settings) {
+            Ok(content) => content,
+            Err(error) => {
+                log::error!("failed to serialize settings: {error:#}");
+                return;
             }
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let previous_task = self.save_task.take();
+            self.save_task = Some(cx.background_spawn(async move {
+                // Await the previous write, so saves to the file complete in order
+                if let Some(previous_task) = previous_task {
+                    previous_task.await;
+                }
+
+                let path = config_dir().join(".settings");
+                let temporary_path = config_dir().join(".settings.tmp");
+
+                let result: std::io::Result<()> = async {
+                    smol::fs::write(&temporary_path, &content).await?;
+                    smol::fs::rename(&temporary_path, &path).await
+                }
+                .await;
+
+                if let Err(error) = result {
+                    log::error!("failed to save settings to {}: {error}", path.display());
+                }
+            }));
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        if let Err(error) = common::web_store::set(SETTINGS_KEY, &content) {
+            log::error!("failed to persist settings: {error:#}");
         }
     }
 

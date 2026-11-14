@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, LazyLock, RwLock};
 use std::time::Duration;
@@ -56,6 +57,7 @@ static CUSTOM_EMOJI_RE: LazyLock<Regex> =
 
 mod actions;
 mod file;
+pub mod trash;
 
 pub fn init(room: WeakEntity<Room>, window: &mut Window, cx: &mut App) -> Entity<ChatPanel> {
     cx.new(|cx| ChatPanel::new(room, window, cx))
@@ -144,7 +146,6 @@ impl ChatPanel {
             })
             .unwrap_or(("Unknown".into(), "Message...".into()));
 
-        // Define input state
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder(format!("Message {}", name))
@@ -152,7 +153,6 @@ impl ChatPanel {
                 .clean_on_escape()
         });
 
-        // Define dictation state
         let speech = cx.new(|cx| {
             let state = SpeechState::new(cx)
                 .recognizer(speech::recognizer())
@@ -165,11 +165,9 @@ impl ChatPanel {
             state
         });
 
-        // Define subject input state
         let subject_input = cx.new(|cx| InputState::new(window, cx).placeholder("New subject..."));
         let subject_bar = cx.new(|_cx| false);
 
-        // Define subscriptions
         let mut subscriptions = smallvec![];
 
         subscriptions.push(
@@ -218,9 +216,8 @@ impl ChatPanel {
             }),
         );
 
-        // Define all functions that will run after the current cycle
         cx.defer_in(window, |this, window, cx| {
-            this.connect(cx);
+            this.connect(window, cx);
             this.subscribe_room_events(window, cx);
             this.get_messages(window, cx);
         });
@@ -269,11 +266,24 @@ impl ChatPanel {
     }
 
     /// Get messaging relays and announcement for each member
-    fn connect(&mut self, cx: &mut Context<Self>) {
-        if let Some(room) = self.room.upgrade() {
-            let task = room.read(cx).connect(cx);
-            self.tasks.push(task);
-        }
+    fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(room) = self.room.upgrade() else {
+            return;
+        };
+
+        let connect = room.read(cx).connect(cx);
+
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            if let Err(error) = connect.await {
+                log::error!("Connecting room relays failed: {error}");
+
+                this.update_in(cx, |this, window, cx| {
+                    this.notify_failure("Connection failed", error, window, cx);
+                })?;
+            }
+
+            Ok(())
+        }));
     }
 
     /// Subscribe to room events
@@ -317,21 +327,38 @@ impl ChatPanel {
     }
 
     /// Load all messages belonging to this room
-    fn get_messages(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+    fn get_messages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Ok(get_messages) = self.room.read_with(cx, |this, cx| this.get_messages(cx)) else {
             return;
         };
 
-        self.tasks.push(cx.spawn(async move |this, cx| {
-            let events = get_messages.await?;
-
-            // Update message list
-            this.update(cx, |this, cx| {
-                this.insert_messages(&events, cx);
-            })?;
+        self.tasks.push(cx.spawn_in(window, async move |this, cx| {
+            match get_messages.await {
+                Ok(events) => {
+                    this.update(cx, |this, cx| {
+                        this.insert_messages(&events, cx);
+                    })?;
+                }
+                Err(error) => {
+                    log::error!("Loading room messages failed: {error}");
+                    this.update_in(cx, |this, window, cx| {
+                        this.notify_failure("Failed to load messages", error, window, cx);
+                    })?;
+                }
+            }
 
             Ok(())
         }));
+    }
+
+    /// Show a failure of a background operation to the user until dismissed
+    fn notify_failure(&self, title: &'static str, error: Error, window: &mut Window, cx: &mut App) {
+        window.push_notification(
+            Notification::error(error.to_string())
+                .title(title)
+                .autohide(false),
+            cx,
+        );
     }
 
     /// Get user input content and merged all attachments if available
@@ -566,8 +593,9 @@ impl ChatPanel {
             for (i, message) in self.messages.iter().enumerate().skip(pos) {
                 self.message_index.insert(message.id, i);
             }
-            let len = self.list_state.item_count();
-            self.list_state.splice(len..len, 1);
+            // The welcome row occupies row zero, so message rows sit one ahead
+            let row = pos + 1;
+            self.list_state.splice(row..row, 1);
 
             if scroll {
                 self.list_state.scroll_to(ListOffset {
@@ -582,13 +610,62 @@ impl ChatPanel {
 
     /// Convert and insert a vector of nostr events into the chat panel
     fn insert_messages(&mut self, events: &[UnsignedEvent], cx: &mut Context<Self>) {
+        let mut incoming: Vec<Message> = Vec::with_capacity(events.len());
+
         for event in events.iter() {
             if event.kind == Kind::Reaction {
                 self.insert_reaction(event, cx);
+            } else {
+                incoming.push(event.into());
+            }
+        }
+
+        incoming.sort();
+
+        let old_len = self.messages.len();
+        let mut stored = std::mem::take(&mut self.messages).into_iter().peekable();
+        let mut merged: Vec<Message> = Vec::with_capacity(old_len + incoming.len());
+        let mut insert_start = None;
+        let mut inserted = 0usize;
+
+        for message in incoming {
+            while let Some(old) = stored.next_if(|old| old.cmp(&message) == Ordering::Less) {
+                merged.push(old);
+            }
+
+            let duplicate = stored
+                .peek()
+                .is_some_and(|old| old.cmp(&message) == Ordering::Equal)
+                || merged
+                    .last()
+                    .is_some_and(|last| last.cmp(&message) == Ordering::Equal);
+
+            if duplicate {
                 continue;
             }
-            // Bulk inserting messages, so no need to scroll to the latest message
-            self.insert_message(event, false, cx);
+
+            if inserted == 0 {
+                insert_start = Some(merged.len());
+            }
+            inserted += 1;
+            merged.push(message);
+        }
+
+        merged.extend(stored);
+
+        self.messages = merged;
+
+        if let Some(start) = insert_start {
+            self.message_index = self
+                .messages
+                .iter()
+                .enumerate()
+                .map(|(index, message)| (message.id, index))
+                .collect();
+
+            let row = start + 1;
+            self.list_state.splice(row..row, inserted);
+            cx.notify();
         }
     }
 
@@ -598,16 +675,23 @@ impl ChatPanel {
             return;
         }
 
+        let content = SharedString::from(&event.content);
         let emojis = emojis_from_tags(&event.tags);
+
         let image = Message::reaction_image(&event.content, &emojis)
             .map(|url| SharedUri::from(url.to_string()));
 
         for id in event.tags.event_ids() {
-            self.reactions.entry(id).or_default().push((
-                SharedString::from(&event.content),
-                image.clone(),
-                event.pubkey,
-            ));
+            let entries = self.reactions.entry(id).or_default();
+            // NIP-25: a newer reaction by the same author replaces their previous one
+            if let Some(existing) = entries
+                .iter_mut()
+                .find(|(_, _, author)| *author == event.pubkey)
+            {
+                *existing = (content.clone(), image.clone(), event.pubkey);
+            } else {
+                entries.push((content.clone(), image.clone(), event.pubkey));
+            }
         }
 
         cx.notify();

@@ -1,6 +1,3 @@
-use std::cmp::Ordering;
-use std::hash::{Hash, Hasher};
-
 use gpui::SharedString;
 use nostr_sdk::prelude::*;
 use state::Announcement;
@@ -18,32 +15,6 @@ pub struct Person {
     announcement: Option<Announcement>,
     /// Messaging relays
     messaging_relays: Vec<RelayUrl>,
-}
-
-impl PartialEq for Person {
-    fn eq(&self, other: &Self) -> bool {
-        self.public_key == other.public_key
-    }
-}
-
-impl Eq for Person {}
-
-impl PartialOrd for Person {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Person {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.name().cmp(&other.name())
-    }
-}
-
-impl Hash for Person {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.public_key.hash(state)
-    }
 }
 
 impl Person {

@@ -29,26 +29,17 @@ pub fn init(window: &mut Window, cx: &mut App) -> Entity<ContactListPanel> {
 pub struct ContactListPanel {
     name: SharedString,
     focus_handle: FocusHandle,
-
     /// Npub input
     input: Entity<InputState>,
-
     /// Whether the panel is updating
     updating: bool,
-
     /// Error message
     error: Option<SharedString>,
-
     /// All contacts
-    contacts: HashSet<PublicKey>,
-
+    contacts: HashSet<Contact>,
     /// Person directory for the contacts
     directory: Entity<Directory>,
-
-    /// Event subscriptions
     _subscriptions: SmallVec<[Subscription; 1]>,
-
-    /// Background tasks
     tasks: Vec<Task<Result<(), Error>>>,
 }
 
@@ -92,33 +83,50 @@ impl ContactListPanel {
             return;
         };
 
-        let task: Task<Result<HashSet<PublicKey>, Error>> = cx.background_spawn(async move {
+        let task: Task<Result<HashSet<Contact>, Error>> = cx.background_spawn(async move {
             let filter = Filter::new()
                 .author(public_key)
                 .kind(Kind::ContactList)
                 .limit(1);
 
-            let contact_list: HashSet<PublicKey> = client
+            let contact_list: HashSet<Contact> = client
                 .database()
                 .query(filter)
                 .await?
                 .into_iter()
                 .next()
-                .map(|event| event.tags.public_keys().collect())
+                .map(|event| {
+                    event
+                        .tags
+                        .iter()
+                        .filter_map(|tag| match Nip02Tag::try_from(tag) {
+                            Ok(Nip02Tag::PublicKey {
+                                public_key,
+                                relay_hint,
+                                alias,
+                            }) => Some(Contact {
+                                public_key,
+                                relay_url: relay_hint,
+                                alias,
+                            }),
+                            Err(_) => None,
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
 
             Ok(contact_list)
         });
 
         self.tasks.push(cx.spawn_in(window, async move |this, cx| {
-            let public_keys = task.await?;
+            let contacts = task.await?;
 
             // Update state
             this.update(cx, |this, cx| {
                 this.directory.update(cx, |directory, cx| {
-                    directory.track(public_keys.iter().copied(), cx)
+                    directory.track(contacts.iter().map(|contact| contact.public_key), cx)
                 });
-                this.contacts.extend(public_keys);
+                this.contacts.extend(contacts);
                 cx.notify();
             })?;
 
@@ -130,7 +138,7 @@ impl ContactListPanel {
         let value = self.input.read(cx).value().to_string();
 
         if let Ok(public_key) = PublicKey::parse(&value) {
-            if self.contacts.insert(public_key) {
+            if self.contacts.insert(Contact::new(public_key)) {
                 self.directory
                     .update(cx, |directory, cx| directory.track([public_key], cx));
                 self.input.update(cx, |this, cx| {
@@ -144,7 +152,8 @@ impl ContactListPanel {
     }
 
     fn remove(&mut self, public_key: &PublicKey, cx: &mut Context<Self>) {
-        self.contacts.remove(public_key);
+        self.contacts
+            .retain(|contact| contact.public_key != *public_key);
         cx.notify();
     }
 
@@ -184,11 +193,7 @@ impl ContactListPanel {
         let signer = nostr.read(cx).signer();
 
         // Get contacts
-        let contacts: Vec<Contact> = self
-            .contacts
-            .iter()
-            .map(|public_key| Contact::new(*public_key))
-            .collect();
+        let contacts: Vec<Contact> = self.contacts.iter().cloned().collect();
 
         // Set updating state
         self.set_updating(true, cx);
@@ -230,12 +235,14 @@ impl ContactListPanel {
     fn render_list_items(&mut self, cx: &mut Context<Self>) -> Vec<impl IntoElement> {
         let mut items = Vec::new();
 
-        for (ix, public_key) in self.contacts.iter().enumerate() {
-            let profile = self.directory.read(cx).person(public_key, cx);
+        for contact in &self.contacts {
+            let public_key = contact.public_key;
+            let hex = public_key.to_hex();
+            let profile = self.directory.read(cx).person(&public_key, cx);
 
             items.push(
                 h_flex()
-                    .id(ix)
+                    .id(hex.clone())
                     .group("")
                     .flex_1()
                     .w_full()
@@ -256,18 +263,15 @@ impl ContactListPanel {
                             .child(profile.name()),
                     )
                     .child(
-                        Button::new("remove_{ix}")
+                        Button::new(format!("remove-{hex}"))
                             .icon(IconName::X)
                             .xsmall()
                             .ghost()
                             .invisible()
                             .group_hover("", |this| this.visible())
-                            .on_click({
-                                let public_key = public_key.to_owned();
-                                cx.listener(move |this, _ev, _window, cx| {
-                                    this.remove(&public_key, cx);
-                                })
-                            }),
+                            .on_click(cx.listener(move |this, _ev, _window, cx| {
+                                this.remove(&public_key, cx);
+                            })),
                     ),
             )
         }

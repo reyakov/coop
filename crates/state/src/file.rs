@@ -376,12 +376,6 @@ impl DownloadedFile {
             LocalFile::Url(_) => Ok(()),
         }
     }
-
-    /// Save the file to the user's downloads (web)
-    #[cfg(target_arch = "wasm32")]
-    pub fn save(&self) -> Result<(), Error> {
-        crate::web_file::download(&self.name, &self.mime, &self.data)
-    }
 }
 
 /// Download and decrypt a file attachment to the user's device
@@ -403,7 +397,7 @@ pub async fn download_and_decrypt_file(
         .clone()
         .unwrap_or_else(|| fallback_name(&file.url));
 
-    let local = store_file(&name, &file.mime, &data).await?;
+    let local = store_file(&file.mime, &data).await?;
 
     Ok(DownloadedFile {
         local,
@@ -415,10 +409,11 @@ pub async fn download_and_decrypt_file(
 }
 
 /// Persist decrypted bytes somewhere the platform can render or open them
-async fn store_file(name: &str, mime: &str, data: &[u8]) -> Result<LocalFile, Error> {
+async fn store_file(mime: &str, data: &[u8]) -> Result<LocalFile, Error> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        let digest = sha256_hex(name.as_bytes());
+        // Key the cache entry on the content hash, so same-named attachments can't collide
+        let digest = sha256_hex(data);
         let extension = mime_guess::get_mime_extensions_str(mime)
             .and_then(|extensions| extensions.first())
             .copied()
@@ -428,24 +423,21 @@ async fn store_file(name: &str, mime: &str, data: &[u8]) -> Result<LocalFile, Er
             .join("coop-files")
             .join(format!("{digest}.{extension}"));
 
-        if smol::fs::metadata(&path).await.is_err() {
-            let Some(parent) = path.parent() else {
-                bail!("Invalid file path");
-            };
-            smol::fs::create_dir_all(parent).await?;
+        let Some(parent) = path.parent() else {
+            bail!("Invalid file path");
+        };
+        smol::fs::create_dir_all(parent).await?;
 
-            // Write under a temporary name first, so an interrupted download is never reused
-            let partial = path.with_extension("download");
-            smol::fs::write(&partial, data).await?;
-            smol::fs::rename(&partial, &path).await?;
-        }
+        // Write under a temporary name first, so an interrupted download is never reused
+        let partial = path.with_extension("download");
+        smol::fs::write(&partial, data).await?;
+        smol::fs::rename(&partial, &path).await?;
 
         Ok(LocalFile::Path(path))
     }
 
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = name;
         let url = crate::web_file::blob_url(mime, data)?;
         Ok(LocalFile::Url(url))
     }

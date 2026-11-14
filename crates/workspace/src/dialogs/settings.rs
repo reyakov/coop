@@ -14,6 +14,7 @@ use gpui::{
     Subscription, Window, div,
 };
 use gpui_kit::assets::IconName;
+use gpui_kit::base::StyledExt as _;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::kbd::Kbd;
@@ -218,10 +219,10 @@ impl Preferences {
     fn render_wallet(
         &mut self,
         #[cfg_attr(target_arch = "wasm32", allow(unused_variables))] cx: &mut Context<Self>,
-    ) -> AnyElement {
+    ) -> Option<AnyElement> {
         #[cfg(target_arch = "wasm32")]
         {
-            return div().into_any_element();
+            return None;
         }
 
         #[cfg(not(target_arch = "wasm32"))]
@@ -230,39 +231,41 @@ impl Preferences {
             let enabled = AppSettings::get_wallet(cx);
             let has_wallet = nip60::WalletRegistry::global(cx).read(cx).has_wallet();
 
-            v_flex()
-                .w_full()
-                .gap_3()
-                .child(settings_row(
-                    "Wallet",
-                    "Show the wallet and allow ecash payments.",
-                    Switch::new("wallet")
-                        .checked(enabled)
-                        .on_click(move |checked, _window, cx| {
-                            AppSettings::update_wallet(*checked, cx);
-                        }),
-                    cx,
-                ))
-                .when(enabled, |this| {
-                    this.child(settings_block(
-                        "Mint",
-                        WALLET,
-                        h_flex()
-                            .gap_1()
-                            .child(div().flex_1().child(Input::new(&self.mint_input)))
-                            .child(
-                                Button::new("setup-mint")
-                                    .label(if has_wallet { "Add" } else { "Set up" })
-                                    .ghost()
-                                    .size_8()
-                                    .on_click(cx.listener(move |this, _ev, window, cx| {
-                                        this.setup_mint(window, cx);
-                                    })),
-                            ),
+            Some(
+                v_flex()
+                    .w_full()
+                    .gap_3()
+                    .child(settings_row(
+                        "Wallet",
+                        "Show the wallet and allow ecash payments.",
+                        Switch::new("wallet").checked(enabled).on_click(
+                            move |checked, _window, cx| {
+                                AppSettings::update_wallet(*checked, cx);
+                            },
+                        ),
                         cx,
                     ))
-                })
-                .into_any_element()
+                    .when(enabled, |this| {
+                        this.child(settings_block(
+                            "Mint",
+                            WALLET,
+                            h_flex()
+                                .gap_1()
+                                .child(div().flex_1().child(Input::new(&self.mint_input)))
+                                .child(
+                                    Button::new("setup-mint")
+                                        .label(if has_wallet { "Add" } else { "Set up" })
+                                        .ghost()
+                                        .size_8()
+                                        .on_click(cx.listener(move |this, _ev, window, cx| {
+                                            this.setup_mint(window, cx);
+                                        })),
+                                ),
+                            cx,
+                        ))
+                    })
+                    .into_any_element(),
+            )
         }
     }
 
@@ -656,32 +659,39 @@ impl Render for Preferences {
                     )),
             )
             .child(Separator::horizontal())
-            .child(settings_row(
-                "Decoupling Encryption Key",
-                NIP4E,
-                Switch::new("nip4e")
-                    .checked(nip4e)
-                    .on_click(move |_, _window, cx| {
-                        AppSettings::update_nip4e(!nip4e, cx);
-                    }),
-                cx,
-            ))
-            .child(settings_row(
-                "Rotate Encryption Key",
-                NIP4E_ROTATION,
-                Switch::new("nip4e_rotation")
-                    .checked(nip4e_rotation_days.is_some())
-                    .on_click(move |_, _window, cx| {
-                        let enabled = AppSettings::get_nip4e_rotation_days(cx).is_some();
-                        let days = if enabled {
-                            None
-                        } else {
-                            Some(NIP4E_ROTATION_DEFAULT_DAYS)
-                        };
-                        AppSettings::update_nip4e_rotation_days(days, cx);
-                    }),
-                cx,
-            ))
+            .child(
+                v_flex()
+                    .w_full()
+                    .gap_3()
+                    .child(div().text_sm().font_semibold().child("Experimental"))
+                    .child(settings_row(
+                        "Decoupling Encryption Key",
+                        NIP4E,
+                        Switch::new("nip4e")
+                            .checked(nip4e)
+                            .on_click(move |_, _window, cx| {
+                                AppSettings::update_nip4e(!nip4e, cx);
+                            }),
+                        cx,
+                    ))
+                    .child(settings_row(
+                        "Rotate Encryption Key",
+                        NIP4E_ROTATION,
+                        Switch::new("nip4e_rotation")
+                            .checked(nip4e_rotation_days.is_some())
+                            .on_click(move |_, _window, cx| {
+                                let enabled = AppSettings::get_nip4e_rotation_days(cx).is_some();
+                                let days = if enabled {
+                                    None
+                                } else {
+                                    Some(NIP4E_ROTATION_DEFAULT_DAYS)
+                                };
+                                AppSettings::update_nip4e_rotation_days(days, cx);
+                            }),
+                        cx,
+                    ))
+                    .when_some(self.render_wallet(cx), |this, wallet| this.child(wallet)),
+            )
             .child(Separator::horizontal())
             .child(self.render_speech(cx))
             .child(self.render_dictation_shortcut(window, cx))
@@ -703,7 +713,5 @@ impl Render for Preferences {
                     ),
                 cx,
             ))
-            .child(Separator::horizontal())
-            .child(self.render_wallet(cx))
     }
 }

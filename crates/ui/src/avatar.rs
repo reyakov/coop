@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
+
 use gpui::{
     App, Div, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
     SharedString, StyleRefinement, Styled, Window, div, px,
@@ -19,6 +22,10 @@ const ACCENT_PROBABILITY: f32 = 0.25;
 const MIN_FILLED: usize = 5;
 /// Seed for an avatar that has neither a picture nor a seed of its own.
 const FALLBACK_SEED: &str = "coop";
+
+/// Memoized seed-derived patterns; PixelAvatar is recreated on every frame.
+static PATTERN_CACHE: LazyLock<Mutex<HashMap<String, AvatarPattern>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// An avatar for a user or other entity.
 #[derive(IntoElement)]
@@ -93,7 +100,10 @@ impl RenderOnce for Avatar {
                 .child(AvatarImage::new(url).size_full().rounded_full())
                 .into_any_element(),
             None => PixelAvatar {
-                seed: fnv1a(self.seed.unwrap_or_else(|| FALLBACK_SEED.into()).as_bytes()),
+                seed: self
+                    .seed
+                    .map(SharedString::from)
+                    .unwrap_or_else(|| SharedString::new_static(FALLBACK_SEED)),
                 side,
                 style: StyleRefinement::default(),
             }
@@ -114,7 +124,7 @@ impl RenderOnce for Avatar {
 /// A deterministic, offline pixel-art avatar.
 #[derive(IntoElement)]
 struct PixelAvatar {
-    seed: u64,
+    seed: SharedString,
     side: Pixels,
     style: StyleRefinement,
 }
@@ -128,11 +138,11 @@ impl Styled for PixelAvatar {
 impl RenderOnce for PixelAvatar {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         let theme = cx.theme();
-        let pattern = pattern(self.seed);
+        let AvatarPattern { hash, grid } = cached_pattern(&self.seed);
         let mut cells = Vec::new();
 
         let main = Hsla {
-            h: self.seed as f32 / u64::MAX as f32,
+            h: hash as f32 / u64::MAX as f32,
             s: 0.6,
             l: if theme.is_dark() { 0.6 } else { 0.45 },
             a: 1.,
@@ -152,7 +162,7 @@ impl RenderOnce for PixelAvatar {
 
         for row in 0..GRID_SIZE {
             for col in 0..GRID_SIZE {
-                let value = pattern[row * GRID_SIZE + col];
+                let value = grid[row * GRID_SIZE + col];
                 if value != 0 {
                     let color = if value == 2 { shade } else { main };
                     cells.push(
@@ -186,6 +196,32 @@ impl RenderOnce for PixelAvatar {
     }
 }
 
+/// The seed-derived data a PixelAvatar renders, theme-dependent styling is applied per render.
+#[derive(Clone, Copy)]
+struct AvatarPattern {
+    hash: u64,
+    grid: [u8; GRID_SIZE * GRID_SIZE],
+}
+
+/// `seed`'s hash and pixel grid, computing and caching them on first use.
+fn cached_pattern(seed: &str) -> AvatarPattern {
+    let mut cache = PATTERN_CACHE
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+
+    if let Some(cached) = cache.get(seed) {
+        return *cached;
+    }
+
+    let hash = fnv1a(seed.as_bytes());
+    let value = AvatarPattern {
+        hash,
+        grid: pattern(hash),
+    };
+    cache.insert(seed.to_string(), value);
+    value
+}
+
 /// The rendered side length of an avatar at `size`.
 fn side_length(size: Size) -> Pixels {
     match size {
@@ -202,8 +238,6 @@ fn pattern(seed: u64) -> [u8; GRID_SIZE * GRID_SIZE] {
     let mut pattern = [0u8; GRID_SIZE * GRID_SIZE];
     let mut filled = 0usize;
 
-    // Only the inner rows and the inner left half are candidates; mirroring
-    // then keeps the art within the same inset, leaving the outer ring empty.
     let art_rows = GRID_SIZE - 2 * MARGIN;
     let art_columns = GRID_SIZE / 2 - MARGIN;
 

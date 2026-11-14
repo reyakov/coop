@@ -63,6 +63,18 @@ struct GlobalAutoUpdater(Entity<AutoUpdater>);
 
 impl Global for GlobalAutoUpdater {}
 
+/// The subset of updater state the UI renders, so views can hold it in a small
+/// entity instead of observing the whole updater.
+#[derive(Clone, PartialEq)]
+pub struct UpdateDisplay {
+    /// Whether the running version is the newest release.
+    pub up_to_date: bool,
+    /// Whether a verified update is installed and waiting for a restart.
+    pub staged: bool,
+    /// A short, human-readable description of the current status.
+    pub status: SharedString,
+}
+
 pub struct AutoUpdater {
     updater: Entity<Updater>,
     status: UpdateStatus,
@@ -170,6 +182,15 @@ impl AutoUpdater {
                 format!("Version {version} ready — restart to apply").into()
             }
             UpdateStatus::Errored(message) => format!("Update failed: {message}").into(),
+        }
+    }
+
+    /// Snapshot the state the UI renders.
+    pub fn display(&self) -> UpdateDisplay {
+        UpdateDisplay {
+            up_to_date: self.up_to_date(),
+            staged: self.staged(),
+            status: self.status(),
         }
     }
 

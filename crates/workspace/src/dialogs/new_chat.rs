@@ -60,6 +60,9 @@ impl NewChat {
         let subscription = cx.subscribe_in(&input, window, |this, _input, event, window, cx| {
             if let InputEvent::PressEnter { .. } = event {
                 this.submit(window, cx)
+            } else if matches!(event, InputEvent::Change) {
+                // The contact list only re-filters when the dialog re-renders
+                cx.notify();
             }
         });
 

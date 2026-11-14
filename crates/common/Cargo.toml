@@ -9,6 +9,7 @@ gpui.workspace = true
 nostr.workspace = true
 instant.workspace = true
 nostr-sdk.workspace = true
+sha2.workspace = true
 
 itertools.workspace = true
 chrono.workspace = true

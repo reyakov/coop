@@ -219,6 +219,17 @@ impl FailedMessage {
     }
 }
 
+/// A message that could not be decrypted, as surfaced to the UI.
+#[derive(Debug, Clone)]
+pub struct TrashedMessage {
+    /// The undecryptable gift wrap's id, stable across renders
+    pub id: EventId,
+    /// When the gift wrap was received
+    pub created_at: Timestamp,
+    /// Why it could not be decrypted
+    pub reason: SharedString,
+}
+
 #[derive(Debug, Clone)]
 pub struct Mention {
     pub public_key: PublicKey,

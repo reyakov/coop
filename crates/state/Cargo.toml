@@ -51,6 +51,7 @@ sqlite-wasm-vfs = "0.2"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 browser-signer-proxy = { path = "../browser-signer-proxy" }
 nostr-lmdb.workspace = true
+nostr-memory.workspace = true
 smol.workspace = true
 gpui_tokio.workspace = true
 rustls = "0.23"

@@ -5,7 +5,7 @@ async function pollForRequests() {
     isPolling = true;
 
     try {
-        const response = await fetch('/api/pending');
+        const response = await fetch('/api/pending?token=' + encodeURIComponent(window.proxySessionToken));
         const data = await response.json();
 
         console.log('Polled for requests, got:', data);
@@ -94,7 +94,7 @@ async function handleNip07Request(request) {
 
         console.log('Sending response:', responsePayload);
 
-        await fetch('/api/response', {
+        await fetch('/api/response?token=' + encodeURIComponent(window.proxySessionToken), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -117,7 +117,7 @@ async function handleNip07Request(request) {
 
         console.log('Sending error response:', errorPayload);
 
-        await fetch('/api/response', {
+        await fetch('/api/response?token=' + encodeURIComponent(window.proxySessionToken), {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',

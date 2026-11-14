@@ -213,17 +213,17 @@ impl GreeterPanel {
         } else {
             requests
                 .iter()
-                .enumerate()
-                .map(|(index, (room, preview))| {
+                .map(|(room, preview)| {
                     let room = room.clone();
                     let dock = dock.clone();
+                    let room_id = room.read(cx).id;
                     let name = room.read(cx).display_name(cx);
                     let seed = room.read(cx).display_image_seed(cx);
                     let created_at = room.read(cx).created_at.to_ago();
                     let preview = preview.clone();
 
                     h_flex()
-                        .id(format!("request-{index}"))
+                        .id(format!("request-{room_id}"))
                         .group("")
                         .w_full()
                         .h_9()
@@ -280,7 +280,7 @@ impl GreeterPanel {
                                         ),
                                 )
                                 .child(
-                                    Button::new(format!("response-{index}"))
+                                    Button::new(format!("response-{room_id}"))
                                         .label("Response")
                                         .xsmall()
                                         .ghost()
@@ -332,17 +332,17 @@ impl GreeterPanel {
         let rows: Vec<AnyElement> = self
             .follow_ups
             .iter()
-            .enumerate()
-            .map(|(index, (room, preview))| {
+            .map(|(room, preview)| {
                 let room = room.clone();
                 let dock = dock.clone();
+                let room_id = room.read(cx).id;
                 let name = room.read(cx).display_name(cx);
                 let seed = room.read(cx).display_image_seed(cx);
                 let created_at = room.read(cx).created_at.to_ago();
                 let preview = preview.clone();
 
                 h_flex()
-                    .id(format!("follow-up-{index}"))
+                    .id(format!("follow-up-{room_id}"))
                     .group("")
                     .w_full()
                     .h_9()
@@ -399,7 +399,7 @@ impl GreeterPanel {
                                     ),
                             )
                             .child(
-                                Button::new(format!("reply-{index}"))
+                                Button::new(format!("reply-{room_id}"))
                                     .label("Reply")
                                     .xsmall()
                                     .ghost()
